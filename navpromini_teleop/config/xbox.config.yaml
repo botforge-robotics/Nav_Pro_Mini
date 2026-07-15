@@ -1,0 +1,22 @@
+# Xbox / XInput-style pad for NavProMini (publishes /cmd_vel)
+# Hold enable button to drive; hold turbo for higher speed.
+teleop_twist_joy_node:
+  ros__parameters:
+    require_enable_button: true
+
+    axis_linear:
+      x: 1          # Left stick vertical
+    scale_linear:
+      x: 0.35       # m/s (normal)
+    scale_linear_turbo:
+      x: 0.55       # m/s (turbo) — under Gazebo DiffDrive 0.6 cap
+
+    axis_angular:
+      yaw: 0        # Left stick horizontal
+    scale_angular:
+      yaw: 1.0      # rad/s
+    scale_angular_turbo:
+      yaw: 1.8
+
+    enable_button: 4        # LB (Xbox) — must hold to move
+    enable_turbo_button: 5  # RB

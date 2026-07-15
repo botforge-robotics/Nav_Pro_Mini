@@ -1,0 +1,217 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <!-- Complex office: lobby + corridor + 3 cubicles + meeting room + break area -->
+  <world name="office">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 12 0 0 0</pose>
+      <diffuse>0.85 0.85 0.8 1</diffuse>
+      <specular>0.25 0.25 0.25 1</specular>
+      <direction>-0.35 0.15 -0.9</direction>
+    </light>
+    <light type="point" name="lobby_light">
+      <pose>0 -8 2.8 0 0 0</pose>
+      <diffuse>0.9 0.9 0.85 1</diffuse>
+      <attenuation><range>12</range><constant>0.4</constant><linear>0.04</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+    <light type="point" name="corridor_light">
+      <pose>0 0 2.8 0 0 0</pose>
+      <diffuse>0.85 0.85 0.9 1</diffuse>
+      <attenuation><range>10</range><constant>0.4</constant><linear>0.05</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+    <light type="point" name="meet_light">
+      <pose>5 4 2.8 0 0 0</pose>
+      <diffuse>0.9 0.88 0.8 1</diffuse>
+      <attenuation><range>8</range><constant>0.4</constant><linear>0.05</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <ambient>0.42 0.42 0.45 1</ambient>
+      <background>0.7 0.74 0.78 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>60 60</size></plane></geometry>
+          <surface><friction><ode><mu>1</mu><mu2>1</mu2></ode></friction></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>60 60</size></plane></geometry>
+          <material>
+            <ambient>0.68 0.66 0.60 1</ambient>
+            <diffuse>0.68 0.66 0.60 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========== OUTER SHELL (~20 x 16 m) ========== -->
+    <model name="outer_s"><static>true</static><pose>0 -8 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>20.3 0.2 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>20.3 0.2 2.7</size></box></geometry>
+          <material><ambient>0.82 0.84 0.88 1</ambient><diffuse>0.82 0.84 0.88 1</diffuse></material></visual></link></model>
+    <model name="outer_n"><static>true</static><pose>0 8 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>20.3 0.2 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>20.3 0.2 2.7</size></box></geometry>
+          <material><ambient>0.82 0.84 0.88 1</ambient><diffuse>0.82 0.84 0.88 1</diffuse></material></visual></link></model>
+    <model name="outer_w"><static>true</static><pose>-10 0 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.2 16.0 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 16.0 2.7</size></box></geometry>
+          <material><ambient>0.82 0.84 0.88 1</ambient><diffuse>0.82 0.84 0.88 1</diffuse></material></visual></link></model>
+    <model name="outer_e"><static>true</static><pose>10 0 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.2 16.0 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 16.0 2.7</size></box></geometry>
+          <material><ambient>0.82 0.84 0.88 1</ambient><diffuse>0.82 0.84 0.88 1</diffuse></material></visual></link></model>
+
+    <!-- Lobby / corridor divider (door gap at x=0) -->
+    <model name="lobby_wall_l"><static>true</static><pose>-5.5 -5 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>9.0 0.15 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>9.0 0.15 2.7</size></box></geometry>
+          <material><ambient>0.78 0.80 0.85 1</ambient><diffuse>0.78 0.80 0.85 1</diffuse></material></visual></link></model>
+    <model name="lobby_wall_r"><static>true</static><pose>5.5 -5 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>9.0 0.15 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>9.0 0.15 2.7</size></box></geometry>
+          <material><ambient>0.78 0.80 0.85 1</ambient><diffuse>0.78 0.80 0.85 1</diffuse></material></visual></link></model>
+
+    <!-- Central corridor walls (N-S aisle, door gaps into rooms) -->
+    <model name="corr_w_low"><static>true</static><pose>-2 -1.5 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 5.5 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 5.5 2.7</size></box></geometry>
+          <material><ambient>0.76 0.78 0.82 1</ambient><diffuse>0.76 0.78 0.82 1</diffuse></material></visual></link></model>
+    <model name="corr_w_high"><static>true</static><pose>-2 5.0 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 4.5 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 4.5 2.7</size></box></geometry>
+          <material><ambient>0.76 0.78 0.82 1</ambient><diffuse>0.76 0.78 0.82 1</diffuse></material></visual></link></model>
+    <model name="corr_e_low"><static>true</static><pose>2 -1.5 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 5.5 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 5.5 2.7</size></box></geometry>
+          <material><ambient>0.76 0.78 0.82 1</ambient><diffuse>0.76 0.78 0.82 1</diffuse></material></visual></link></model>
+    <model name="corr_e_high"><static>true</static><pose>2 5.0 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.12 4.5 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.12 4.5 2.7</size></box></geometry>
+          <material><ambient>0.76 0.78 0.82 1</ambient><diffuse>0.76 0.78 0.82 1</diffuse></material></visual></link></model>
+
+    <!-- Cubicle partitions (west wing) -->
+    <model name="cube_sep_1"><static>true</static><pose>-6 -1.5 1.0 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>7.5 0.08 2.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>7.5 0.08 2.0</size></box></geometry>
+          <material><ambient>0.55 0.62 0.72 1</ambient><diffuse>0.55 0.62 0.72 1</diffuse></material></visual></link></model>
+    <model name="cube_sep_2"><static>true</static><pose>-6 2.0 1.0 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>7.5 0.08 2.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>7.5 0.08 2.0</size></box></geometry>
+          <material><ambient>0.55 0.62 0.72 1</ambient><diffuse>0.55 0.62 0.72 1</diffuse></material></visual></link></model>
+    <model name="cube_sep_3"><static>true</static><pose>-6 5.5 1.0 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>7.5 0.08 2.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>7.5 0.08 2.0</size></box></geometry>
+          <material><ambient>0.55 0.62 0.72 1</ambient><diffuse>0.55 0.62 0.72 1</diffuse></material></visual></link></model>
+
+    <!-- Meeting room enclosure (east, north) -->
+    <model name="meet_s"><static>true</static><pose>6 2 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>7.5 0.12 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>7.5 0.12 2.7</size></box></geometry>
+          <material><ambient>0.74 0.76 0.80 1</ambient><diffuse>0.74 0.76 0.80 1</diffuse></material></visual></link></model>
+    <!-- doorway gap on west side of meeting room toward corridor (~y=3.5) -->
+
+    <!-- Break-room half wall -->
+    <model name="break_wall"><static>true</static><pose>6 -2.5 1.0 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>7.5 0.08 2.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>7.5 0.08 2.0</size></box></geometry>
+          <material><ambient>0.70 0.68 0.60 1</ambient><diffuse>0.70 0.68 0.60 1</diffuse></material></visual></link></model>
+
+    <!-- Pillars in lobby -->
+    <model name="pillar_1"><static>true</static><pose>-4 -6.5 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.35 0.35 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.35 0.35 2.7</size></box></geometry>
+          <material><ambient>0.65 0.65 0.68 1</ambient><diffuse>0.65 0.65 0.68 1</diffuse></material></visual></link></model>
+    <model name="pillar_2"><static>true</static><pose>4 -6.5 1.35 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.35 0.35 2.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.35 0.35 2.7</size></box></geometry>
+          <material><ambient>0.65 0.65 0.68 1</ambient><diffuse>0.65 0.65 0.68 1</diffuse></material></visual></link></model>
+
+    <!-- ========== FUEL FURNITURE ========== -->
+    <!-- Lobby -->
+    <include><name>lobby_sofa</name><pose>-6.5 -6.5 0 0 0 1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Sofa</uri></include>
+    <include><name>lobby_table</name><pose>-5.0 -6.5 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Table</uri></include>
+    <include><name>lobby_sofa2</name><pose>6.5 -6.5 0 0 0 -1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Sofa</uri></include>
+    <include><name>lobby_cabinet</name><pose>0 -7.5 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cabinet</uri></include>
+
+    <!-- Cubicle 1 (SW) -->
+    <include><name>desk_c1</name><pose>-7.0 -3.2 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Desk</uri></include>
+    <include><name>chair_c1</name><pose>-7.0 -2.2 0 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>shelf_c1</name><pose>-9.2 -3.5 0 0 0 1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Bookshelf</uri></include>
+
+    <!-- Cubicle 2 (mid-west) -->
+    <include><name>desk_c2</name><pose>-7.0 0.2 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Desk</uri></include>
+    <include><name>chair_c2</name><pose>-7.0 1.2 0 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>cabinet_c2</name><pose>-9.2 0.5 0 0 0 1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cabinet</uri></include>
+
+    <!-- Cubicle 3 (NW) -->
+    <include><name>desk_c3</name><pose>-7.0 3.5 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Desk</uri></include>
+    <include><name>chair_c3</name><pose>-7.0 4.5 0 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>shelf_c3</name><pose>-9.2 3.8 0 0 0 1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Bookshelf</uri></include>
+    <include><name>desk_c3b</name><pose>-4.5 3.5 0 0 0 1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Desk</uri></include>
+    <include><name>chair_c3b</name><pose>-3.5 3.5 0 0 0 -1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+
+    <!-- Meeting room (NE) -->
+    <include><name>meet_table</name><pose>6.0 5.0 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Table</uri></include>
+    <include><name>meet_ch1</name><pose>6.0 4.0 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>meet_ch2</name><pose>6.0 6.0 0 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>meet_ch3</name><pose>5.0 5.0 0 0 0 1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>meet_ch4</name><pose>7.0 5.0 0 0 0 -1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>meet_shelf</name><pose>9.0 6.5 0 0 0 -1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Bookshelf</uri></include>
+
+    <!-- Break area (SE) -->
+    <include><name>break_table</name><pose>5.5 -3.5 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/cafe table</uri></include>
+    <include><name>break_ch1</name><pose>5.5 -2.6 0 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>break_ch2</name><pose>5.5 -4.4 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+    <include><name>break_cabinet</name><pose>8.8 -3.8 0 0 0 -1.57</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cabinet</uri></include>
+    <include><name>break_table2</name><pose>7.5 -0.8 0 0 0 0.4</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Table</uri></include>
+    <include><name>break_ch3</name><pose>7.5 0.1 0 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+  </world>
+</sdf>

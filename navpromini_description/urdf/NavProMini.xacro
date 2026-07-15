@@ -1,0 +1,276 @@
+<?xml version="1.0" ?>
+<robot name="NavProMini" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find navpromini_description)/urdf/materials.xacro" />
+  <xacro:include filename="$(find navpromini_description)/urdf/NavProMini.trans" />
+  <xacro:include filename="$(find navpromini_description)/urdf/NavProMini.gazebo" />
+
+  <!-- Motor limits: 10 kg.cm = 0.981 N.m, 300 RPM = 31.416 rad/s -->
+  <xacro:property name="motor_effort" value="0.981"/>
+  <xacro:property name="motor_velocity" value="31.416"/>
+  <xacro:property name="wheel_radius" value="0.034"/>
+  <xacro:property name="wheel_width" value="0.028"/>
+
+  <!-- ROS base_link: +X forward, +Y left. Mass lives here for stable physics. -->
+  <link name="base_link">
+    <inertial>
+      <!-- Between drive wheels (x≈0.067) and rear caster (x≈-0.074) -->
+      <origin xyz="0.02 0.0 0.05" rpy="0 0 0"/>
+      <mass value="5.0"/>
+      <inertia ixx="0.04" iyy="0.04" izz="0.05" ixy="0.0" iyz="0.0" ixz="0.0"/>
+    </inertial>
+  </link>
+
+  <!-- CAD mesh; rotated so CAD -Y (front) aligns with base_link +X -->
+  <link name="chassis">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="chassis_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis"/>
+    <origin xyz="0 0 0" rpy="0 0 1.57079632679"/>
+  </joint>
+
+  <link name="leftWheel_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1.4e-05" iyy="2.4e-05" izz="1.4e-05" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.09484 0.066804 -0.036326" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/leftWheel_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <!-- Wheels: cylinder collision only (not mesh) -->
+    <collision>
+      <origin xyz="0 0 0" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="rightWheel_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1.4e-05" iyy="2.4e-05" izz="1.4e-05" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.092161 0.066804 -0.036326" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/rightWheel_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="casterWheel_1">
+    <inertial>
+      <origin xyz="-0.061875 0.147397 -0.028272" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.063216 0.073146 -0.050051" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/casterWheel_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.063216 0.073146 -0.050051" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/casterWheel_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="FLLC_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="1e-9" iyy="1e-9" izz="1e-9" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.064518 0.094734 -0.11683" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/FLLC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.064518 0.094734 -0.11683" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/FLLC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="FRLC_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="1e-9" iyy="1e-9" izz="1e-9" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.058447 0.090812 -0.122003" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/FRLC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="0.058447 0.090812 -0.122003" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/FRLC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="BLC_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="1e-9" iyy="1e-9" izz="1e-9" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.001742 -0.114701 -0.137576" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/BLC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.001742 -0.114701 -0.137576" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/BLC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="lidar_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.03"/>
+      <inertia ixx="1e-5" iyy="1e-5" izz="2e-05" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.001341 0.032462 -0.188795" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.001341 0.032462 -0.188795" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="FC_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.001341 0.12528 -0.097326" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/FC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.001341 0.12528 -0.097326" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://navpromini_description/meshes/FC_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Axis +X: +cmd_vel.linear.x matches robot forward (base_link +X) -->
+  <joint name="LeftWheelJoint" type="continuous">
+    <origin xyz="0.09484 -0.066804 0.036326" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="leftWheel_1"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="${motor_effort}" velocity="${motor_velocity}"/>
+    <dynamics damping="0.01" friction="0.0"/>
+  </joint>
+
+  <joint name="RightWheelJoint" type="continuous">
+    <origin xyz="-0.092161 -0.066804 0.036326" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="rightWheel_1"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="${motor_effort}" velocity="${motor_velocity}"/>
+    <dynamics damping="0.01" friction="0.0"/>
+  </joint>
+
+  <joint name="CastorJoint" type="fixed">
+    <origin xyz="0.063216 -0.073146 0.050051" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="casterWheel_1"/>
+  </joint>
+
+  <joint name="Rigid1" type="fixed">
+    <origin xyz="0.064518 -0.094734 0.11683" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="FLLC_1"/>
+  </joint>
+
+  <joint name="Rigid2" type="fixed">
+    <origin xyz="-0.058447 -0.090812 0.122003" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="FRLC_1"/>
+  </joint>
+
+  <joint name="Rigid4" type="fixed">
+    <origin xyz="0.001742 0.114701 0.137576" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="BLC_1"/>
+  </joint>
+
+  <joint name="LidarJoint" type="fixed">
+    <origin xyz="0.001341 -0.032462 0.188795" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="lidar_1"/>
+  </joint>
+
+  <joint name="FC_joint" type="fixed">
+    <origin xyz="0.001341 -0.12528 0.097326" rpy="0 0 0"/>
+    <parent link="chassis"/>
+    <child link="FC_1"/>
+  </joint>
+
+</robot>

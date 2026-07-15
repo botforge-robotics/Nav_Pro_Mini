@@ -1,0 +1,197 @@
+<?xml version="1.0" ?>
+<robot name="NavProMini" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Physical parameters
+       Wheel radius from mesh ≈ 0.034 m
+       Wheel separation from URDF joints ≈ 0.187 m (must match geometry for odom/lidar)
+  -->
+  <xacro:property name="wheel_radius" value="0.034"/>
+  <xacro:property name="wheel_separation" value="0.187"/>
+  <xacro:property name="max_linear_velocity" value="0.6"/>
+  <xacro:property name="max_angular_velocity" value="2.5"/>
+
+  <gazebo reference="chassis">
+    <visual>
+      <material>
+        <ambient>1.0 0.40 0.0 1</ambient>
+        <diffuse>1.0 0.45 0.05 1</diffuse>
+        <specular>0.2 0.1 0.05 1</specular>
+        <emissive>0 0 0 1</emissive>
+      </material>
+    </visual>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="leftWheel_1">
+    <visual>
+      <material>
+        <ambient>0.05 0.05 0.05 1</ambient>
+        <diffuse>0.05 0.05 0.05 1</diffuse>
+        <specular>0.1 0.1 0.1 1</specular>
+      </material>
+    </visual>
+    <mu1>1.5</mu1>
+    <mu2>1.5</mu2>
+    <kp>1e6</kp>
+    <kd>1.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxContacts>8</maxContacts>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="rightWheel_1">
+    <visual>
+      <material>
+        <ambient>0.05 0.05 0.05 1</ambient>
+        <diffuse>0.05 0.05 0.05 1</diffuse>
+        <specular>0.1 0.1 0.1 1</specular>
+      </material>
+    </visual>
+    <mu1>1.5</mu1>
+    <mu2>1.5</mu2>
+    <kp>1e6</kp>
+    <kd>1.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxContacts>8</maxContacts>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="casterWheel_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1</ambient>
+        <diffuse>0.95 0.95 0.95 1</diffuse>
+        <specular>0.3 0.3 0.3 1</specular>
+      </material>
+    </visual>
+    <!-- Slippery caster: supports weight but does not fight diff-drive -->
+    <mu1>0.01</mu1>
+    <mu2>0.01</mu2>
+    <slip1>1.0</slip1>
+    <slip2>1.0</slip2>
+    <kp>1e6</kp>
+    <kd>1.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxContacts>4</maxContacts>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="FLLC_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1</ambient>
+        <diffuse>0.95 0.95 0.95 1</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="FRLC_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1</ambient>
+        <diffuse>0.95 0.95 0.95 1</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="BLC_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1</ambient>
+        <diffuse>0.95 0.95 0.95 1</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="FC_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1</ambient>
+        <diffuse>0.95 0.95 0.95 1</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <!-- RPLIDAR A1M8 -->
+  <gazebo reference="lidar_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1</ambient>
+        <diffuse>0.95 0.95 0.95 1</diffuse>
+        <specular>0.4 0.4 0.4 1</specular>
+      </material>
+    </visual>
+    <sensor name="rplidar_a1m8" type="gpu_lidar">
+      <always_on>true</always_on>
+      <visualize>true</visualize>
+      <update_rate>5.5</update_rate>
+      <topic>scan</topic>
+      <gz_frame_id>lidar_1</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <min_angle>0.0</min_angle>
+            <max_angle>6.28318530718</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.35</min>
+          <max>12.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <gazebo>
+    <!-- Drive from /cmd_vel. Wheel odom only (no TF) — TF comes from ground-truth pose. -->
+    <plugin filename="gz-sim-diff-drive-system"
+            name="gz::sim::systems::DiffDrive">
+      <left_joint>LeftWheelJoint</left_joint>
+      <right_joint>RightWheelJoint</right_joint>
+      <wheel_separation>${wheel_separation}</wheel_separation>
+      <wheel_radius>${wheel_radius}</wheel_radius>
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <min_linear_acceleration>-1.0</min_linear_acceleration>
+      <max_angular_acceleration>2.0</max_angular_acceleration>
+      <min_angular_acceleration>-2.0</min_angular_acceleration>
+      <max_linear_velocity>${max_linear_velocity}</max_linear_velocity>
+      <min_linear_velocity>${-1.0 * max_linear_velocity}</min_linear_velocity>
+      <max_angular_velocity>${max_angular_velocity}</max_angular_velocity>
+      <min_angular_velocity>${-1.0 * max_angular_velocity}</min_angular_velocity>
+      <topic>/cmd_vel</topic>
+      <odom_topic>/odom_wheels</odom_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_link</child_frame_id>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+
+    <!-- Ground-truth odom + TF from actual Gazebo pose (keeps LaserScan locked in RViz) -->
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>odom</odom_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>tf</tf_topic>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <joint_name>LeftWheelJoint</joint_name>
+      <joint_name>RightWheelJoint</joint_name>
+      <topic>/joint_states</topic>
+      <update_rate>50</update_rate>
+    </plugin>
+  </gazebo>
+
+</robot>

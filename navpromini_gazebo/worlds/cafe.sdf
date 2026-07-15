@@ -1,0 +1,135 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <!-- Cafe world: OpenRobotics Cafe building + cafe tables from Gazebo Fuel.
+       Cafe floor top ≈ 0.19 m — furniture and robot must spawn above that. -->
+  <world name="cafe">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.85 0.82 0.75 1</diffuse>
+      <specular>0.25 0.25 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    <light type="point" name="cafe_lamp">
+      <pose>0 -2 3.2 0 0 0</pose>
+      <diffuse>0.9 0.85 0.7 1</diffuse>
+      <specular>0.2 0.2 0.15 1</specular>
+      <attenuation>
+        <range>15</range>
+        <constant>0.3</constant>
+        <linear>0.05</linear>
+        <quadratic>0.01</quadratic>
+      </attenuation>
+    </light>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <ambient>0.4 0.38 0.35 1</ambient>
+      <background>0.65 0.70 0.75 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.55 0.50 0.42 1</ambient>
+            <diffuse>0.55 0.50 0.42 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <include>
+      <name>cafe_building</name>
+      <pose>0 0 0 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe</uri>
+    </include>
+
+    <!-- z=0.19 places furniture on top of cafe floor slab -->
+    <include>
+      <name>table_1</name>
+      <pose>0.5 -1.6 0.19 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/cafe table</uri>
+    </include>
+    <include>
+      <name>table_2</name>
+      <pose>2.4 -5.5 0.19 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/cafe table</uri>
+    </include>
+    <include>
+      <name>table_3</name>
+      <pose>-1.5 -5.5 0.19 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/cafe table</uri>
+    </include>
+    <include>
+      <name>table_4</name>
+      <pose>2.4 -9.0 0.19 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/cafe table</uri>
+    </include>
+    <include>
+      <name>table_5</name>
+      <pose>-1.5 -9.0 0.19 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/cafe table</uri>
+    </include>
+
+    <include>
+      <name>chair_a</name>
+      <pose>0.5 -0.7 0.19 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri>
+    </include>
+    <include>
+      <name>chair_b</name>
+      <pose>0.5 -2.5 0.19 0 0 0</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri>
+    </include>
+    <include>
+      <name>chair_c</name>
+      <pose>2.4 -4.6 0.19 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri>
+    </include>
+    <include>
+      <name>chair_d</name>
+      <pose>-1.5 -4.6 0.19 0 0 3.14</pose>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri>
+    </include>
+  </world>
+</sdf>
