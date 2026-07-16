@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Start micro-ROS agent for ESP32 on Waveshare board (Pi GPIO UART).
-
-Pi 5 + Waveshare General Driver: default /dev/ttyAMA0 @ 115200.
-Flash ESP32 over Type-C USB; run agent on the stacked GPIO UART.
-Uses Docker image (avoids broken host micro_ros_agent on some Jazzy installs).
-"""
+"""Start the native micro-ROS agent over the Pi GPIO UART."""
 
 import os
 
@@ -16,7 +11,6 @@ from launch.substitutions import LaunchConfiguration
 def _setup(context, *args, **kwargs):
     device = LaunchConfiguration('serial_port').perform(context)
     baud = LaunchConfiguration('baudrate').perform(context)
-    image = LaunchConfiguration('docker_image').perform(context)
 
     if not os.path.exists(device):
         return [
@@ -26,19 +20,26 @@ def _setup(context, *args, **kwargs):
             ]),
         ]
 
-    cmd = [
-        'docker', 'run', '--rm', '--privileged', '--net=host',
-        '-v', '/dev:/dev',
-        image,
-        'serial',
-        '--dev', device,
-        '--baudrate', baud,
-        '-v6',
-    ]
+    if not os.access(device, os.R_OK | os.W_OK):
+        return [
+            LogInfo(msg=[
+                f'ERROR: no permission for {device} (need dialout/tty access). '
+                'Disable serial console (remove console=serial0 from cmdline), '
+                f'then: sudo chmod 660 {device} && sudo chgrp dialout {device} '
+                '(or reboot after udev/raspi-config).'
+            ]),
+        ]
 
     return [
-        LogInfo(msg=[f'micro-ROS agent: {device} @ {baud} ({image})']),
-        ExecuteProcess(cmd=cmd, output='screen', name='micro_ros_agent'),
+        LogInfo(msg=[f'native micro-ROS agent: {device} @ {baud}']),
+        ExecuteProcess(
+            cmd=[
+                'ros2', 'run', 'micro_ros_agent', 'micro_ros_agent',
+                'serial', '--dev', device, '--baudrate', baud,
+            ],
+            output='screen',
+            name='micro_ros_agent',
+        ),
     ]
 
 
@@ -51,9 +52,5 @@ def generate_launch_description():
                         'Pi 4 often uses /dev/serial0.',
         ),
         DeclareLaunchArgument('baudrate', default_value='115200'),
-        DeclareLaunchArgument(
-            'docker_image',
-            default_value='microros/micro-ros-agent:jazzy',
-        ),
         OpaqueFunction(function=_setup),
     ])

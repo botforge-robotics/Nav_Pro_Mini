@@ -6,6 +6,7 @@ Starts:
   - micro-ROS agent (Pi GPIO UART ↔ ESP32)
   - RPLidar A1M8 (/scan, frame lidar_1)
   - wheel odom node (/odom + TF odom→base_link)
+  - Daly Smart BMS battery node (/battery/* via FTDI USB–RS485)
 
 Optional:
   - slam (navpromini_mapping)
@@ -41,6 +42,7 @@ def generate_launch_description():
     start_agent = LaunchConfiguration('start_agent')
     start_lidar = LaunchConfiguration('start_lidar')
     start_odom = LaunchConfiguration('start_odom')
+    start_battery = LaunchConfiguration('start_battery')
     start_slam = LaunchConfiguration('start_slam')
     start_nav = LaunchConfiguration('start_nav')
 
@@ -73,6 +75,17 @@ def generate_launch_description():
         ),
         launch_arguments={'use_sim_time': use_sim_time}.items(),
         condition=IfCondition(start_odom),
+    )
+
+    battery = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'battery.launch.py')
+        ),
+        launch_arguments={
+            'serial_port': LaunchConfiguration('battery_port'),
+            'use_sim_time': use_sim_time,
+        }.items(),
+        condition=IfCondition(start_battery),
     )
 
     slam = IncludeLaunchDescription(
@@ -116,14 +129,24 @@ def generate_launch_description():
         DeclareLaunchArgument('microros_baud', default_value='115200'),
         DeclareLaunchArgument(
             'lidar_port',
-            default_value='/dev/ttyUSB0',
-            description='RPLidar USB device',
+            default_value='/dev/rplidar',
+            description='RPLidar CP2102 stable udev device',
         ),
         DeclareLaunchArgument('lidar_baud', default_value='115200'),
         DeclareLaunchArgument('lidar_frame', default_value='lidar_1'),
         DeclareLaunchArgument('start_agent', default_value='true'),
         DeclareLaunchArgument('start_lidar', default_value='true'),
         DeclareLaunchArgument('start_odom', default_value='true'),
+        DeclareLaunchArgument(
+            'start_battery',
+            default_value='true',
+            description='Daly Smart BMS over FTDI USB–RS485',
+        ),
+        DeclareLaunchArgument(
+            'battery_port',
+            default_value='/dev/battery_bms',
+            description='FTDI USB–RS485 to Daly BMS (udev symlink)',
+        ),
         DeclareLaunchArgument(
             'start_slam',
             default_value='false',
@@ -138,7 +161,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_rviz', default_value='false'),
         LogInfo(msg=[
             'NavProMini real robot: use_sim_time=false | '
-            'agent+lidar+odom (slam/nav optional)'
+            'agent+lidar+odom+battery | ROS_DOMAIN_ID inherited from shell'
         ]),
         Node(
             package='robot_state_publisher',
@@ -153,6 +176,7 @@ def generate_launch_description():
         microros,
         lidar,
         odom,
+        battery,
         slam,
         nav,
     ])

@@ -1,0 +1,11 @@
+# Daly Smart BMS (Blue) over FTDI USB–RS485
+navpromini_battery:
+  ros__parameters:
+    serial_port: /dev/battery_bms
+    baudrate: 9600
+    rate_hz: 2.0
+    frame_id: base_link
+    # auto tries classic A5 UART/485 first, then Modbus RTU (slave 0xD2)
+    protocol: auto
+    # Set pack Ah if known (improves BatteryState.capacity). 0 = estimate from BMS.
+    nominal_capacity_ah: 0.0

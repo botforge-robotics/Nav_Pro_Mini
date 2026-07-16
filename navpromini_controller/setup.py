@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'odom_node = navpromini_controller.odom_node:main',
+            'battery_node = navpromini_controller.battery_node:main',
         ],
     },
 )
