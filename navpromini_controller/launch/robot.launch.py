@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Real-robot hardware bringup for NavProMini on Raspberry Pi 5.
+
+Starts:
+  - robot_state_publisher (URDF → tf_static + wheel TF from joint_states)
+  - micro-ROS agent (Pi GPIO UART ↔ ESP32)
+  - RPLidar A1M8 (/scan, frame lidar_1)
+  - wheel odom node (/odom + TF odom→base_link)
+
+Optional:
+  - slam (navpromini_mapping)
+  - navigation (navpromini_navigation)
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    LogInfo,
+)
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import Command, LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def generate_launch_description():
+    pkg = get_package_share_directory('navpromini_controller')
+    pkg_desc = get_package_share_directory('navpromini_description')
+
+    xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
+    robot_description = ParameterValue(
+        Command(['xacro ', xacro_file]), value_type=str
+    )
+
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    start_agent = LaunchConfiguration('start_agent')
+    start_lidar = LaunchConfiguration('start_lidar')
+    start_odom = LaunchConfiguration('start_odom')
+    start_slam = LaunchConfiguration('start_slam')
+    start_nav = LaunchConfiguration('start_nav')
+
+    microros = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'microros_agent.launch.py')
+        ),
+        launch_arguments={
+            'serial_port': LaunchConfiguration('microros_port'),
+            'baudrate': LaunchConfiguration('microros_baud'),
+        }.items(),
+        condition=IfCondition(start_agent),
+    )
+
+    lidar = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'rplidar.launch.py')
+        ),
+        launch_arguments={
+            'serial_port': LaunchConfiguration('lidar_port'),
+            'baudrate': LaunchConfiguration('lidar_baud'),
+            'frame_id': LaunchConfiguration('lidar_frame'),
+        }.items(),
+        condition=IfCondition(start_lidar),
+    )
+
+    odom = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'odom.launch.py')
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        condition=IfCondition(start_odom),
+    )
+
+    slam = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('navpromini_mapping'),
+                'launch',
+                'slam.launch.py',
+            )
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'use_rviz': LaunchConfiguration('use_rviz'),
+        }.items(),
+        condition=IfCondition(start_slam),
+    )
+
+    nav = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('navpromini_navigation'),
+                'launch',
+                'navigation.launch.py',
+            )
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'map_name': LaunchConfiguration('map_name'),
+            'use_rviz': LaunchConfiguration('use_rviz'),
+        }.items(),
+        condition=IfCondition(start_nav),
+    )
+
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument(
+            'microros_port',
+            default_value='/dev/ttyAMA0',
+            description='Pi 5 GPIO UART to ESP32 (Waveshare). Pi 4: /dev/serial0',
+        ),
+        DeclareLaunchArgument('microros_baud', default_value='115200'),
+        DeclareLaunchArgument(
+            'lidar_port',
+            default_value='/dev/ttyUSB0',
+            description='RPLidar USB device',
+        ),
+        DeclareLaunchArgument('lidar_baud', default_value='115200'),
+        DeclareLaunchArgument('lidar_frame', default_value='lidar_1'),
+        DeclareLaunchArgument('start_agent', default_value='true'),
+        DeclareLaunchArgument('start_lidar', default_value='true'),
+        DeclareLaunchArgument('start_odom', default_value='true'),
+        DeclareLaunchArgument(
+            'start_slam',
+            default_value='false',
+            description='Also launch slam_toolbox',
+        ),
+        DeclareLaunchArgument(
+            'start_nav',
+            default_value='false',
+            description='Also launch Nav2 (needs map_name)',
+        ),
+        DeclareLaunchArgument('map_name', default_value='navpromini_map'),
+        DeclareLaunchArgument('use_rviz', default_value='false'),
+        LogInfo(msg=[
+            'NavProMini real robot: use_sim_time=false | '
+            'agent+lidar+odom (slam/nav optional)'
+        ]),
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            output='screen',
+            parameters=[{
+                'robot_description': robot_description,
+                'use_sim_time': use_sim_time,
+            }],
+        ),
+        microros,
+        lidar,
+        odom,
+        slam,
+        nav,
+    ])

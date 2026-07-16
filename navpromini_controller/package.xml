@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>navpromini_controller</name>
+  <version>0.0.0</version>
+  <description>Real-robot bringup: micro-ROS agent, RPLidar, wheel odometry, and NavProMini hardware launch</description>
+  <maintainer email="todo@todo.com">author</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>ament_index_python</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>rclpy</depend>
+
+  <depend>navpromini_description</depend>
+  <depend>navpromini_mapping</depend>
+  <depend>navpromini_navigation</depend>
+  <depend>rplidar_ros</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>tf2_ros</depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <exec_depend>xacro</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -13,6 +13,7 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | `navpromini_teleop` | Joystick / keyboard teleoperation |
 | `navpromini_mapping` | slam_toolbox online mapping + map saver |
 | `navpromini_navigation` | Nav2 localization + navigation |
+| `navpromini_controller` | **Real robot:** micro-ROS agent, RPLidar, wheel odom, bringup |
 
 ---
 
@@ -21,18 +22,20 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | Item | Value |
 |------|--------|
 | Drive | Differential drive |
-| Wheel Ø | **65 mm** (`WHEEL_RADIUS ≈ 0.0325 m`) |
-| Track | ~**0.187 m** (CAD) |
+| Wheel radius | **0.034 m** (URDF + firmware + odom) |
+| Track | **0.187 m** (URDF + firmware + odom) |
 | Sim motors | **10 kg·cm**, **300 RPM** (Nav2 capped ~0.4 m/s) |
-| Lidar | RPLIDAR A1M8-like `gpu_lidar` → `/scan`, frame `lidar_1` |
+| Lidar | RPLIDAR A1M8 → `/scan`, frame `lidar_1` |
 | Control | `/cmd_vel` (`geometry_msgs/Twist`) |
+| Encoders | 420 ticks/rev → `/joint_states` (ESP32) → `/odom` (controller) |
 
 ### TF tree
 
 ```text
 map                         ← SLAM (mapping) or AMCL (navigation)
- └── odom                   ← Gazebo odom (sim) or wheel/odom node (real)
+ └── odom                   ← Gazebo odom (sim) or wheel odom node (real)
       └── base_link         ← robot base (+X forward)
+           ├── imu_link     ← QMI8658 (real)
            └── chassis
                 ├── leftWheel_1 / rightWheel_1
                 ├── casterWheel_1, FLLC_1, FRLC_1, BLC_1, FC_1
@@ -61,12 +64,47 @@ Key metas (if needed manually):
 ```bash
 sudo apt install ros-jazzy-ros-gz ros-jazzy-navigation2 \
   ros-jazzy-slam-toolbox ros-jazzy-teleop-twist-joy \
-  ros-jazzy-teleop-twist-keyboard ros-jazzy-joy
+  ros-jazzy-teleop-twist-keyboard ros-jazzy-joy \
+  ros-jazzy-rplidar-ros
 ```
 
 ---
 
 ## Launch files (all)
+
+### 0. `navpromini_controller` → `robot.launch.py` (real robot)
+
+**Purpose:** Bring up hardware on Raspberry Pi 5 + [Waveshare General Driver](https://www.waveshare.com/wiki/General_Driver_for_Robots) + RPLidar.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `use_sim_time` | **`false`** | Always false on real robot |
+| `microros_port` | `/dev/ttyAMA0` | Pi 5 GPIO UART to ESP32 (Pi 4: `/dev/serial0`) |
+| `lidar_port` | `/dev/ttyUSB0` | RPLidar USB |
+| `lidar_frame` | `lidar_1` | Must match URDF |
+| `start_agent` / `start_lidar` / `start_odom` | `true` | Toggle subsystems |
+| `start_slam` | `false` | Include `navpromini_mapping` |
+| `start_nav` | `false` | Include Nav2 |
+| `map_name` | `navpromini_map` | Used when `start_nav:=true` |
+| `use_rviz` | `false` | For slam/nav includes |
+
+**Nodes:** `robot_state_publisher`, Docker micro-ROS agent, `rplidar_composition`, `odom_node`.
+
+```bash
+# Hardware only
+ros2 launch navpromini_controller robot.launch.py
+
+# + SLAM
+ros2 launch navpromini_controller robot.launch.py start_slam:=true use_rviz:=true
+
+# + Nav2 on a saved map
+ros2 launch navpromini_controller robot.launch.py \
+  start_nav:=true map_name:=home use_rviz:=true
+```
+
+Also: `microros_agent.launch.py`, `rplidar.launch.py`, `odom.launch.py`.
+
+---
 
 ### 1. `navpromini_gazebo` → `gazebo.launch.py`
 
@@ -307,12 +345,13 @@ ros2 launch navpromini_navigation localization.launch.py map_name:=cafe
 
 | Topic | Dir | Notes |
 |-------|-----|--------|
-| `cmd_vel` | sub | Wheel speed / motor control |
+| `cmd_vel` | sub | Diff-drive; **500 ms** timeout stops motors |
 | `display_text` | sub | OLED string |
 | `led_strip` / `led_command` | sub | WS2812 |
-| `imu` | pub | QMI8658 |
+| `imu` | pub | QMI8658, `imu_link` |
+| `joint_states` | pub | `LeftWheelJoint` / `RightWheelJoint` (rad) |
 
-> Firmware currently focuses on **cmd_vel motors**; full Nav2 on hardware still needs **`/odom` + `odom`→`base_link` TF** and a lidar `/scan` source on the PC (or bridged).
+Host **`navpromini_controller`**: `joint_states` → `/odom` + TF `odom`→`base_link`; RPLidar → `/scan`.
 
 ---
 
@@ -380,53 +419,206 @@ ros2 run tf2_ros tf2_echo map odom   # after initial pose
 
 ## Real robot workflows
 
-### Required interfaces on the ROS PC
+**Hardware:** Raspberry Pi 5 + Waveshare General Driver (ESP32 stacked, GPIO UART) + RPLidar USB + NavProMini firmware (flash via Type-C).
 
-| Interface | Required for |
-|-----------|----------------|
-| `/cmd_vel` → robot base | Teleop / Nav2 |
-| `/scan` (`frame_id` matching lidar TF) | SLAM / AMCL / costmaps |
-| `/odom` + TF `odom`→`base_link` | Localization / Nav2 |
-| `/tf` `/tf_static` | Full tree (`base_link`→`lidar_1`) |
-| `use_sim_time:=false` | All launches |
-
-### Teleop only
+### Bringup
 
 ```bash
-# Bring up: micro-ROS agent + ESP32 firmware (motors)
-# Then:
-ros2 launch navpromini_teleop keyboard.launch.py use_sim_time:=false
+# Enable UART (once): raspi-config → Serial → console No, hardware Yes
+# Flash ESP32 over Type-C, then disconnect monitor and stack/run on Pi UART.
+
+cd ~/NavProMini_ws && source install/setup.bash
+ros2 launch navpromini_controller robot.launch.py
 ```
 
-### SLAM on real robot
+### Teleop
 
 ```bash
-# Provide /scan + odom TF, then:
-ros2 launch navpromini_mapping slam.launch.py use_sim_time:=false
+ros2 launch navpromini_teleop keyboard.launch.py use_sim_time:=false
+# or joystick.launch.py use_sim_time:=false
+```
+
+### SLAM
+
+```bash
+# On Pi — prefer use_rviz:=false and open RViz on your PC (see Multi-machine below)
+ros2 launch navpromini_controller robot.launch.py start_slam:=true use_rviz:=false
+# drive, then:
 ros2 launch navpromini_mapping map_saver.launch.py map_name:=home
 ```
 
-### Nav2 on real robot
+### Nav2
 
 ```bash
-ros2 launch navpromini_navigation navigation.launch.py \
-  map_name:=home use_sim_time:=false
-
-# Optional RViz off:
-#   … use_rviz:=false
+ros2 launch navpromini_controller robot.launch.py \
+  start_nav:=true map_name:=home use_rviz:=false
 ```
 
-Then **2D Pose Estimate** → **2D Goal Pose** (same as sim).
+Then on the PC in RViz: **2D Pose Estimate** → **2D Goal Pose**.
+
+### Quick checks
+
+```bash
+ros2 topic echo /joint_states --once
+ros2 topic echo /odom --once
+ros2 topic echo /scan --once
+ros2 run tf2_ros tf2_echo odom base_link
+ros2 run tf2_ros tf2_echo base_link lidar_1
+```
 
 ### Common failure modes
 
 | Symptom | Likely cause |
 |---------|----------------|
-| `Invalid frame ID "odom"` | No odometry TF / sim not running / wrong `use_sim_time` |
-| AMCL “set the initial pose” | Need RViz **2D Pose Estimate** |
-| Costmaps empty | No `/scan` or TF to `lidar_1` |
-| Nav stuck / no motion | No `/cmd_vel` consumer (agent / Gazebo) |
-| Time / TF “frozen” | `use_sim_time:=true` without `/clock` |
+| No micro-ROS topics | Agent not on `/dev/ttyAMA0`, UART disabled, or firmware waiting for agent |
+| `Invalid frame ID "odom"` | odom node not running / no `/joint_states` |
+| Costmaps empty | No `/scan` or wrong `frame_id` (must be `lidar_1`) |
+| Robot keeps driving | Old firmware without cmd_vel timeout — reflash |
+| Lidar / ESP32 port clash | Lidar is USB (`ttyUSB0`); ESP32 runtime is GPIO UART (`ttyAMA0`) |
+
+---
+
+## Multi-machine: robot on Pi, RViz on PC
+
+Run the robot stack on the **Raspberry Pi 5**. Run **RViz** (and optional teleop) on your **PC**. Both machines must be on the same LAN/Wi‑Fi with matching ROS 2 domain settings.
+
+```text
+Raspberry Pi 5                          Your PC
+─────────────────                       ─────────────────
+robot.launch.py                         rviz2 (+ optional teleop)
+  micro-ROS agent
+  lidar, odom, RSP
+  (optional slam / nav)                 same Wi‑Fi / LAN
+         │                                     │
+         └──────── ROS 2 DDS discovery ────────┘
+```
+
+### 1. Network
+
+1. Put Pi and PC on the **same Wi‑Fi or Ethernet** (avoid guest / AP-isolation SSIDs).
+2. Get IPs and ping both ways:
+   ```bash
+   hostname -I
+   ping <pi_ip>
+   ping <pc_ip>
+   ```
+
+### 2. ROS 2 environment (both machines)
+
+In **every** terminal on Pi and PC before launching:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/NavProMini_ws/install/setup.bash
+
+export ROS_DOMAIN_ID=42          # same number on both (0–101)
+export ROS_LOCALHOST_ONLY=0      # allow discovery over the network
+# If set, also unset localhost-only discovery:
+# unset ROS_AUTOMATIC_DISCOVERY_RANGE
+```
+
+Optional: add the two `export` lines to `~/.bashrc` on both machines.
+
+**Firewall:** DDS needs UDP multicast / high ports. For a quick test you can allow the other host or temporarily disable `ufw`. Build/install the workspace on the PC too (at least `navpromini_description` + mapping/navigation RViz configs).
+
+### 3. Verify discovery
+
+On Pi (after robot bringup) and on PC:
+
+```bash
+ros2 topic list
+```
+
+Both should show the same topics (`/scan`, `/odom`, `/tf`, `/joint_states`, …). From the PC:
+
+```bash
+ros2 topic hz /scan
+ros2 topic echo /odom --once
+ros2 run tf2_ros tf2_echo odom base_link
+```
+
+If the PC topic list is empty: check `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY`, Wi‑Fi AP isolation, and firewall. Try Ethernet once to rule out Wi‑Fi.
+
+### 4. Pi — robot bringup (no RViz)
+
+```bash
+# Pi
+source /opt/ros/jazzy/setup.bash
+source ~/NavProMini_ws/install/setup.bash
+export ROS_DOMAIN_ID=42
+export ROS_LOCALHOST_ONLY=0
+
+ros2 launch navpromini_controller robot.launch.py use_rviz:=false
+
+# With SLAM or Nav2 still on the Pi (recommended — PC only visualizes):
+ros2 launch navpromini_controller robot.launch.py start_slam:=true use_rviz:=false
+ros2 launch navpromini_controller robot.launch.py \
+  start_nav:=true map_name:=home use_rviz:=false
+```
+
+### 5. PC — RViz and teleop
+
+```bash
+# PC
+source /opt/ros/jazzy/setup.bash
+source ~/NavProMini_ws/install/setup.bash
+export ROS_DOMAIN_ID=42
+export ROS_LOCALHOST_ONLY=0
+
+rviz2
+```
+
+In RViz:
+
+| Setting / display | Value |
+|-------------------|--------|
+| Fixed Frame | `odom` (or `map` if SLAM / Nav2 is running) |
+| RobotModel | from `/robot_description` |
+| TF | show tree |
+| LaserScan | topic `/scan` |
+| Odometry | topic `/odom` |
+| Map / Path / Costmaps | when Nav2 or SLAM is active |
+
+Nav2 tools on PC: **2D Pose Estimate** → `/initialpose`, **2D Goal Pose** → `/goal_pose`.
+
+Teleop from the PC:
+
+```bash
+ros2 launch navpromini_teleop keyboard.launch.py use_sim_time:=false
+# or joystick.launch.py use_sim_time:=false
+```
+
+**Do not** start a second slam/nav stack on the PC — only RViz (and teleop). Let the Pi own hardware + SLAM/Nav2.
+
+### 6. Time sync
+
+Keep clocks close (NTP) on both machines or TF may show extrapolation errors:
+
+```bash
+timedatectl status
+sudo timedatectl set-ntp true
+```
+
+### Checklist
+
+| Check | Pi | PC |
+|-------|----|----|
+| Same Wi‑Fi / LAN, ping OK | ✓ | ✓ |
+| Same `ROS_DOMAIN_ID` | ✓ | ✓ |
+| `ROS_LOCALHOST_ONLY=0` | ✓ | ✓ |
+| `robot.launch.py` | ✓ | ✗ |
+| `rviz2` | ✗ | ✓ |
+| `use_sim_time:=false` | ✓ | ✓ |
+
+### Multi-machine failure modes
+
+| Symptom | Likely cause |
+|---------|----------------|
+| PC `ros2 topic list` empty | Different domain ID, `ROS_LOCALHOST_ONLY=1`, firewall, or AP isolation |
+| RViz “No tf data” | Odom not running on Pi; wrong Fixed Frame |
+| Scan empty in RViz | Lidar not up on Pi; check `ros2 topic hz /scan` from PC |
+| Laggy RViz / TF jumps | Weak Wi‑Fi; keep Nav2 on Pi; sync clocks (NTP) |
+| Transform extrapolation | Clock skew between Pi and PC |
 
 ---
 
@@ -434,6 +626,10 @@ Then **2D Pose Estimate** → **2D Goal Pose** (same as sim).
 
 ```text
 colcon build && source install/setup.bash
+        │
+        ├─ REAL ── navpromini_controller/robot.launch.py  [use_sim_time:=false]
+        │           optional start_slam / start_nav  (use_rviz:=false on Pi)
+        │           PC: RViz + teleop over ROS_DOMAIN_ID (see Multi-machine)
         │
         ├─ SIM ── gazebo.launch.py  [use_rviz:=false by default]
         │           use_rviz:=true  → optional Gazebo RViz
