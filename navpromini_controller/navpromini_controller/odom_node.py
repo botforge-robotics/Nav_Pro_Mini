@@ -75,16 +75,20 @@ class WheelOdomNode(Node):
 
         wheel_radius = float(self.get_parameter('wheel_radius').value)
         ticks_per_rev = float(self.get_parameter('ticks_per_revolution').value)
-        ticks_per_m_param = float(self.get_parameter('encoder_ticks_per_meter').value)
-        self._wheel_separation = float(self.get_parameter('wheel_separation').value)
+        ticks_per_m_param = float(self.get_parameter(
+            'encoder_ticks_per_meter').value)
+        self._wheel_separation = float(
+            self.get_parameter('wheel_separation').value)
 
         if ticks_per_m_param > 0.0:
             self._ticks_per_m = ticks_per_m_param
             self._meters_per_tick = 1.0 / self._ticks_per_m
         else:
             if wheel_radius <= 0.0 or ticks_per_rev <= 0.0:
-                raise ValueError('wheel_radius and ticks_per_revolution must be > 0')
-            self._meters_per_tick = (2.0 * math.pi * wheel_radius) / ticks_per_rev
+                raise ValueError(
+                    'wheel_radius and ticks_per_revolution must be > 0')
+            self._meters_per_tick = (
+                2.0 * math.pi * wheel_radius) / ticks_per_rev
             self._ticks_per_m = 1.0 / self._meters_per_tick
 
         if self._wheel_separation <= 0.0:
@@ -123,7 +127,8 @@ class WheelOdomNode(Node):
         )
 
         self._odom_pub = self.create_publisher(Odometry, odom_topic, 10)
-        self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
+        self._tf_broadcaster = TransformBroadcaster(
+            self) if self._publish_tf else None
         self.create_subscription(
             Int32MultiArray, ticks_topic, self._on_wheel_ticks, ticks_qos
         )

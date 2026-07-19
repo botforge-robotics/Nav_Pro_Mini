@@ -2,8 +2,8 @@
 # https://wiki.ros.org/diff_drive_controller
 navpromini_odom:
   ros__parameters:
-    wheel_radius: 0.0325          # 65 mm diameter
-    wheel_separation: 0.225       # 22.5 cm track
+    wheel_radius: 0.0325 # 65 mm diameter
+    wheel_separation: 0.225 # 22.5 cm track
     ticks_per_revolution: 1470.0
     # Measured on robot (~7244). Set 0 to use 2*pi*r/ticks_per_rev instead.
     encoder_ticks_per_meter: 7244.0

@@ -6,7 +6,6 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 
 ## Packages
 
-
 | Package                  | Description                                                   |
 | ------------------------ | ------------------------------------------------------------- |
 | `navpromini_description` | URDF/xacro, meshes, sensors, DiffDrive plugins, RViz display  |
@@ -16,27 +15,20 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | `navpromini_navigation`  | Nav2 localization + navigation                                |
 | `navpromini_controller`  | **Real robot:** micro-ROS agent, RPLidar, wheel odom, bringup |
 
-
 ---
 
-
-
 ## Robot model (shared)
-
 
 | Item         | Value                                                          |
 | ------------ | -------------------------------------------------------------- |
 | Drive        | Differential drive                                             |
-| Wheel radius | **0.0325 m** (65 mm dia; URDF + firmware + odom) |
-| Track        | **0.225 m** (22.5 cm; URDF + firmware + odom)    |
-| Encoder      | **1470** ticks/rev → **≈7198.7** ticks/m         |
+| Wheel radius | **0.0325 m** (65 mm dia; URDF + firmware + odom)               |
+| Track        | **0.225 m** (22.5 cm; URDF + firmware + odom)                  |
+| Encoder      | **1470** ticks/rev → **≈7198.7** ticks/m                       |
 | Sim motors   | **10 kg·cm**, **300 RPM** (Nav2 capped ~0.4 m/s)               |
 | Lidar        | RPLIDAR A1M8 → `/scan`, frame `lidar_1`                        |
 | Control      | `/cmd_vel` (`geometry_msgs/Twist`)                             |
 | Encoders     | 420 ticks/rev → `/joint_states` (ESP32) → `/odom` (controller) |
-
-
-
 
 ### TF tree
 
@@ -52,8 +44,6 @@ map                         ← SLAM (mapping) or AMCL (navigation)
 ```
 
 ---
-
-
 
 ## Dependencies & build
 
@@ -81,16 +71,11 @@ sudo apt install ros-jazzy-ros-gz ros-jazzy-navigation2 \
 
 ---
 
-
-
 ## Launch files (all)
-
-
 
 ### 0. `navpromini_controller` → `robot.launch.py` (real robot)
 
 **Purpose:** Bring up hardware on Raspberry Pi 5 + [Waveshare General Driver](https://www.waveshare.com/wiki/General_Driver_for_Robots) + RPLidar.
-
 
 | Argument                                     | Default          | Description                                    |
 | -------------------------------------------- | ---------------- | ---------------------------------------------- |
@@ -103,7 +88,6 @@ sudo apt install ros-jazzy-ros-gz ros-jazzy-navigation2 \
 | `start_nav`                                  | `false`          | Include Nav2                                   |
 | `map_name`                                   | `navpromini_map` | Used when `start_nav:=true`                    |
 | `use_rviz`                                   | `false`          | For slam/nav includes                          |
-
 
 **Nodes:** `robot_state_publisher`, native micro-ROS agent, `rplidar_composition`, `odom_node`, Daly `battery_node`.
 
@@ -125,16 +109,16 @@ Also: `microros_agent.launch.py`, `rplidar.launch.py`, `odom.launch.py`, `batter
 
 Port: `/dev/battery_bms` @ 9600 8N1 (classic Daly UART/485 `0xA5` protocol; Modbus fallback).
 
-| Topic | Type | Content |
-| --- | --- | --- |
-| `/battery/state` | `sensor_msgs/BatteryState` | V, I, SOC%, charge status, cell voltages |
-| `/battery/soc` | `std_msgs/Float32` | SOC percent 0–100 |
-| `/battery/voltage` | `std_msgs/Float32` | Pack voltage (V) |
-| `/battery/current` | `std_msgs/Float32` | Current (A; +charge / −discharge) |
-| `/battery/cells` | `std_msgs/Float32MultiArray` | Per-cell voltages (V) |
-| `/battery/temperatures` | `std_msgs/Float32MultiArray` | NTC temperatures (°C) |
-| `/battery/info` | `std_msgs/String` | Full JSON snapshot (MOS, charger, faults, …) |
-| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | Human-readable BMS status |
+| Topic                   | Type                              | Content                                      |
+| ----------------------- | --------------------------------- | -------------------------------------------- |
+| `/battery/state`        | `sensor_msgs/BatteryState`        | V, I, SOC%, charge status, cell voltages     |
+| `/battery/soc`          | `std_msgs/Float32`                | SOC percent 0–100                            |
+| `/battery/voltage`      | `std_msgs/Float32`                | Pack voltage (V)                             |
+| `/battery/current`      | `std_msgs/Float32`                | Current (A; +charge / −discharge)            |
+| `/battery/cells`        | `std_msgs/Float32MultiArray`      | Per-cell voltages (V)                        |
+| `/battery/temperatures` | `std_msgs/Float32MultiArray`      | NTC temperatures (°C)                        |
+| `/battery/info`         | `std_msgs/String`                 | Full JSON snapshot (MOS, charger, faults, …) |
+| `/diagnostics`          | `diagnostic_msgs/DiagnosticArray` | Human-readable BMS status                    |
 
 ```bash
 ros2 topic echo /battery/state --once
@@ -143,12 +127,9 @@ ros2 topic echo /battery/info --once
 
 ---
 
-
-
 ### 1. `navpromini_gazebo` → `gazebo.launch.py`
 
 **Purpose:** Start Gazebo Harmonic, spawn NavProMini, bridge sim topics.
-
 
 | Argument          | Default      | Description                                             |
 | ----------------- | ------------ | ------------------------------------------------------- |
@@ -157,9 +138,7 @@ ros2 topic echo /battery/info --once
 | `use_rviz`        | `false`      | Optional companion RViz (`navpromini_sim.rviz`)         |
 | `x` `y` `z` `yaw` | `0 0 0.06 0` | Spawn pose (world defaults applied if left at defaults) |
 
-
 **World spawn defaults** (when x/y/z still `0,0,0.06`):
-
 
 | World    | x   | y    | z                           |
 | -------- | --- | ---- | --------------------------- |
@@ -167,9 +146,7 @@ ros2 topic echo /battery/info --once
 | `office` | 0.0 | -6.5 | 0.06                        |
 | `cafe`   | 0.0 | -3.0 | **0.28** (above cafe floor) |
 
-
 **Nodes / includes**
-
 
 | Name                    | Role                                        |
 | ----------------------- | ------------------------------------------- |
@@ -178,7 +155,6 @@ ros2 topic echo /battery/info --once
 | `create`                | Spawn model `NavProMini`                    |
 | `parameter_bridge`      | ros_gz bridge (`config/ros_gz_bridge.yaml`) |
 | `rviz2`                 | Only if `use_rviz:=true`                    |
-
 
 ```bash
 # Default: Gazebo only (no RViz)
@@ -190,17 +166,13 @@ ros2 launch navpromini_gazebo gazebo.launch.py world_name:=cafe use_rviz:=true
 
 ---
 
-
-
 ### 2. `navpromini_description` → `display.launch.py`
 
 **Purpose:** RViz-only model check (no Gazebo).
 
-
 | Argument | Default | Description                  |
 | -------- | ------- | ---------------------------- |
 | `gui`    | `True`  | Joint state GUI vs plain JSP |
-
 
 **Nodes:** `robot_state_publisher`, `joint_state_publisher(_gui)`, `rviz2`
 
@@ -210,12 +182,9 @@ ros2 launch navpromini_description display.launch.py
 
 ---
 
-
-
 ### 3. `navpromini_teleop` → `joystick.launch.py`
 
 **Purpose:** Gamepad → `/cmd_vel`.
-
 
 | Argument        | Default   | Description               |
 | --------------- | --------- | ------------------------- |
@@ -223,7 +192,6 @@ ros2 launch navpromini_description display.launch.py
 | `joy_dev`       | `0`       | `/dev/input/js0`          |
 | `cmd_vel_topic` | `cmd_vel` | Remap target              |
 | `use_sim_time`  | `true`    | Set `false` on real robot |
-
 
 **Nodes:** `joy_node` → `/joy`; `teleop_twist_joy_node` → `/cmd_vel`
 **Controls:** hold **LB** to enable; **RB** turbo.
@@ -235,16 +203,12 @@ ros2 launch navpromini_teleop joystick.launch.py joy_config:=ps4 use_sim_time:=f
 
 ---
 
-
-
 ### 4. `navpromini_teleop` → `keyboard.launch.py`
-
 
 | Argument        | Default   |
 | --------------- | --------- |
 | `cmd_vel_topic` | `cmd_vel` |
 | `use_sim_time`  | `true`    |
-
 
 **Node:** `teleop_twist_keyboard`
 
@@ -256,12 +220,9 @@ ros2 launch navpromini_teleop keyboard.launch.py use_sim_time:=false
 
 ---
 
-
-
 ### 5. `navpromini_mapping` → `slam.launch.py`
 
 **Purpose:** Online async SLAM (`slam_toolbox`).
-
 
 | Argument                | Default                           | Description             |
 | ----------------------- | --------------------------------- | ----------------------- |
@@ -270,7 +231,6 @@ ros2 launch navpromini_teleop keyboard.launch.py use_sim_time:=false
 | `use_lifecycle_manager` | `false`                           |                         |
 | `slam_params_file`      | `mapper_params_online_async.yaml` |                         |
 | `use_rviz`              | `true`                            | Mapping RViz            |
-
 
 **Nodes:** `async_slam_toolbox_node`, optional `rviz2`
 
@@ -282,17 +242,13 @@ ros2 launch navpromini_mapping slam.launch.py
 
 ---
 
-
-
 ### 6. `navpromini_mapping` → `map_saver.launch.py`
 
 **Purpose:** Save SLAM map to disk.
 
-
 | Argument   | Default          | Description                   |
 | ---------- | ---------------- | ----------------------------- |
 | `map_name` | `navpromini_map` | Bare name (no path/extension) |
-
 
 **Output:** `~/NavProMini_ws/src/navpromini_mapping/maps/<map_name>.pgm` + `.yaml`
 
@@ -302,12 +258,9 @@ ros2 launch navpromini_mapping map_saver.launch.py map_name:=cafe
 
 ---
 
-
-
 ### 7. `navpromini_navigation` → `navigation.launch.py`
 
 **Purpose:** Full Nav2 (localization + navigation) + optional RViz.
-
 
 | Argument       | Default                   | Description                                       |
 | -------------- | ------------------------- | ------------------------------------------------- |
@@ -317,11 +270,9 @@ ros2 launch navpromini_mapping map_saver.launch.py map_name:=cafe
 | `params_file`  | `config/nav2_params.yaml` |                                                   |
 | `use_rviz`     | `true`                    | Nav RViz (map, costmaps, plans)                   |
 
-
 **Includes:** `nav2_bringup/bringup_launch.py` (`slam:=False`, localization on)
 
 **Typical Nav2 nodes**
-
 
 | Node                              | Role                            |
 | --------------------------------- | ------------------------------- |
@@ -339,7 +290,6 @@ ros2 launch navpromini_mapping map_saver.launch.py map_name:=cafe
 | `route_server` / `docking_server` | Optional Nav2 extras            |
 | `lifecycle_manager_navigation`    | Activate navigation stack       |
 | `rviz2`                           | If `use_rviz:=true`             |
-
 
 **RViz displays (navigation.rviz):** `/map`, `/global_costmap/costmap`, `/local_costmap/costmap`, `/plan` (global), `/local_plan` (local), `/scan`, robot model, AMCL pose/particles.
 
@@ -360,12 +310,9 @@ In RViz (`Fixed Frame: map`):
 
 ---
 
-
-
 ### 8. `navpromini_navigation` → `localization.launch.py`
 
 **Purpose:** Map + AMCL only (no planner/controller).
-
 
 | Argument       | Default            |
 | -------------- | ------------------ |
@@ -373,7 +320,6 @@ In RViz (`Fixed Frame: map`):
 | `use_sim_time` | `true`             |
 | `autostart`    | `true`             |
 | `params_file`  | `nav2_params.yaml` |
-
 
 **Nodes (via Nav2 localization bringup):** `map_server`, `amcl`, lifecycle manager.
 
@@ -383,14 +329,9 @@ ros2 launch navpromini_navigation localization.launch.py map_name:=cafe
 
 ---
 
-
-
 ## Topics (main)
 
-
-
 ### Simulation bridge (`ros_gz_bridge.yaml`)
-
 
 | Topic           | Type                     | Direction                     |
 | --------------- | ------------------------ | ----------------------------- |
@@ -401,13 +342,9 @@ ros2 launch navpromini_navigation localization.launch.py map_name:=cafe
 | `/joint_states` | `sensor_msgs/JointState` | GZ → ROS                      |
 | `/scan`         | `sensor_msgs/LaserScan`  | GZ → ROS                      |
 
-
 > Gazebo also has `/odom_wheels` (open-loop DiffDrive odom) — **not bridged** to ROS. Nav2 uses bridged `/odom`.
 
-
-
 ### Navigation / SLAM extras
-
 
 | Topic                     | Notes                                       |
 | ------------------------- | ------------------------------------------- |
@@ -425,11 +362,7 @@ ros2 launch navpromini_navigation localization.launch.py map_name:=cafe
 | `/goal_pose`              | RViz 2D Goal Pose                           |
 | `/joy`                    | Joystick                                    |
 
-
-
-
 ### ESP32 micro-ROS firmware (real robot)
-
 
 | Topic                       | Dir | Notes                                       |
 | --------------------------- | --- | ------------------------------------------- |
@@ -439,15 +372,11 @@ ros2 launch navpromini_navigation localization.launch.py map_name:=cafe
 | `imu`                       | pub | QMI8658, `imu_link`                         |
 | `joint_states`              | pub | `LeftWheelJoint` / `RightWheelJoint` (rad)  |
 
-
 Host `navpromini_controller`: `joint_states` → `/odom` + TF `odom`→`base_link`; RPLidar → `/scan`.
 
 ---
 
-
-
 ## Frames cheat sheet
-
 
 | Frame                | Published by (sim)       | Published by (real — typical) |
 | -------------------- | ------------------------ | ----------------------------- |
@@ -457,14 +386,9 @@ Host `navpromini_controller`: `joint_states` → `/odom` + TF `odom`→`base_lin
 | `lidar_1`            | URDF static              | URDF / static TF              |
 | `chassis`, wheels, … | `robot_state_publisher`  | same                          |
 
-
 ---
 
-
-
 ## Simulation workflows
-
-
 
 ### A) Drive in Gazebo
 
@@ -477,8 +401,6 @@ source ~/NavProMini_ws/install/setup.bash
 ros2 launch navpromini_teleop joystick.launch.py
 ```
 
-
-
 ### B) Map an environment
 
 ```bash
@@ -487,8 +409,6 @@ ros2 launch navpromini_mapping slam.launch.py
 # drive around …
 ros2 launch navpromini_mapping map_saver.launch.py map_name:=cafe
 ```
-
-
 
 ### C) Navigate on a map
 
@@ -506,8 +426,6 @@ ros2 launch navpromini_navigation navigation.launch.py \
 2. Set **2D Goal Pose**
 3. Watch global plan (red), local plan (green), costmaps
 
-
-
 ### Quick checks (sim)
 
 ```bash
@@ -519,8 +437,6 @@ ros2 run tf2_ros tf2_echo map odom   # after initial pose
 ```
 
 ---
-
-
 
 ## Real robot workflows
 
@@ -536,16 +452,12 @@ cd ~/NavProMini_ws && source install/setup.bash
 ros2 launch navpromini_controller robot.launch.py
 ```
 
-
-
 ### Teleop
 
 ```bash
 ros2 launch navpromini_teleop keyboard.launch.py use_sim_time:=false
 # or joystick.launch.py use_sim_time:=false
 ```
-
-
 
 ### SLAM
 
@@ -555,8 +467,6 @@ ros2 launch navpromini_controller robot.launch.py start_slam:=true use_rviz:=fal
 # drive, then:
 ros2 launch navpromini_mapping map_saver.launch.py map_name:=home
 ```
-
-
 
 ### Nav2
 
@@ -577,24 +487,18 @@ ros2 run tf2_ros tf2_echo odom base_link
 ros2 run tf2_ros tf2_echo base_link lidar_1
 ```
 
-
-
 ### Common failure modes
 
-
-| Symptom                   | Likely cause                                                              |
-| ------------------------- | ------------------------------------------------------------------------- |
-| No micro-ROS topics       | Agent not on `/dev/ttyAMA0`, UART disabled, or firmware waiting for agent |
+| Symptom                                                       | Likely cause                                                                                 |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| No micro-ROS topics                                           | Agent not on `/dev/ttyAMA0`, UART disabled, or firmware waiting for agent                    |
 | `/imu` visible but empty `/odom` / no `/joint_states` on host | `ROS_DOMAIN_ID` mismatch — launch inherits the shell value; it must match the ESP32 firmware |
-| `Invalid frame ID "odom"` | odom node not running / no `/joint_states`                                |
-| Costmaps empty            | No `/scan` or wrong `frame_id` (must be `lidar_1`)                        |
-| Robot keeps driving       | Old firmware without cmd_vel timeout — reflash                            |
-| Lidar / ESP32 port clash  | Lidar is CP2102 (`/dev/rplidar`); ESP32 uses GPIO UART (`ttyAMA0`)         |
-
+| `Invalid frame ID "odom"`                                     | odom node not running / no `/joint_states`                                                   |
+| Costmaps empty                                                | No `/scan` or wrong `frame_id` (must be `lidar_1`)                                           |
+| Robot keeps driving                                           | Old firmware without cmd_vel timeout — reflash                                               |
+| Lidar / ESP32 port clash                                      | Lidar is CP2102 (`/dev/rplidar`); ESP32 uses GPIO UART (`ttyAMA0`)                           |
 
 ---
-
-
 
 ## Multi-machine: robot on Pi, RViz on PC
 
@@ -611,19 +515,16 @@ robot.launch.py                         rviz2 (+ optional teleop)
          └──────── ROS 2 DDS discovery ────────┘
 ```
 
-
-
 ### 1. Network
 
 1. Put Pi and PC on the **same Wi‑Fi or Ethernet** (avoid guest / AP-isolation SSIDs).
 2. Get IPs and ping both ways:
-  ```bash
-   hostname -I
-   ping <pi_ip>
-   ping <pc_ip>
-  ```
 
-
+```bash
+ hostname -I
+ ping <pi_ip>
+ ping <pc_ip>
+```
 
 ### 2. ROS 2 environment (both machines)
 
@@ -679,8 +580,6 @@ ros2 launch navpromini_controller robot.launch.py \
   start_nav:=true map_name:=home use_rviz:=false
 ```
 
-
-
 ### 5. PC — RViz and teleop
 
 ```bash
@@ -695,7 +594,6 @@ rviz2
 
 In RViz:
 
-
 | Setting / display     | Value                                       |
 | --------------------- | ------------------------------------------- |
 | Fixed Frame           | `odom` (or `map` if SLAM / Nav2 is running) |
@@ -704,7 +602,6 @@ In RViz:
 | LaserScan             | topic `/scan`                               |
 | Odometry              | topic `/odom`                               |
 | Map / Path / Costmaps | when Nav2 or SLAM is active                 |
-
 
 Nav2 tools on PC: **2D Pose Estimate** → `/initialpose`, **2D Goal Pose** → `/goal_pose`.
 
@@ -726,10 +623,7 @@ timedatectl status
 sudo timedatectl set-ntp true
 ```
 
-
-
 ### Checklist
-
 
 | Check                     | Pi  | PC  |
 | ------------------------- | --- | --- |
@@ -740,11 +634,7 @@ sudo timedatectl set-ntp true
 | `rviz2`                   | ✗   | ✓   |
 | `use_sim_time:=false`     | ✓   | ✓   |
 
-
-
-
 ### Multi-machine failure modes
-
 
 | Symptom                    | Likely cause                                                           |
 | -------------------------- | ---------------------------------------------------------------------- |
@@ -754,10 +644,7 @@ sudo timedatectl set-ntp true
 | Laggy RViz / TF jumps      | Weak Wi‑Fi; keep Nav2 on Pi; sync clocks (NTP)                         |
 | Transform extrapolation    | Clock skew between Pi and PC                                           |
 
-
 ---
-
-
 
 ## Typical flow diagram
 
@@ -783,8 +670,6 @@ colcon build && source install/setup.bash
 
 ---
 
-
-
 ## Notes
 
 - Cafe floor is raised; launch auto-spawns near `z≈0.28` for `world_name:=cafe`.
@@ -794,8 +679,6 @@ colcon build && source install/setup.bash
 - Nav2 motion limits (params): ~**0.4 m/s** linear, ~**1.5 rad/s** angular (velocity smoother).
 
 ---
-
-
 
 ## License
 
