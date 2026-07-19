@@ -111,9 +111,7 @@ class WheelOdomNode(Node):
         self._prev_right: Optional[int] = None
         self._prev_time_ns: Optional[int] = None
         self._got_ticks = False
-        self._trip_left_ticks = 0
-        self._trip_right_ticks = 0
-        self._path_length = 0.0
+        self._warned_no_ticks = False
 
         odom_topic = str(self.get_parameter('odom_topic').value)
         ticks_topic = str(self.get_parameter('wheel_ticks_topic').value)
@@ -127,45 +125,22 @@ class WheelOdomNode(Node):
         )
 
         self._odom_pub = self.create_publisher(Odometry, odom_topic, 10)
-        self._tf_broadcaster = TransformBroadcaster(
-            self) if self._publish_tf else None
+        self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
         self.create_subscription(
             Int32MultiArray, ticks_topic, self._on_wheel_ticks, ticks_qos
         )
-        self.create_timer(2.0, self._watchdog)
+        self.create_timer(5.0, self._watchdog)
 
         self.get_logger().info(
-            f'diff-drive odom: ticks/m={self._ticks_per_m:.1f} '
-            f'(m/tick={self._meters_per_tick:.8f}), '
-            f'separation={self._wheel_separation:.4f} m → /{odom_topic}. '
-            f'Restart this node before a calibration run so pose starts at 0.'
+            f'diff-drive odom: ticks/m={self._ticks_per_m:.1f}, '
+            f'separation={self._wheel_separation:.4f} m → /{odom_topic}'
         )
 
     def _watchdog(self) -> None:
-        if not self._got_ticks:
+        if not self._got_ticks and not self._warned_no_ticks:
+            self._warned_no_ticks = True
             self.get_logger().warn(
-                'No /wheel_ticks yet — check micro-ROS agent + firmware, then: '
-                'ros2 topic echo /wheel_ticks --once'
-            )
-            return
-
-        avg_ticks = 0.5 * (
-            abs(self._trip_left_ticks) + abs(self._trip_right_ticks)
-        )
-        tick_path = avg_ticks * self._meters_per_tick
-        pose_r = math.hypot(self._x, self._y)
-        self.get_logger().info(
-            f'odom check: pose=({self._x:.3f},{self._y:.3f}) r={pose_r:.3f} m | '
-            f'path={self._path_length:.3f} m | '
-            f'from ticks≈{tick_path:.3f} m '
-            f'(ΔL={self._trip_left_ticks}, ΔR={self._trip_right_ticks}, '
-            f'ticks/m={self._ticks_per_m:.1f})'
-        )
-        # Pose distance cannot exceed path length for valid differential drive.
-        if self._path_length > 0.05 and pose_r > self._path_length * 1.05:
-            self.get_logger().error(
-                'INCONSISTENT ODOM: pose distance > integrated path — '
-                'restart navpromini_odom and retest (stale pose / bad scale).'
+                'No /wheel_ticks yet — check micro-ROS agent + firmware'
             )
 
     def _on_wheel_ticks(self, msg: Int32MultiArray) -> None:
@@ -209,9 +184,6 @@ class WheelOdomNode(Node):
         self._prev_right = right
         self._prev_time_ns = now_ns
 
-        self._trip_left_ticks += left_diff
-        self._trip_right_ticks += right_diff
-
         # diff_drive / Rio: convert ticks → meters, then fuse.
         d_left = float(left_diff) * self._meters_per_tick
         d_right = float(right_diff) * self._meters_per_tick
@@ -232,7 +204,6 @@ class WheelOdomNode(Node):
             self._x += d * math.cos(mid_heading)
             self._y += d * math.sin(mid_heading)
             self._theta = normalize_angle(self._theta + d_theta)
-            self._path_length += abs(d)
 
         self._publish(stamp)
 
