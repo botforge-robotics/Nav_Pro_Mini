@@ -61,7 +61,7 @@ class WheelOdomNode(Node):
         self.declare_parameter('wheel_separation', 0.225)  # 22.5 cm
         self.declare_parameter('ticks_per_revolution', 1470.0)
         # If > 0, overrides radius/ticks_per_rev (use your measured ticks/m).
-        self.declare_parameter('encoder_ticks_per_meter', 7244.0)
+        self.declare_parameter('encoder_ticks_per_meter', 7800.0)
 
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')

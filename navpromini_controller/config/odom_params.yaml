@@ -5,8 +5,8 @@ navpromini_odom:
     wheel_radius: 0.0325 # 65 mm diameter
     wheel_separation: 0.225 # 22.5 cm track
     ticks_per_revolution: 1470.0
-    # Measured on robot (~7244). Set 0 to use 2*pi*r/ticks_per_rev instead.
-    encoder_ticks_per_meter: 7244.0
+    # Measured on robot (~7800). Set 0 to use 2*pi*r/ticks_per_rev instead.
+    encoder_ticks_per_meter: 7800.0
     odom_frame: odom
     base_frame: base_link
     odom_topic: odom
