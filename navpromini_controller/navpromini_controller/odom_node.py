@@ -44,8 +44,9 @@ class WheelOdomNode(Node):
         # Flip if a wheel angle increases when driving backward.
         self.declare_parameter('left_wheel_sign', 1.0)
         self.declare_parameter('right_wheel_sign', 1.0)
-        # ESP32 micro-ROS clocks are not synced to the Pi. Stamping /odom + TF
-        # with message time breaks LaserScan (host time) in RViz Fixed Frame=odom.
+        # Prefer Pi clock for /odom + TF so LaserScan stays aligned even if
+        # ESP32 epoch sync has not completed yet. Set false once micro-ROS
+        # time sync is confirmed (rmw_uros_sync_session on the firmware).
         self.declare_parameter('use_host_time', True)
 
         self._wheel_radius = float(self.get_parameter('wheel_radius').value)

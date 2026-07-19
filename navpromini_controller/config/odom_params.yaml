@@ -12,5 +12,6 @@ navpromini_odom:
     publish_tf: true
     left_wheel_sign: 1.0
     right_wheel_sign: 1.0
-    # true: stamp /odom + TF with Pi clock (needed for /scan in RViz)
+    # true: stamp /odom + TF with Pi clock (safe default).
+    # false: use ESP32 /joint_states stamp after micro-ROS time sync.
     use_host_time: true
