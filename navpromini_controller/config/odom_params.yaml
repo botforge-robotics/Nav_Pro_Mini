@@ -1,10 +1,12 @@
-# Wheel odometry from ESP32 /wheel_ticks (Rio-style ticks-per-meter).
+# Wheel odometry — diff_drive_controller geometry model
+# https://wiki.ros.org/diff_drive_controller
 navpromini_odom:
   ros__parameters:
-    # Calibrate: drive 1.0 m straight, read |left+right|/2 tick delta → set here.
-    # Geometric estimate for NavPro: 420 ticks/rev / (2*pi*0.034) ≈ 1966
-    encoder_ticks_per_meter: 1966.0
-    wheel_separation: 0.225
+    wheel_radius: 0.0325          # 65 mm diameter
+    wheel_separation: 0.225       # 22.5 cm track
+    ticks_per_revolution: 1470.0
+    # Measured on robot (~7244). Set 0 to use 2*pi*r/ticks_per_rev instead.
+    encoder_ticks_per_meter: 7244.0
     odom_frame: odom
     base_frame: base_link
     odom_topic: odom
@@ -12,3 +14,4 @@ navpromini_odom:
     publish_tf: true
     left_wheel_sign: 1.0
     right_wheel_sign: 1.0
+    max_tick_jump: 2000

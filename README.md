@@ -27,8 +27,9 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | Item         | Value                                                          |
 | ------------ | -------------------------------------------------------------- |
 | Drive        | Differential drive                                             |
-| Wheel radius | **0.034 m** (URDF + firmware + odom)                           |
-| Track        | **0.187 m** (URDF + firmware + odom)                           |
+| Wheel radius | **0.0325 m** (65 mm dia; URDF + firmware + odom) |
+| Track        | **0.225 m** (22.5 cm; URDF + firmware + odom)    |
+| Encoder      | **1470** ticks/rev → **≈7198.7** ticks/m         |
 | Sim motors   | **10 kg·cm**, **300 RPM** (Nav2 capped ~0.4 m/s)               |
 | Lidar        | RPLIDAR A1M8 → `/scan`, frame `lidar_1`                        |
 | Control      | `/cmd_vel` (`geometry_msgs/Twist`)                             |

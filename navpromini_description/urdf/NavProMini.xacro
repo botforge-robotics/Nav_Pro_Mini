@@ -8,7 +8,7 @@
   <!-- Motor limits: 10 kg.cm = 0.981 N.m, 300 RPM = 31.416 rad/s -->
   <xacro:property name="motor_effort" value="0.981"/>
   <xacro:property name="motor_velocity" value="31.416"/>
-  <xacro:property name="wheel_radius" value="0.034"/>
+  <xacro:property name="wheel_radius" value="0.0325"/>  <!-- 65 mm diameter -->
   <xacro:property name="wheel_width" value="0.028"/>
 
   <!-- ROS base_link: +X forward, +Y left. Mass lives here for stable physics. -->
