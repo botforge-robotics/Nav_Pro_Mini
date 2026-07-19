@@ -171,6 +171,10 @@ def generate_launch_description():
             parameters=[{
                 'robot_description': robot_description,
                 'use_sim_time': use_sim_time,
+                # ESP32 micro-ROS stamps /joint_states with its own clock (~uptime).
+                # Without this, chassis→leftWheel_1/rightWheel_1 TF is in ESP time while
+                # odom→base_link is host time, so RViz Fixed Frame=odom warns on wheels.
+                'ignore_timestamp': True,
             }],
         ),
         microros,
