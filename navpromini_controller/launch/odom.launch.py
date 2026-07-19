@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wheel odometry node (joint_states → /odom + TF)."""
+"""Wheel odometry node (wheel_ticks → /odom + TF)."""
 
 import os
 

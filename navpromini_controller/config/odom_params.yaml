@@ -1,17 +1,14 @@
-# Wheel odometry — must match firmware + URDF
+# Wheel odometry from ESP32 /wheel_ticks (Rio-style ticks-per-meter).
 navpromini_odom:
   ros__parameters:
-    wheel_radius: 0.034
-    wheel_separation: 0.187
-    left_joint_name: LeftWheelJoint
-    right_joint_name: RightWheelJoint
+    # Calibrate: drive 1.0 m straight, read |left+right|/2 tick delta → set here.
+    # Geometric estimate for NavPro: 420 ticks/rev / (2*pi*0.034) ≈ 1966
+    encoder_ticks_per_meter: 1966.0
+    wheel_separation: 0.225
     odom_frame: odom
     base_frame: base_link
     odom_topic: odom
-    joint_states_topic: joint_states
+    wheel_ticks_topic: wheel_ticks
     publish_tf: true
     left_wheel_sign: 1.0
     right_wheel_sign: 1.0
-    # true: stamp /odom + TF with Pi clock (safe default).
-    # false: use ESP32 /joint_states stamp after micro-ROS time sync.
-    use_host_time: true
