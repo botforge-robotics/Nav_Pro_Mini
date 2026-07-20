@@ -85,7 +85,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='true for Gazebo only; false on real Pi',
+        ),
         DeclareLaunchArgument('autostart', default_value='true'),
         DeclareLaunchArgument('use_lifecycle_manager', default_value='false'),
         DeclareLaunchArgument(
@@ -94,7 +98,11 @@ def generate_launch_description():
                 pkg, 'config', 'mapper_params_online_async.yaml'
             ),
         ),
-        DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='false',
+            description='Prefer RViz on PC; keep false on Pi',
+        ),
         LogInfo(msg=['Starting NavProMini SLAM mapping']),
         slam_node,
         configure_event,

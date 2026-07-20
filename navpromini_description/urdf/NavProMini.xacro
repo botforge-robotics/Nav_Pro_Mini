@@ -261,8 +261,11 @@
     <child link="BLC_1"/>
   </joint>
 
+  <!-- Lidar optical +X must match base_link +X (robot forward).
+       chassis is +90° yaw vs base_link (CAD), so cancel with -90° here.
+       Without this, /scan is 90° off → SLAM smear + wrong motion in RViz. -->
   <joint name="LidarJoint" type="fixed">
-    <origin xyz="0.001341 -0.032462 0.188795" rpy="0 0 0"/>
+    <origin xyz="0.001341 -0.032462 0.188795" rpy="0 0 -1.57079632679"/>
     <parent link="chassis"/>
     <child link="lidar_1"/>
   </joint>

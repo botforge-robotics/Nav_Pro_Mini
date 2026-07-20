@@ -1,4 +1,5 @@
-# DualShock / PS-style mapping
+# DualShock / PS-style mapping → /cmd_vel
+# Hold L1 to drive; hold R1 for turbo.
 teleop_twist_joy_node:
   ros__parameters:
     require_enable_button: true
@@ -10,12 +11,13 @@ teleop_twist_joy_node:
     scale_linear_turbo:
       x: 0.55
 
+    # Left stick horizontal → yaw
     axis_angular:
       yaw: 0
     scale_angular:
-      yaw: 1.0
+      yaw: 0.7
     scale_angular_turbo:
-      yaw: 1.8
+      yaw: 1.2
 
     enable_button: 4
     enable_turbo_button: 5

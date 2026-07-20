@@ -7,7 +7,7 @@ slam_toolbox:
     ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
 
-    # Frames / topics for NavProMini
+    # Frames / topics for NavProMini (real + sim)
     odom_frame: odom
     map_frame: map
     base_frame: base_link
@@ -20,20 +20,23 @@ slam_toolbox:
     transform_publish_period: 0.02
     map_update_interval: 2.0
     resolution: 0.05
-    restamp_tf: false
-    # Match RPLidAR A1M8 / Gazebo sensor
+    # Prefer host clock on stamps from mixed ESP32/Pi sources
+    restamp_tf: true
+    # Match RPLidAR A1M8 (ignore body self-hits)
     min_laser_range: 0.35
     max_laser_range: 12.0
-    minimum_time_interval: 0.3
-    transform_timeout: 0.2
+    # Process scans more often on real hardware (was 0.3 → laggy map)
+    minimum_time_interval: 0.2
+    transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     enable_interactive_mode: true
 
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.2
-    minimum_travel_heading: 0.25
+    # Slightly smaller steps → better scan match with wheel odom
+    minimum_travel_distance: 0.15
+    minimum_travel_heading: 0.2
     check_min_dist_and_heading_precisely: false
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
@@ -54,8 +57,9 @@ slam_toolbox:
     loop_search_space_resolution: 0.05
     loop_search_space_smear_deviation: 0.03
 
-    distance_variance_penalty: 0.5
-    angle_variance_penalty: 1.0
+    # Trust wheel odom a bit more (reduces smear when lidar frame is correct)
+    distance_variance_penalty: 0.8
+    angle_variance_penalty: 1.2
     fine_search_angle_offset: 0.00349
     coarse_search_angle_offset: 0.349
     coarse_angle_resolution: 0.0349

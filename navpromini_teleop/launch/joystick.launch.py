@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Joystick teleop for NavProMini -> /cmd_vel."""
+"""Joystick teleop for NavProMini -> /cmd_vel.
+
+Publishes a steady /cmd_vel stream (joy autorepeat) so the ESP32
+cmd_vel timeout does not chatter. Defaults match real-robot use
+(use_sim_time:=false); pass true only for Gazebo.
+"""
 
 import os
 
@@ -43,8 +48,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'use_sim_time',
-            default_value='true',
-            description='Use simulation clock',
+            default_value='false',
+            description='true only for Gazebo; false on real robot',
         ),
         LogInfo(msg=['NavProMini joystick teleop config=', joy_config]),
         Node(
@@ -54,8 +59,11 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'device_id': joy_dev,
-                'deadzone': 0.15,
-                'autorepeat_rate': 20.0,
+                # Wider deadzone reduces center-noise → less jerky cmd_vel
+                'deadzone': 0.3,
+                # Keep publishing while stick held (ESP32 stops if /cmd_vel gaps)
+                'autorepeat_rate': 30.0,
+                'sticky_buttons': False,
                 'use_sim_time': use_sim_time,
             }],
         ),

@@ -149,7 +149,11 @@ def generate_launch_description():
             default_value='empty',
             description=f'World to load: {", ".join(AVAILABLE_WORLDS)}',
         ),
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='true',
+            description='Gazebo publishes /clock — keep true for this launch',
+        ),
         DeclareLaunchArgument(
             'use_rviz',
             default_value='false',

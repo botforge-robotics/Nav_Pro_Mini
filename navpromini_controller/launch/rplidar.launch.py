@@ -31,8 +31,11 @@ def _resolve_port(configured: str) -> str:
 def _setup(context, *args, **kwargs):
     configured = LaunchConfiguration('serial_port').perform(context)
     port = _resolve_port(configured)
+    inverted = LaunchConfiguration('inverted').perform(context).lower() in (
+        'true', '1', 'yes'
+    )
 
-    actions = [LogInfo(msg=[f'RPLidar port: {port}'])]
+    actions = [LogInfo(msg=[f'RPLidar port: {port} (inverted={inverted})'])]
     if not os.path.exists(port):
         actions.append(LogInfo(msg=[
             f'WARNING: lidar port {port} not found — check USB cable/power.'
@@ -46,9 +49,11 @@ def _setup(context, *args, **kwargs):
             output='screen',
             parameters=[{
                 'serial_port': port,
-                'serial_baudrate': LaunchConfiguration('baudrate'),
-                'frame_id': LaunchConfiguration('frame_id'),
-                'inverted': False,
+                'serial_baudrate': int(
+                    LaunchConfiguration('baudrate').perform(context)
+                ),
+                'frame_id': LaunchConfiguration('frame_id').perform(context),
+                'inverted': inverted,
                 'angle_compensate': True,
             }],
         )
@@ -73,6 +78,11 @@ def generate_launch_description():
             'frame_id',
             default_value='lidar_1',
             description='Must match URDF lidar link',
+        ),
+        DeclareLaunchArgument(
+            'inverted',
+            default_value='false',
+            description='Set true if scan is mirrored vs robot (rare)',
         ),
         OpaqueFunction(function=_setup),
     ])

@@ -13,7 +13,11 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('cmd_vel_topic', default_value='cmd_vel'),
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='true only for Gazebo; false on real robot',
+        ),
         Node(
             package='teleop_twist_keyboard',
             executable='teleop_twist_keyboard',
