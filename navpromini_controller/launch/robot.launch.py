@@ -35,7 +35,11 @@ def generate_launch_description():
 
     xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
     robot_description = ParameterValue(
-        Command(['xacro ', xacro_file]), value_type=str
+        Command([
+            'xacro ', xacro_file,
+            ' lidar_yaw:=', LaunchConfiguration('lidar_yaw'),
+        ]),
+        value_type=str,
     )
 
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -134,6 +138,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('lidar_baud', default_value='115200'),
         DeclareLaunchArgument('lidar_frame', default_value='lidar_1'),
+        DeclareLaunchArgument(
+            'lidar_yaw',
+            default_value='0.0',
+            description='lidar_1 yaw vs base_link (rad). '
+                        'If scan is 90° off in RViz, try 1.5708 or -1.5708',
+        ),
         DeclareLaunchArgument('start_agent', default_value='true'),
         DeclareLaunchArgument('start_lidar', default_value='true'),
         DeclareLaunchArgument('start_odom', default_value='true'),

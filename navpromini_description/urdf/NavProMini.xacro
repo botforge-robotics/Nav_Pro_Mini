@@ -11,6 +11,15 @@
   <xacro:property name="wheel_radius" value="0.0325"/>  <!-- 65 mm diameter -->
   <xacro:property name="wheel_width" value="0.028"/>
 
+  <!-- Lidar pose in base_link (+X forward). Yaw is tunable at launch:
+       xacro ... lidar_yaw:=±1.5708 if /scan is 90° off vs driving direction. -->
+  <xacro:arg name="lidar_yaw" default="0.0"/>
+  <xacro:property name="lidar_yaw" value="$(arg lidar_yaw)"/>
+  <!-- chassis joint origin (0.001341, -0.032462, 0.188795) rotated by +90° yaw -->
+  <xacro:property name="lidar_x" value="0.032462"/>
+  <xacro:property name="lidar_y" value="0.001341"/>
+  <xacro:property name="lidar_z" value="0.188795"/>
+
   <!-- ROS base_link: +X forward, +Y left. Mass lives here for stable physics. -->
   <link name="base_link">
     <inertial>
@@ -182,15 +191,16 @@
       <mass value="0.03"/>
       <inertia ixx="1e-5" iyy="1e-5" izz="2e-05" ixy="0" iyz="0" ixz="0"/>
     </inertial>
+    <!-- Mesh is CAD/chassis-oriented; rotate +90° so it matches chassis visual. -->
     <visual>
-      <origin xyz="-0.001341 0.032462 -0.188795" rpy="0 0 0"/>
+      <origin xyz="-0.001341 0.032462 -0.188795" rpy="0 0 1.57079632679"/>
       <geometry>
         <mesh filename="package://navpromini_description/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
-      <origin xyz="-0.001341 0.032462 -0.188795" rpy="0 0 0"/>
+      <origin xyz="-0.001341 0.032462 -0.188795" rpy="0 0 1.57079632679"/>
       <geometry>
         <mesh filename="package://navpromini_description/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -261,12 +271,11 @@
     <child link="BLC_1"/>
   </joint>
 
-  <!-- Lidar optical +X must match base_link +X (robot forward).
-       chassis is +90° yaw vs base_link (CAD), so cancel with -90° here.
-       Without this, /scan is 90° off → SLAM smear + wrong motion in RViz. -->
+  <!-- Optical frame on base_link (not chassis): scan 0° = base +X = drive forward.
+       Parenting under chassis inherited CAD +90° yaw and smeared SLAM maps. -->
   <joint name="LidarJoint" type="fixed">
-    <origin xyz="0.001341 -0.032462 0.188795" rpy="0 0 -1.57079632679"/>
-    <parent link="chassis"/>
+    <origin xyz="${lidar_x} ${lidar_y} ${lidar_z}" rpy="0 0 ${lidar_yaw}"/>
+    <parent link="base_link"/>
     <child link="lidar_1"/>
   </joint>
 
