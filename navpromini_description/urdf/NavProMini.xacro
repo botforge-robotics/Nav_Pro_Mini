@@ -3,7 +3,6 @@
 
   <xacro:include filename="$(find navpromini_description)/urdf/materials.xacro" />
   <xacro:include filename="$(find navpromini_description)/urdf/NavProMini.trans" />
-  <xacro:include filename="$(find navpromini_description)/urdf/NavProMini.gazebo" />
 
   <!-- Motor limits: 10 kg.cm = 0.981 N.m, 300 RPM = 31.416 rad/s -->
   <xacro:property name="motor_effort" value="0.981"/>
@@ -11,10 +10,21 @@
   <xacro:property name="wheel_radius" value="0.0325"/>  <!-- 65 mm diameter -->
   <xacro:property name="wheel_width" value="0.028"/>
 
+  <!-- Multi-robot Gazebo: launch passes topic_prefix:=/robot1 frame_prefix:=robot1/
+       Single-robot defaults keep absolute /cmd_vel, /odom, /scan. -->
+  <xacro:arg name="robot_namespace" default=""/>
+  <xacro:arg name="topic_prefix" default=""/>
+  <xacro:arg name="frame_prefix" default=""/>
+  <xacro:property name="topic_prefix" value="$(arg topic_prefix)"/>
+  <xacro:property name="frame_prefix" value="$(arg frame_prefix)"/>
+
   <!-- Lidar pose in base_link (+X forward). Yaw is tunable at launch:
        xacro ... lidar_yaw:=±1.5708 if /scan is 90° off vs driving direction. -->
   <xacro:arg name="lidar_yaw" default="0.0"/>
   <xacro:property name="lidar_yaw" value="$(arg lidar_yaw)"/>
+
+  <!-- After topic/frame prefix properties so NavProMini.gazebo can use them. -->
+  <xacro:include filename="$(find navpromini_description)/urdf/NavProMini.gazebo" />
   <!-- chassis joint origin (0.001341, -0.032462, 0.188795) rotated by +90° yaw -->
   <xacro:property name="lidar_x" value="0.032462"/>
   <xacro:property name="lidar_y" value="0.001341"/>
@@ -25,8 +35,9 @@
     <inertial>
       <!-- Between drive wheels (x≈0.067) and rear caster (x≈-0.074) -->
       <origin xyz="0.02 0.0 0.05" rpy="0 0 0"/>
-      <mass value="5.0"/>
-      <inertia ixx="0.04" iyy="0.04" izz="0.05" ixy="0.0" iyz="0.0" ixz="0.0"/>
+      <!-- Half mass for smoother Gazebo multi-robot sim -->
+      <mass value="2.5"/>
+      <inertia ixx="0.02" iyy="0.02" izz="0.025" ixy="0.0" iyz="0.0" ixz="0.0"/>
     </inertial>
   </link>
 

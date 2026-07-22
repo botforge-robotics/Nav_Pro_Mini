@@ -14,7 +14,7 @@ amcl:
     lambda_short: 0.1
     laser_likelihood_max_dist: 2.0
     laser_max_range: 12.0
-    laser_min_range: 0.35
+    laser_min_range: 0.12
     laser_model_type: "likelihood_field"
     max_beams: 60
     max_particles: 2000
@@ -88,7 +88,8 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.20
-      yaw_goal_tolerance: 0.30
+      # RMF goals are position-first; avoid end-of-path spin hunting.
+      yaw_goal_tolerance: 1.57
 
     # Rotate in place to face path, then DWB forward-only (no reverse)
     # Note: primary_controller MUST be a string (nested map breaks configure → no costmaps)
@@ -98,26 +99,26 @@ controller_server:
       angular_dist_threshold: 0.785
       angular_disengage_threshold: 0.3925
       forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.6
-      max_angular_accel: 0.8
+      rotate_to_heading_angular_vel: 1.2
+      max_angular_accel: 1.6
       max_cost_threshold: 250.0
       simulate_ahead_time: 1.0
       rotate_to_goal_heading: false
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.15
+      max_vel_x: 0.30
       max_vel_y: 0.0
-      max_vel_theta: 0.8
+      max_vel_theta: 1.6
       min_speed_xy: 0.0
-      max_speed_xy: 0.15
+      max_speed_xy: 0.30
       min_speed_theta: 0.0
-      acc_lim_x: 0.15
+      acc_lim_x: 0.30
       acc_lim_y: 0.0
-      acc_lim_theta: 0.8
-      decel_lim_x: -0.15
+      acc_lim_theta: 1.6
+      decel_lim_x: -0.30
       decel_lim_y: 0.0
-      decel_lim_theta: -0.8
+      decel_lim_theta: -1.6
       # Fewer samples → cheaper DWB on Pi (keeps 10 Hz steady)
       vx_samples: 10
       vy_samples: 1
@@ -131,14 +132,16 @@ controller_server:
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
+      # Was 0.02 — DWB almost ignored costmap and clipped walls/doors.
+      BaseObstacle.scale: 0.12
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 24.0
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
+      # Keep light yaw bias only — high scale caused late snap near WP.
+      RotateToGoal.scale: 8.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.x_only_threshold: 0.05
@@ -156,12 +159,17 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.15
+      # Wait for Gazebo robotN/odom TF during lifecycle activate (no launch timer).
+      initial_transform_timeout: 60.0
+      transform_tolerance: 0.5
+      # Match ~RMF fleet footprint (0.3) with margin; was 0.15 (too tight).
+      robot_radius: 0.22
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.30
+        # Lower scaling = keep high cost farther from obstacles (prefer corridor center).
+        cost_scaling_factor: 2.2
+        inflation_radius: 0.55
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -191,7 +199,10 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.15
+      robot_radius: 0.22
+      # Wait for map→base (AMCL) during activate if Gazebo spawn is still settling.
+      initial_transform_timeout: 60.0
+      transform_tolerance: 0.5
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -214,8 +225,8 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.30
+        cost_scaling_factor: 2.2
+        inflation_radius: 0.55
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
@@ -321,10 +332,10 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.15, 0.0, 0.8]
-    min_velocity: [0.0, 0.0, -0.8]
-    max_accel: [0.12, 0.0, 0.6]
-    max_decel: [-0.15, 0.0, -0.8]
+    max_velocity: [0.30, 0.0, 1.6]
+    min_velocity: [0.0, 0.0, -1.6]
+    max_accel: [0.24, 0.0, 1.2]
+    max_decel: [-0.30, 0.0, -1.6]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
