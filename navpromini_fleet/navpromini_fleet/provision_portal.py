@@ -200,13 +200,23 @@ def wifi_options_html(networks: list[tuple[str, int]]) -> str:
     return '\n'.join(opts)
 
 
-def write_display_hint(ap_ssid: str, ap_password: str = AP_PASSWORD) -> None:
-    """Best-effort hint file for start_display.sh before ROS is up."""
+def write_display_hint(
+    state: str,
+    line2: str = '',
+    line3: str = '',
+) -> None:
+    """Hint file for status_display / start_display.sh.
+
+    Format:
+      line1 = state (setup|joining|need_map|…)
+      line2 = AP SSID (setup) or robot name (other)
+      line3 = AP password (setup) or unused
+    """
     path = '/run/navpro/display_state'
     try:
         os.makedirs('/run/navpro', exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
-            f.write(f'setup\n{ap_ssid}\n{ap_password}\n')
+            f.write(f'{state}\n{line2}\n{line3}\n')
     except OSError:
         pass
 
@@ -215,7 +225,7 @@ def start_access_point(_serial: str) -> tuple[str, str, list[tuple[str, int]]]:
     """Start setup AP. Returns (ssid, mac, wifi_list). SSID uses Wi‑Fi MAC."""
     mac = primary_mac(AP_IFACE)
     ssid = ap_ssid_from_mac(mac)
-    write_display_hint(ssid, AP_PASSWORD)
+    write_display_hint('setup', ssid, AP_PASSWORD)
     # Tear down previous navpro connections if present.
     for name in (CONN_AP, CONN_SITE):
         _nmcli('connection', 'delete', name)
@@ -274,7 +284,9 @@ def connect_site_wifi(ssid: str, password: str) -> None:
 
 
 def maybe_restart_fleet_units() -> None:
-    for unit in ('navpro-display', 'navpro-robot', 'navpro-fleet'):
+    # Provision done — stop portal; bring hardware/fleet/display back with new config.
+    _run(['systemctl', 'stop', 'navpro-provision'], check=False)
+    for unit in ('navpro-robot', 'navpro-fleet', 'navpro-display'):
         _run(['systemctl', 'restart', unit], check=False)
 
 
@@ -373,7 +385,9 @@ def make_handler(state: PortalState):  # noqa: ANN201
 
             def worker() -> None:
                 try:
+                    write_display_hint('joining', robot_name)
                     connect_site_wifi(wifi_ssid, wifi_password)
+                    write_display_hint('joining', robot_name)
                     cfg = FleetConfig(
                         name=robot_name,
                         serial=state.serial,
@@ -390,6 +404,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
                         try:
                             data = register(cfg)
                             save_fleet_config(cfg)
+                            write_display_hint('need_map', cfg.name)
                             state.message = (
                                 f'<p class="ok">Registered as <strong>{html.escape(cfg.name)}</strong> '
                                 f'(id {html.escape(cfg.robot_id)}). '
@@ -404,7 +419,9 @@ def make_handler(state: PortalState):  # noqa: ANN201
                             time.sleep(2.0 * attempt)
                     raise RuntimeError(f'register failed after retries: {last_err}')
                 except Exception as exc:  # noqa: BLE001
+                    write_display_hint('error', robot_name)
                     state.message = f'<p class="err">{html.escape(str(exc))}</p>'
+                    # Keep AP up for retry if wifi join failed earlier.
                 finally:
                     state.busy = False
 

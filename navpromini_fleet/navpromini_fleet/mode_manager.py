@@ -392,6 +392,17 @@ class ModeManager(Node):
         subprocess.Popen(['systemctl', 'reboot'], env=self._ros_env())
 
     def _heartbeat_status(self) -> None:
+        # Keep display in sync (late subscribers / missed one-shot after provision).
+        display = {
+            'HARDWARE': 'need_map',
+            'MAPPING': 'mapping',
+            'NAV_READY': 'ready',
+            'NAV_ACTIVE': 'nav',
+        }.get(self._mode, 'boot')
+        d = String()
+        d.data = display
+        self._display_pub.publish(d)
+
         # Detect crashed children
         if self._mode == 'MAPPING' and self._slam_proc and self._slam_proc.poll() is not None:
             self.get_logger().warn('slam process exited unexpectedly')

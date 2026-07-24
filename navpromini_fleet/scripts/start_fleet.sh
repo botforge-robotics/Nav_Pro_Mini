@@ -19,14 +19,30 @@ fi
 export NAVPRO_MAPS_DIR="${NAVPRO_MAPS_DIR:-/var/lib/navpro/maps}"
 mkdir -p "${NAVPRO_MAPS_DIR}"
 
-# Parse simple YAML keys without requiring PyYAML in bash.
+# Parse YAML (supports flat Phase-A keys and older nested robot:/server_url forms).
 get_yaml() {
   local key="$1"
   python3 - <<PY
 import yaml
 from pathlib import Path
-d=yaml.safe_load(Path("${CFG}").read_text()) or {}
-print(d.get("${key}") or "")
+d = yaml.safe_load(Path("${CFG}").read_text()) or {}
+robot = d.get("robot") if isinstance(d.get("robot"), dict) else {}
+key = "${key}"
+if key == "name":
+    print(d.get("name") or robot.get("name") or "")
+elif key == "server_ip":
+    ip = d.get("server_ip") or ""
+    if not ip:
+        url = str(d.get("server_url") or "")
+        # http://host:port → host
+        if "://" in url:
+            url = url.split("://", 1)[1]
+        ip = url.split("/")[0].split(":")[0]
+    print(ip)
+elif key == "serial":
+    print(d.get("serial") or robot.get("serial") or "")
+else:
+    print(d.get(key) or "")
 PY
 }
 

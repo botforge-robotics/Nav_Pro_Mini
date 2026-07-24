@@ -9,8 +9,9 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('state', default_value='boot'),
-        DeclareLaunchArgument('robot_name', default_value=''),
-        DeclareLaunchArgument('ap_ssid', default_value=''),
+        DeclareLaunchArgument('robot_name', default_value='_'),
+        DeclareLaunchArgument('ap_ssid', default_value='_'),
+        DeclareLaunchArgument('ap_password', default_value='navprosetup'),
         Node(
             package='navpromini_fleet',
             executable='status_display_node',
@@ -18,9 +19,11 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'state': LaunchConfiguration('state'),
+                # '_' = unset (start_display omits empty args; node treats '_' as empty)
                 'robot_name': LaunchConfiguration('robot_name'),
                 'ap_ssid': LaunchConfiguration('ap_ssid'),
-                'refresh_hz': 0.5,
+                'ap_password': LaunchConfiguration('ap_password'),
+                'refresh_hz': 1.0,
             }],
         ),
     ])

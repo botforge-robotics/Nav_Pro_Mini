@@ -14,14 +14,17 @@ case "${ARCH}" in
   *) echo "Unsupported arch: ${ARCH}" >&2; exit 1 ;;
 esac
 
-VER="${ZENOH_BRIDGE_VERSION:-1.1.1}"
-NAME="zenoh-bridge-ros2dds-${VER}-${ZARCH}"
+# GitHub assets are named zenoh-plugin-ros2dds-<ver>-<arch>-standalone.zip
+# (contains zenoh-bridge-ros2dds + libzenoh_plugin_ros2dds.so).
+VER="${ZENOH_BRIDGE_VERSION:-1.9.0}"
+NAME="zenoh-plugin-ros2dds-${VER}-${ZARCH}-standalone"
 URL="https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/${VER}/${NAME}.zip"
 DEST=/opt/navpro/zenoh
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
 echo "==> Installing zenoh-bridge-ros2dds ${VER} (${ZARCH})"
+echo "==> ${URL}"
 mkdir -p "${DEST}"
 curl -fsSL -o "${TMP}/zenoh.zip" "${URL}"
 unzip -o "${TMP}/zenoh.zip" -d "${TMP}/out"

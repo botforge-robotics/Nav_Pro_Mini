@@ -27,14 +27,32 @@ colcon build --packages-select navpromini_fleet
 source install/setup.bash
 
 sudo bash src/navpromini_fleet/scripts/setup_robot_pi.sh
-sudo reboot
-
 sudo bash src/navpromini_fleet/scripts/install_zenoh_bridge.sh
 sudo bash src/navpromini_fleet/systemd/install_fleet_services.sh
 
-# Ship unprovisioned
+# First-boot hotspot (only when unprovisioned — fleet.yaml must NOT exist)
 sudo rm -f /etc/navpro/fleet.yaml
-sudo systemctl start navpro-provision navpro-display navpro-robot
+sudo systemctl daemon-reload
+sudo systemctl restart navpro-provision navpro-display navpro-robot
+# optional: sudo reboot
+```
+
+**Hotspot only starts if `/etc/navpro/fleet.yaml` is missing.** If that file
+already exists (even from an older test), `navpro-provision` is skipped and
+the Pi stays on normal Wi‑Fi. To re-enter setup mode:
+
+```bash
+sudo systemctl stop navpro-fleet
+sudo rm -f /etc/navpro/fleet.yaml
+sudo systemctl restart navpro-provision navpro-display navpro-robot
+# Phone: join AP NavPro-Setup-<MAC6> / password navprosetup → http://10.42.0.1/
+```
+
+Check services:
+
+```bash
+systemctl status navpro-provision navpro-robot navpro-display navpro-fleet --no-pager
+journalctl -u navpro-robot -b --no-pager -n 40
 ```
 
 ## What is `serial`?

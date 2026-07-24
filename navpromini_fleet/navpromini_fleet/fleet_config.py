@@ -128,21 +128,39 @@ def load_fleet_config(path: Path = DEFAULT_FLEET_PATH) -> Optional[FleetConfig]:
         raw = yaml.safe_load(f) or {}
     if not isinstance(raw, dict):
         return None
+    robot = raw.get('robot') if isinstance(raw.get('robot'), dict) else {}
+
+    server_ip = str(raw.get('server_ip') or '')
+    if not server_ip:
+        url = str(raw.get('server_url') or '')
+        if '://' in url:
+            url = url.split('://', 1)[1]
+        server_ip = url.split('/')[0].split(':')[0] if url else ''
+
+    zenoh_port = int(raw.get('zenoh_port') or 7447)
+    zenoh_ep = str(raw.get('zenoh_endpoint') or '')
+    if zenoh_ep.startswith('tcp/') and ':' in zenoh_ep:
+        try:
+            zenoh_port = int(zenoh_ep.rsplit(':', 1)[-1])
+        except ValueError:
+            pass
+
     known = {
         'name', 'serial', 'server_ip', 'provisioning_token', 'wifi_ssid',
         'robot_id', 'server_port', 'ros_domain_id', 'zenoh_port', 'nav_mode',
+        'robot', 'server_url', 'zenoh_endpoint', 'map_name', 'start_nav', 'start_slam',
     }
     extra = {k: v for k, v in raw.items() if k not in known}
     return FleetConfig(
-        name=str(raw.get('name') or ''),
-        serial=str(raw.get('serial') or read_cpu_serial()),
-        server_ip=str(raw.get('server_ip') or ''),
+        name=str(raw.get('name') or robot.get('name') or ''),
+        serial=str(raw.get('serial') or robot.get('serial') or read_cpu_serial()),
+        server_ip=server_ip,
         provisioning_token=str(raw.get('provisioning_token') or ''),
         wifi_ssid=str(raw.get('wifi_ssid') or ''),
         robot_id=str(raw.get('robot_id') or ''),
         server_port=int(raw.get('server_port') or 80),
         ros_domain_id=int(raw.get('ros_domain_id') or 0),
-        zenoh_port=int(raw.get('zenoh_port') or 7447),
+        zenoh_port=zenoh_port,
         nav_mode=str(raw.get('nav_mode') or 'HARDWARE'),
         extra=extra,
     )

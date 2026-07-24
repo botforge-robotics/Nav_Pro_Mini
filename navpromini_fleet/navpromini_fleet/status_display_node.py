@@ -5,31 +5,58 @@ Publishes:
   /display_text  (std_msgs/String)
   /led_command   (std_msgs/String)  — firmware presets: solid/blink/...
 
-States (env NAVPRO_DISPLAY_STATE or ROS param `state`, or /navpro/display_state):
-  setup | joining | need_map | ready | mapping | error | boot
+ESP32 micro-ROS uses BEST_EFFORT + VOLATILE — no latch. We wait until a
+subscriber (or /joint_states) appears, then push once. Same OLED text is not
+re-sent while connected. On ESP reconnect we push again.
+
+Also watches /etc/navpro/fleet.yaml + /run/navpro/display_state so after the
+captive-portal form succeeds, setup blink → joining → need_map without a
+hardcoded sleep.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
-# OLED text + LED command per phase (plan Phase A).
+from navpromini_fleet.fleet_config import DEFAULT_FLEET_PATH, load_fleet_config
+
 STATE_FX: dict[str, tuple[str, str]] = {
     'boot': ('NavProMini', 'solid,255,0,0'),
-    'setup': ('Setup WiFi — pass: navprosetup', 'blink,255,160,0,400'),
-    'joining': ('Joining fleet…', 'solid,0,200,220'),
+    'setup': ('Setup WiFi - pass: navprosetup', 'blink,255,160,0,400'),
+    'joining': ('Joining fleet...', 'solid,0,200,220'),
     'need_map': ('Need map', 'solid,255,200,0'),
     'ready': ('Ready', 'solid,0,200,40'),
-    'mapping': ('Mapping…', 'chase,0,120,255,80'),
+    'mapping': ('Mapping...', 'chase,0,120,255,80'),
     'nav': ('Nav ready', 'solid,0,200,40'),
     'error': ('Error', 'blink,255,0,0,300'),
     'offline': ('Offline', 'solid,80,80,80'),
 }
+
+HINT_PATH = Path(os.environ.get('NAVPRO_DISPLAY_HINT', '/run/navpro/display_state'))
+FLEET_PATH = Path(os.environ.get('NAVPRO_FLEET_YAML', str(DEFAULT_FLEET_PATH)))
+
+ESP_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
+
+JS_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=5,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
 
 
 class StatusDisplayNode(Node):
@@ -39,58 +66,249 @@ class StatusDisplayNode(Node):
         self.declare_parameter('robot_name', os.environ.get('NAVPRO_ROBOT_NAME', ''))
         self.declare_parameter('ap_ssid', os.environ.get('NAVPRO_AP_SSID', ''))
         self.declare_parameter('ap_password', os.environ.get('NAVPRO_AP_PASSWORD', 'navprosetup'))
-        self.declare_parameter('refresh_hz', 0.5)
+        self.declare_parameter('refresh_hz', 2.0)
+        self.declare_parameter('esp_alive_timeout_sec', 3.0)
 
-        self._pub_text = self.create_publisher(String, 'display_text', 10)
-        self._pub_led = self.create_publisher(String, 'led_command', 10)
+        self._pub_text = self.create_publisher(String, 'display_text', ESP_QOS)
+        self._pub_led = self.create_publisher(String, 'led_command', ESP_QOS)
         self.create_subscription(String, 'navpro/display_state', self._on_state_msg, 10)
+        self.create_subscription(JointState, 'joint_states', self._on_joint_states, JS_QOS)
 
         self._state = str(self.get_parameter('state').value).strip().lower() or 'boot'
-        self._last_sent: Optional[tuple[str, str]] = None
-        period = 1.0 / max(float(self.get_parameter('refresh_hz').value), 0.1)
+        self._pending_text: Optional[str] = None
+        self._pending_led: Optional[str] = None
+        self._delivered_text: Optional[str] = None
+        self._delivered_led: Optional[str] = None
+        self._esp_seen = False
+        self._last_js_ns: Optional[int] = None
+        self._waiting_logged = False
+        self._hint_mtime: Optional[float] = None
+        self._fleet_mtime: Optional[float] = None
+
+        period = 1.0 / max(float(self.get_parameter('refresh_hz').value), 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(f'status_display starting in state={self._state}')
-        self._apply(self._state, force=True)
+        self._sync_from_disk(force=True)
+        self._compose_pending(self._state)
 
     def _on_state_msg(self, msg: String) -> None:
         new_state = (msg.data or '').strip().lower()
-        if not new_state:
+        if not new_state or new_state == self._state:
+            return
+        # Don't let a late setup message undo post-provision states.
+        if new_state == 'setup' and self._state in ('joining', 'need_map', 'ready', 'nav', 'mapping'):
             return
         self._state = new_state
-        self._apply(new_state, force=True)
+        self._compose_pending(new_state)
+
+    def _on_joint_states(self, _msg: JointState) -> None:
+        self._last_js_ns = self.get_clock().now().nanoseconds
+
+    def _set_robot_name(self, name: str) -> bool:
+        name = (name or '').strip()
+        if not name or name == self._param_str('robot_name'):
+            return False
+        self.set_parameters([Parameter('robot_name', Parameter.Type.STRING, name)])
+        return True
+
+    def _set_ap(self, ssid: str, password: str) -> bool:
+        ssid = (ssid or '').strip()
+        password = (password or '').strip() or 'navprosetup'
+        changed = False
+        if ssid and ssid != self._param_str('ap_ssid'):
+            self.set_parameters([Parameter('ap_ssid', Parameter.Type.STRING, ssid)])
+            changed = True
+        if password != self._param_str('ap_password'):
+            self.set_parameters([Parameter('ap_password', Parameter.Type.STRING, password)])
+            changed = True
+        return changed
+
+    def _sync_from_disk(self, force: bool = False) -> bool:
+        """React to fleet.yaml / display hint changes (post-portal)."""
+        changed = False
+
+        # 1) Provisioned config is authoritative over setup hotspot hint.
+        try:
+            fleet_mtime = FLEET_PATH.stat().st_mtime if FLEET_PATH.is_file() else None
+        except OSError:
+            fleet_mtime = None
+        if force or fleet_mtime != self._fleet_mtime:
+            self._fleet_mtime = fleet_mtime
+            if fleet_mtime is not None:
+                cfg = load_fleet_config(FLEET_PATH)
+                if cfg is not None:
+                    if self._set_robot_name(cfg.name):
+                        changed = True
+                    # Leave setup as soon as we are provisioned.
+                    target = 'need_map'
+                    if cfg.nav_mode in ('NAV_READY', 'NAV_ACTIVE'):
+                        target = 'ready' if cfg.nav_mode == 'NAV_READY' else 'nav'
+                    elif cfg.nav_mode == 'MAPPING':
+                        target = 'mapping'
+                    if self._state in ('boot', 'setup', 'joining', 'error') and self._state != target:
+                        self.get_logger().info(
+                            f'fleet.yaml present — display {self._state} → {target}'
+                        )
+                        self._state = target
+                        changed = True
+                    elif self._state == 'setup':
+                        self._state = target
+                        changed = True
+
+        # 2) Hint file (joining/need_map/error during / after portal).
+        try:
+            hint_mtime = HINT_PATH.stat().st_mtime if HINT_PATH.is_file() else None
+        except OSError:
+            hint_mtime = None
+        if force or hint_mtime != self._hint_mtime:
+            self._hint_mtime = hint_mtime
+            if hint_mtime is None:
+                return changed
+            try:
+                lines = HINT_PATH.read_text(encoding='utf-8').splitlines()
+            except OSError:
+                return changed
+            if not lines:
+                return changed
+            hint_state = (lines[0] if lines else '').strip().lower()
+            line2 = (lines[1] if len(lines) > 1 else '').strip()
+            line3 = (lines[2] if len(lines) > 2 else '').strip()
+
+            # Ignore stale setup hint once provisioned.
+            if hint_state == 'setup' and FLEET_PATH.is_file():
+                return changed
+
+            if hint_state == 'setup':
+                if self._set_ap(line2, line3 or 'navprosetup'):
+                    changed = True
+                if self._state in ('boot',) or (self._state != 'setup' and not FLEET_PATH.is_file()):
+                    if hint_state != self._state:
+                        self._state = 'setup'
+                        changed = True
+            else:
+                if line2 and self._set_robot_name(line2):
+                    changed = True
+                if hint_state in STATE_FX and hint_state != self._state:
+                    # Don't regress ready/nav/mapping back to joining unless forced.
+                    regress = {'ready', 'nav', 'mapping'}
+                    if self._state in regress and hint_state in ('joining', 'setup'):
+                        pass
+                    else:
+                        self.get_logger().info(f'display hint → {hint_state}')
+                        self._state = hint_state
+                        changed = True
+        return changed
+
+    def _param_str(self, name: str) -> str:
+        raw = str(self.get_parameter(name).value).strip()
+        return '' if raw in ('', '_') else raw
 
     def _compose_text(self, state: str, default_text: str) -> str:
-        name = str(self.get_parameter('robot_name').value).strip()
-        ap = str(self.get_parameter('ap_ssid').value).strip()
-        pw = str(self.get_parameter('ap_password').value).strip() or 'navprosetup'
+        name = self._param_str('robot_name')
+        ap = self._param_str('ap_ssid')
+        pw = self._param_str('ap_password') or 'navprosetup'
         if state == 'setup':
             if ap:
                 return f'{ap}  pw:{pw}  http://10.42.0.1/'
             return f'Setup WiFi  pw:{pw}  http://10.42.0.1/'
-        if state in ('ready', 'nav', 'need_map') and name:
-            return f'{name} · {default_text}'
+        if state == 'joining':
+            return f'{name} - Joining fleet...' if name else 'Joining fleet...'
+        if state in ('ready', 'nav', 'need_map', 'mapping', 'error') and name:
+            return f'{name} - {default_text}'
         return default_text
 
-    def _apply(self, state: str, force: bool = False) -> None:
+    @staticmethod
+    def _oled_ascii(text: str) -> str:
+        """OLED fonts are usually ASCII-only; strip fancy punctuation."""
+        repl = {
+            '\u2014': '-',   # —
+            '\u2013': '-',   # –
+            '\u2026': '...',  # …
+            '\u00b7': '-',   # ·
+            '\u2022': '-',   # •
+            '\u2018': "'",
+            '\u2019': "'",
+            '\u201c': '"',
+            '\u201d': '"',
+            '\u00a0': ' ',
+        }
+        out = text
+        for src, dst in repl.items():
+            out = out.replace(src, dst)
+        return ''.join(ch if 32 <= ord(ch) <= 126 else '?' for ch in out)
+
+    def _compose_pending(self, state: str) -> None:
         text, led = STATE_FX.get(state, STATE_FX['boot'])
-        text = self._compose_text(state, text)
-        key = (text, led)
-        if not force and key == self._last_sent:
+        self._pending_text = self._oled_ascii(self._compose_text(state, text))[:192]
+        self._pending_led = led
+
+    def _esp_ready(self) -> bool:
+        text_subs = self._pub_text.get_subscription_count()
+        led_subs = self._pub_led.get_subscription_count()
+        has_sub = text_subs > 0 or led_subs > 0
+
+        alive = False
+        if self._last_js_ns is not None:
+            age_s = (self.get_clock().now().nanoseconds - self._last_js_ns) * 1e-9
+            timeout = float(self.get_parameter('esp_alive_timeout_sec').value)
+            alive = age_s <= timeout
+
+        ready = has_sub or alive
+        if ready and not self._esp_seen:
+            self._esp_seen = True
+            self.get_logger().info(
+                f'ESP ready (display_subs={text_subs} led_subs={led_subs} '
+                f'joint_states_alive={alive}) — pushing display/LED'
+            )
+        return ready
+
+    def _publish_if_needed(self, force: bool = False) -> None:
+        if self._pending_text is None or self._pending_led is None:
             return
-        self._last_sent = key
-        t = String()
-        t.data = text[:192]
-        self._pub_text.publish(t)
-        l = String()
-        l.data = led
-        self._pub_led.publish(l)
-        self.get_logger().info(f'display state={state} text={text!r} led={led!r}')
+        if not self._esp_ready():
+            if not self._waiting_logged:
+                self._waiting_logged = True
+                self.get_logger().info(
+                    'Waiting for ESP (/joint_states or display/led subscribers) '
+                    'before OLED/LED push…'
+                )
+            return
+
+        self._waiting_logged = False
+        text = self._pending_text
+        led = self._pending_led
+
+        if force or text != self._delivered_text:
+            msg = String()
+            msg.data = text
+            self._pub_text.publish(msg)
+            self._delivered_text = text
+            self.get_logger().info(f'OLED state={self._state} text={text!r}')
+
+        if force or led != self._delivered_led:
+            msg = String()
+            msg.data = led
+            self._pub_led.publish(msg)
+            self._delivered_led = led
+            self.get_logger().info(f'LED state={self._state} cmd={led!r}')
 
     def _tick(self) -> None:
-        # Re-publish so reconnecting ESP32 picks up current state.
-        self._apply(self._state, force=False)
-        if self._last_sent is None:
-            self._apply(self._state, force=True)
+        was_ready = self._esp_seen and (
+            self._delivered_text is not None or self._delivered_led is not None
+        )
+        ready = self._esp_ready()
+        force = False
+        if was_ready and not ready:
+            self._esp_seen = False
+            self._delivered_text = None
+            self._delivered_led = None
+            self.get_logger().warn('ESP lost — will re-push display/LED when back')
+        elif not was_ready and ready:
+            force = True
+
+        if self._sync_from_disk():
+            self._compose_pending(self._state)
+        self._publish_if_needed(force=force)
 
 
 def main(args: Optional[list[str]] = None) -> None:
@@ -102,7 +320,8 @@ def main(args: Optional[list[str]] = None) -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
