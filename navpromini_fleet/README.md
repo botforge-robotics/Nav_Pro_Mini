@@ -6,7 +6,7 @@ On-robot package for production boot → hotspot → register → hardware + hea
 
 | Piece | Role |
 |-------|------|
-| `provision_portal` | AP `NavPro-Setup-<MAC6>` + password **`navprosetup`** (fixed) + form at `http://10.42.0.1/` |
+| `provision_portal` | Modern setup UI at `http://10.42.0.1/` → Wi‑Fi dropdown → **status page** after submit (LED guide) |
 | `register_robot` | `POST /api/v1/robots/register` |
 | `heartbeat_node` | `POST /robots/:id/heartbeat` + `nav_mode` |
 | `status_display_node` | `/display_text` + `/led_command` → ESP32 |
@@ -89,3 +89,35 @@ nav_mode: HARDWARE
 | joining | Joining fleet… | cyan |
 | need_map | Need map | yellow |
 | ready / nav | Ready | green |
+
+## Devices shows “offline” but OLED looks fine
+
+OLED **Need map** only means no site map yet — that is expected after claim
+without a map. **Online** in the GUI comes only from heartbeats
+(`POST /api/v1/robots/:id/heartbeat` every ~2s → Redis `robots:online`).
+
+On the Pi:
+
+```bash
+# 1) Identity complete?
+sudo cat /etc/navpro/fleet.yaml
+# must have robot_id, server_ip, provisioning_token (same as server .env)
+
+# 2) Fleet agent running?
+systemctl status navpro-fleet --no-pager
+journalctl -u navpro-fleet -b --no-pager -n 80
+
+# 3) Can Pi reach the server?
+curl -sS -m 3 "http://$(python3 -c "import yaml;print(yaml.safe_load(open('/etc/navpro/fleet.yaml'))['server_ip'])")/api/v1/health" || true
+
+# 4) Restart fleet agent after Wi‑Fi is up
+sudo systemctl restart navpro-fleet
+```
+
+Deploy updated agent:
+
+```bash
+cd ~/NavProMini_ws && colcon build --packages-select navpromini_fleet && source install/setup.bash
+sudo bash src/navpromini_fleet/systemd/install_fleet_services.sh
+sudo systemctl restart navpro-fleet
+```
