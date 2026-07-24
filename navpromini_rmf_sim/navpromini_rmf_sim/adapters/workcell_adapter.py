@@ -84,13 +84,14 @@ class WorkcellAdapter(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        # Fleet latches requests (TRANSIENT_LOCAL); match so late starts still
-        # receive the active Loaditem / Dropoff request.
+        # free_fleet / navpro adapter often publishes requests as VOLATILE.
+        # TRANSIENT_LOCAL here caused "incompatible QoS" and silent drops →
+        # pickup never completes and the robot never leaves for delivery.
         req_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,
         )
         self._disp_state = self.create_publisher(
             DispenserState, 'dispenser_states', latched

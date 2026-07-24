@@ -1,0 +1,6 @@
+# NavPro Mini device symlinks (Phase A)
+# RPLidar USB serial
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rplidar", MODE="0660", GROUP="dialout"
+# Daly BMS FTDI USB–RS485 (adjust idVendor/idProduct if different dongle)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="battery_bms", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="battery_bms", MODE="0660", GROUP="dialout"

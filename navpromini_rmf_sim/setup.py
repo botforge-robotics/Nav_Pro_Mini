@@ -57,6 +57,7 @@ setup(
             'workcell_adapter = navpromini_rmf_sim.adapters.workcell_adapter:main',
             'path_to_nav2_bridge = '
             'navpromini_rmf_sim.adapters.fleet.path_to_nav2_bridge:main',
+            'sim_map_odom_tf = navpromini_rmf_sim.sim_map_odom_tf:main',
         ],
     },
 )

@@ -159,11 +159,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'start_workcells',
-            default_value='false',
+            default_value='true',
             description=(
-                'Start dispenser/ingestor adapter. Keep false when using the '
-                'two-terminal flow (rmf_web.launch.py starts workcells). '
-                'Doors come from Gazebo libdoor + door_supervisor only.'
+                'Start dispenser/ingestor adapter (required for delivery '
+                'pickup→dropoff). Set false only if TeleportDispenser plugins '
+                'already own /dispenser_* topics.'
             ),
         ),
         # Back-compat alias

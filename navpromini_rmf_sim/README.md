@@ -70,12 +70,12 @@ launch/include/adapters/
   fleet_adapter.launch.py  # bridge + rmf_demos EasyFullControl
 ```
 
-| Role         | Runtime                                                                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Door**     | Gazebo `libdoor` + `door_supervisor` (no Python node)                                                                                              |
-| **Lift**     | Gazebo `liblift` (lift **node**) + `lift_supervisor` (lift **adapter**) — [book](https://osrf.github.io/ros2multirobotbook/integration_lifts.html) |
-| **Workcell** | `workcell_adapter`                                                                                                                                 |
-| **Fleet**    | `path_to_nav2_bridge` + `rmf_demos_fleet_adapter`                                                                                                  |
+| Role | Runtime |
+| --- | --- |
+| **Door** | Gazebo `libdoor` + `door_supervisor` (no Python node) |
+| **Lift** | Gazebo `liblift` (lift **node**) + `lift_supervisor` (lift **adapter**) — [book](https://osrf.github.io/ros2multirobotbook/integration_lifts.html) |
+| **Workcell** | `workcell_adapter` |
+| **Fleet** | `path_to_nav2_bridge` + `rmf_demos_fleet_adapter` |
 
 ```bash
 ros2 run navpromini_rmf_sim door_adapter          # prints ownership note
@@ -95,10 +95,10 @@ source ~/NavProMini_ws/install/setup.bash
 ros2 launch navpromini_rmf_sim rmf_web.launch.py
 ```
 
-| URL                                     | Login             |
-| --------------------------------------- | ----------------- |
-| Dashboard **http://localhost:3000**     | `admin` / `admin` |
-| API docs **http://localhost:8000/docs** | —                 |
+| URL | Login |
+| --- | --- |
+| Dashboard **http://localhost:3000** | `admin` / `admin` |
+| API docs **http://localhost:8000/docs** | — |
 
 What it starts:
 
@@ -165,26 +165,26 @@ gz topic -i -t /robot1/scan    # should list a Publisher
 ros2 topic hz /robot1/scan
 ```
 
-| URL                                     | Login             |
-| --------------------------------------- | ----------------- |
-| Dashboard **http://localhost:5173**     | `admin` / `admin` |
-| API docs **http://localhost:8000/docs** | —                 |
+| URL | Login |
+| --- | --- |
+| Dashboard **http://localhost:5173** | `admin` / `admin` |
+| API docs **http://localhost:8000/docs** | — |
 
 `start_building_map:=false` avoids a second map server (sim already provides it).
 
 **Dashboard place names (exact):**
 
-| Role    | L1                        | L2                        |
-| ------- | ------------------------- | ------------------------- |
-| Pickup  | `pantry`                  | `pantry_L2`               |
+| Role | L1 | L2 |
+| --- | --- | --- |
+| Pickup | `pantry` | `pantry_L2` |
 | Dropoff | `Table1_L1` … `Table5_L1` | `Table1_L2` … `Table5_L2` |
 
 **Handlers** (must match nav-graph `pickup_dispenser` / `dropoff_ingestor`):
 
-| Place                     | Handler                        |
-| ------------------------- | ------------------------------ |
-| `pantry`                  | `pantry`                       |
-| `pantry_L2`               | `pantry_L2`                    |
+| Place | Handler |
+| --- | --- |
+| `pantry` | `pantry` |
+| `pantry_L2` | `pantry_L2` |
 | `TableN_L1` / `TableN_L2` | same as place (`Table3_L2`, …) |
 
 Do **not** use office-demo names like `coke_dispenser` / `coke_ingestor` — that
@@ -248,12 +248,14 @@ source ~/rmf_ws/install/setup.bash
 ros2 launch navpromini_rmf_sim rmf_sim.launch.py start_nav:=true
 ```
 
-Then in another terminal:
+Then in another terminal (one command — self-heals nginx / trajectory / robots):
 
 ```bash
 cd /path/to/navpro-fleet-server
-./scripts/run_navpromini_collab.sh start
+./scripts/sim/up.sh
 ```
+
+Open `http://<LAN_IP>/` and hard-refresh once. (`./scripts/gui_up.sh` still works as a shim.)
 
 Or Gazebo only (no building map / cafe infra):
 

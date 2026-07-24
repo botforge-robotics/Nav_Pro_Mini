@@ -141,7 +141,8 @@ controller_server:
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
       # Keep light yaw bias only — high scale caused late snap near WP.
-      RotateToGoal.scale: 8.0
+      # Near-zero: RMF goals are XY-first; spin hunting after door was thrash.
+      RotateToGoal.scale: 1.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.x_only_threshold: 0.05

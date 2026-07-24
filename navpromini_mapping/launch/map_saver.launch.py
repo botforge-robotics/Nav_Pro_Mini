@@ -11,12 +11,15 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, LogInfo, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 
-MAPS_DIR = os.path.join(
-    os.path.expanduser('~'),
-    'NavProMini_ws',
-    'src',
-    'navpromini_mapping',
-    'maps',
+MAPS_DIR = os.environ.get(
+    'NAVPRO_MAPS_DIR',
+    os.path.join(
+        os.path.expanduser('~'),
+        'NavProMini_ws',
+        'src',
+        'navpromini_mapping',
+        'maps',
+    ),
 )
 
 

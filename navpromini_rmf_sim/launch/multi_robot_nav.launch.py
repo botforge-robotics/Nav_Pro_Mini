@@ -98,9 +98,12 @@ def _setup(context, *args, **kwargs):
     ]
 
     # Point namespaced Nav2 nodes at the occupancy grid (not RMF /map).
+    # Use global /tf + /tf_static so map→odom from sim_map_odom_tf is seen.
     map_remaps = [
         ('map', nav2_map_topic),
         ('/map', nav2_map_topic),
+        ('tf', '/tf'),
+        ('tf_static', '/tf_static'),
     ]
 
     # Lifecycle manager waits (via costmap initial_transform_timeout) for
@@ -113,6 +116,43 @@ def _setup(context, *args, **kwargs):
         'attempt_respawn_reconnection': True,
         'node_names': nav_nodes,
     }
+
+    # Sim: identity map→robotN/odom on /tf_static (AMCL does not broadcast).
+    # Must be static — a dynamic /tf publisher races Gazebo/ff_tf stamps and
+    # triggers TF_OLD_DATA (e.g. frame robotN/odom at time 14.25).
+    if use_sim:
+        # Un-namespaced map→odom for free_fleet / tools.
+        actions.append(
+            Node(
+                package='tf2_ros',
+                executable='static_transform_publisher',
+                name='map_odom_static',
+                output='screen',
+                arguments=[
+                    '--x', '0', '--y', '0', '--z', '0',
+                    '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+                    '--frame-id', 'map',
+                    '--child-frame-id', 'odom',
+                ],
+                parameters=[{'use_sim_time': True}],
+            )
+        )
+        for namespace in robots:
+            actions.append(
+                Node(
+                    package='tf2_ros',
+                    executable='static_transform_publisher',
+                    name=f'{namespace}_map_odom_static',
+                    output='screen',
+                    arguments=[
+                        '--x', '0', '--y', '0', '--z', '0',
+                        '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+                        '--frame-id', 'map',
+                        '--child-frame-id', f'{namespace}/odom',
+                    ],
+                    parameters=[{'use_sim_time': True}],
+                )
+            )
 
     for namespace in robots:
         init_xy_yaw = spawn_by_name.get(namespace)

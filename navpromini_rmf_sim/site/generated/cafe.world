@@ -994,7 +994,6 @@
         <rmf_charger name="parking2" x="0.5500147614833607" y="-12.500335488258198" z="0.0" />
       </component>
     </plugin>
-  
     <!-- Opaque floors + ground (generate_site_assets); lift shaft cut out so cabin floor is flush. -->
     <model name="floor_L1">
       <static>true</static>

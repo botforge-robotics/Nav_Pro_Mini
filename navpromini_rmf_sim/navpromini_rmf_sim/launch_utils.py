@@ -94,9 +94,12 @@ def write_namespaced_nav2_params(
     amcl['odom_frame_id'] = odom_frame
     amcl['global_frame_id'] = 'map'
     amcl['scan_topic'] = 'scan'
-    # Broadcast map→odom so Nav2 works without external ff_tf. Frame ids are
-    # namespaced (robotN/odom) so two AMCL nodes do not fight on the same edge.
-    amcl['tf_broadcast'] = True
+    # Sim (Gazebo): cafe odom is world/map-aligned and fleet-server
+    # navpromini_ff_tf publishes identity map→odom as ground truth. If AMCL
+    # also broadcasts map→odom, the two fight after door crossings (AMCL
+    # jumps) and Nav2 aborts every goal. Keep AMCL for /amcl_pose only in sim.
+    # Real robot (use_sim_time=false): AMCL must own map→odom.
+    amcl['tf_broadcast'] = not bool(use_sim_time)
     if initial_pose is not None:
         x, y, yaw = initial_pose
         amcl['set_initial_pose'] = True

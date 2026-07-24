@@ -1,0 +1,19 @@
+[Unit]
+Description=NavPro Mini first-boot Wi-Fi provisioning portal
+After=NetworkManager.service
+Wants=NetworkManager.service
+ConditionPathExists=!/etc/navpro/fleet.yaml
+
+[Service]
+Type=simple
+User=root
+Environment=NAVPRO_USER=REPLACE_USER
+Environment=NAVPRO_WS=REPLACE_WS
+Environment=ROS_LOCALHOST_ONLY=1
+ExecStart=/bin/bash /opt/navpro/scripts/start_provision.sh
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
