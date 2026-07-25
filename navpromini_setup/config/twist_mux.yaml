@@ -1,0 +1,19 @@
+# twist_mux: teleop + Nav2 only (no fleet / zenoh).
+
+twist_mux:
+  ros__parameters:
+    use_stamped: false
+    topics:
+      navigation:
+        topic: cmd_vel_nav
+        timeout: 0.5
+        priority: 10
+      teleop:
+        topic: cmd_vel_teleop
+        timeout: 0.5
+        priority: 50
+    locks:
+      estop:
+        topic: navpro/cmd_vel_lock
+        timeout: 0.0
+        priority: 100

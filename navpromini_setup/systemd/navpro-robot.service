@@ -1,0 +1,20 @@
+[Unit]
+Description=NavPro Mini hardware bringup (lidar, odom, micro-ROS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=NAVPRO_USER=REPLACE_USER
+Environment=NAVPRO_WS=REPLACE_WS
+Environment=ROS_LOCALHOST_ONLY=1
+Environment=ROS_DOMAIN_ID=0
+ExecStart=/bin/bash /opt/navpro/scripts/start_robot.sh
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
