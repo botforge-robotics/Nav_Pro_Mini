@@ -53,7 +53,7 @@ ARGUMENTS = [
     # Mission Planner app always adds: map:=<mapName>.yaml
     DeclareLaunchArgument(
         'map',
-        default_value='warehouse.yaml',
+        default_value='cafe.yaml',
         description='Map yaml filename only (e.g. office.yaml) from Mission Planner',
     ),
 ]

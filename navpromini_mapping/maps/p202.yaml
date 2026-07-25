@@ -1,4 +1,4 @@
-image: map.pgm
+image: p202.pgm
 mode: trinary
 resolution: 0.05
 origin:
