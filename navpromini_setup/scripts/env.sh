@@ -7,7 +7,8 @@ USER_NAME="${NAVPRO_USER:-${SUDO_USER:-$(id -un)}}"
 USER_HOME="$(getent passwd "${USER_NAME}" | cut -d: -f6 || echo /home/${USER_NAME})"
 WS="${NAVPRO_WS:-${USER_HOME}/NavProMini_ws}"
 
-export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
+# Default 0 for Mission Planner / rosbridge over Wi-Fi. Set to 1 only for isolated local-only use.
+export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 set +u

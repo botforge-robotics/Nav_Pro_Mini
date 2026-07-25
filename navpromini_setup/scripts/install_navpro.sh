@@ -63,7 +63,7 @@ if ! grep -q "${MARKER}" "${BASHRC}" 2>/dev/null; then
   cat >> "${BASHRC}" <<EOF
 
 ${MARKER}
-export ROS_LOCALHOST_ONLY=1
+export ROS_LOCALHOST_ONLY=0
 export ROS_DOMAIN_ID=\${ROS_DOMAIN_ID:-0}
 source /opt/ros/jazzy/setup.bash 2>/dev/null || true
 if [[ -f ${WS}/install/setup.bash ]]; then source ${WS}/install/setup.bash; fi
@@ -78,7 +78,7 @@ fi
 nmcli device set wlan0 managed yes 2>/dev/null || true
 
 # --- helper scripts for systemd ---
-for f in env.sh start_robot.sh start_provision.sh start_display.sh; do
+for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission_planner.sh; do
   if [[ -f "${PKG_ROOT}/scripts/${f}" ]]; then
     install -m 0755 "${PKG_ROOT}/scripts/${f}" "/opt/navpro/scripts/${f}"
   fi
@@ -115,7 +115,7 @@ rm -f /etc/navpro/fleet.yaml /etc/navpro/fleet.yaml.tmp 2>/dev/null || true
 
 # --- systemd services ---
 UNIT_DIR="${PKG_ROOT}/systemd"
-for unit in navpro-robot.service navpro-provision.service navpro-display.service; do
+for unit in navpro-robot.service navpro-provision.service navpro-display.service navpro-mission-planner.service; do
   src="${UNIT_DIR}/${unit}"
   dst="/etc/systemd/system/${unit}"
   sed -e "s|REPLACE_USER|${USER_NAME}|g" -e "s|REPLACE_WS|${WS}|g" "${src}" > "${dst}"
@@ -123,21 +123,23 @@ for unit in navpro-robot.service navpro-provision.service navpro-display.service
 done
 
 systemctl daemon-reload
-systemctl enable navpro-display.service navpro-robot.service navpro-provision.service
-systemctl restart navpro-display.service navpro-robot.service navpro-provision.service || \
-  systemctl start navpro-display.service navpro-robot.service navpro-provision.service
+systemctl enable navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service
+systemctl restart navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service || \
+  systemctl start navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service
 
 echo ""
 echo "==> Install complete"
 echo "    Services:"
-echo "      navpro-display   — OLED / LED status"
-echo "      navpro-robot     — lidar, odom, micro-ROS hardware"
-echo "      navpro-provision — Wi‑Fi setup hotspot (when needed)"
+echo "      navpro-display          — OLED / LED status"
+echo "      navpro-robot            — lidar, odom, micro-ROS hardware"
+echo "      navpro-provision        — Wi‑Fi setup hotspot (when needed)"
+echo "      navpro-mission-planner  — Botforge rosbridge (:9090) + mission services"
 echo ""
 echo "    If no known Wi‑Fi is nearby, connect your phone to:"
 echo "      SSID  NavPro-Setup-<last6 of MAC>"
 echo "      Pass  navprosetup"
 echo "      Open  http://10.42.0.1/  → set Wi‑Fi + robot name"
 echo ""
-echo "    Check:  systemctl status navpro-display navpro-robot navpro-provision"
+echo "    Check:  systemctl status navpro-display navpro-robot navpro-provision navpro-mission-planner"
 echo "    Reboot recommended once after first install."
+echo "    Web UI (PC): docker compose up in nav2_mission_planner react-web → http://localhost:8080"

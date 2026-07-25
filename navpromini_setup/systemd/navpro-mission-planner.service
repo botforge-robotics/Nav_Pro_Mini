@@ -1,17 +1,17 @@
 [Unit]
-Description=NavPro Mini hardware bringup (lidar, odom, micro-ROS)
-After=network-online.target
+Description=NavPro Mini Mission Planner (Botforge rosbridge + launch/map services)
+After=network-online.target navpro-robot.service
 Wants=network-online.target
+Requires=navpro-robot.service
 
 [Service]
 Type=simple
 User=root
 Environment=NAVPRO_USER=REPLACE_USER
 Environment=NAVPRO_WS=REPLACE_WS
-# 0 required so PC Mission Planner web UI / rosbridge LAN clients can see the graph
 Environment=ROS_LOCALHOST_ONLY=0
 Environment=ROS_DOMAIN_ID=0
-ExecStart=/bin/bash /opt/navpro/scripts/start_robot.sh
+ExecStart=/bin/bash /opt/navpro/scripts/start_mission_planner.sh
 Restart=on-failure
 RestartSec=5
 KillMode=control-group

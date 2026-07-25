@@ -20,6 +20,35 @@ That single script sets up:
 | `navpro-provision` | Wi‑Fi setup hotspot (only when no known Wi‑Fi is nearby) |
 | `navpro-display` | OLED / LED status |
 | `navpro-robot` | Hardware ROS (lidar, odom, micro-ROS) |
+| `navpro-mission-planner` | Botforge rosbridge (`:9090`) + Mission Planner launch/map services |
+
+`ROS_LOCALHOST_ONLY` defaults to **0** so the PC web UI can reach rosbridge over Wi‑Fi.
+
+## Mission Planner (web)
+
+On a PC (Docker only — no ROS install required):
+
+```bash
+# from nav2_mission_planner react-web branch
+docker compose up --build
+# open http://localhost:8080 → connect to <robot-ip>:9090
+# Apply NavProMini preset in Setup / Settings
+```
+
+On the robot workspace, ensure these packages are built:
+
+- `nav2_mission_planner` + `nav2_mission_planner_interfaces`
+- `rosbridge_suite` (Botforge fork)
+- `navpromini_mission_planner` (mapping/navigation launch wrappers)
+
+```bash
+cd ~/NavProMini_ws
+sudo apt remove ros-jazzy-rosbridge* ros-jazzy-rosapi* || true
+rosdep install --from-paths src -i -y
+colcon build
+source install/setup.bash
+# or: systemctl start navpro-mission-planner
+```
 
 ## Wi‑Fi setup
 
