@@ -32,6 +32,7 @@ setup(
             'register_robot = navpromini_fleet.register_robot:main',
             'fleet_teleop_bridge = navpromini_fleet.fleet_teleop_bridge:main',
             'mode_manager = navpromini_fleet.mode_manager:main',
+            'nav_goal_relay = navpromini_fleet.nav_goal_relay:main',
             'upload_map = navpromini_fleet.upload_map:main',
             'map_claim = navpromini_fleet.map_claim:main',
         ],

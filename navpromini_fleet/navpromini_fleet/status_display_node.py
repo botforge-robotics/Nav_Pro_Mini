@@ -84,22 +84,41 @@ class StatusDisplayNode(Node):
         self._waiting_logged = False
         self._hint_mtime: Optional[float] = None
         self._fleet_mtime: Optional[float] = None
+        # micro-ROS is BEST_EFFORT: burst + periodic LED push so chase/blink
+        # actually stop when mapping ends (one-shot drops leave ESP stuck).
+        self._burst_left = 0
+        self._ticks_since_led = 0
+        self._led_repost_every = max(1, int(round(2.0 / max(float(self.get_parameter('refresh_hz').value), 0.2))))
 
         period = 1.0 / max(float(self.get_parameter('refresh_hz').value), 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(f'status_display starting in state={self._state}')
         self._sync_from_disk(force=True)
         self._compose_pending(self._state)
+        self._burst_left = 6
+
+    def _apply_state(self, new_state: str) -> None:
+        """Set state and force ESP re-push (OLED + LED)."""
+        if new_state == self._state and self._pending_led is not None:
+            return
+        self._state = new_state
+        self._delivered_text = None
+        self._delivered_led = None
+        self._burst_left = 8
+        self._ticks_since_led = 0
+        self._compose_pending(new_state)
 
     def _on_state_msg(self, msg: String) -> None:
         new_state = (msg.data or '').strip().lower()
-        if not new_state or new_state == self._state:
+        if not new_state:
             return
         # Don't let a late setup message undo post-provision states.
         if new_state == 'setup' and self._state in ('joining', 'need_map', 'ready', 'nav', 'mapping'):
             return
-        self._state = new_state
-        self._compose_pending(new_state)
+        if new_state == self._state:
+            return
+        self.get_logger().info(f'display_state topic → {new_state}')
+        self._apply_state(new_state)
 
     def _on_joint_states(self, _msg: JointState) -> None:
         self._last_js_ns = self.get_clock().now().nanoseconds
@@ -154,6 +173,17 @@ class StatusDisplayNode(Node):
                     elif self._state == 'setup':
                         self._state = target
                         changed = True
+                    # Leave mapping when fleet.yaml says HARDWARE (topic may have been missed).
+                    elif cfg.nav_mode == 'HARDWARE' and self._state == 'mapping':
+                        self.get_logger().info('fleet.yaml HARDWARE — display mapping → need_map')
+                        self._state = 'need_map'
+                        changed = True
+                    elif cfg.nav_mode in ('NAV_READY', 'NAV_ACTIVE') and self._state == 'mapping':
+                        self.get_logger().info(
+                            f'fleet.yaml {cfg.nav_mode} — display mapping → {target}'
+                        )
+                        self._state = target
+                        changed = True
 
         # 2) Hint file (joining/need_map/error during / after portal).
         try:
@@ -198,6 +228,13 @@ class StatusDisplayNode(Node):
                         self._state = hint_state
                         changed = True
         return changed
+
+    def _note_state_composed(self) -> None:
+        """After disk sync mutated _state, clear delivered so ESP gets a burst."""
+        self._delivered_text = None
+        self._delivered_led = None
+        self._burst_left = max(self._burst_left, 8)
+        self._ticks_since_led = 0
 
     def _param_str(self, name: str) -> str:
         raw = str(self.get_parameter(name).value).strip()
@@ -277,20 +314,32 @@ class StatusDisplayNode(Node):
         self._waiting_logged = False
         text = self._pending_text
         led = self._pending_led
+        burst = self._burst_left > 0
+        self._ticks_since_led += 1
+        repost_led = self._ticks_since_led >= self._led_repost_every
 
-        if force or text != self._delivered_text:
+        if force or burst or text != self._delivered_text:
             msg = String()
             msg.data = text
             self._pub_text.publish(msg)
+            prev_text = self._delivered_text
             self._delivered_text = text
-            self.get_logger().info(f'OLED state={self._state} text={text!r}')
+            if force or text != prev_text or self._burst_left >= 7:
+                self.get_logger().info(f'OLED state={self._state} text={text!r}')
 
-        if force or led != self._delivered_led:
+        # Always re-push LED on burst / periodic interval — chase must be cancelled.
+        if force or burst or repost_led or led != self._delivered_led:
             msg = String()
             msg.data = led
             self._pub_led.publish(msg)
+            prev = self._delivered_led
             self._delivered_led = led
-            self.get_logger().info(f'LED state={self._state} cmd={led!r}')
+            self._ticks_since_led = 0
+            if force or led != prev or self._burst_left >= 7:
+                self.get_logger().info(f'LED state={self._state} cmd={led!r}')
+
+        if self._burst_left > 0:
+            self._burst_left -= 1
 
     def _tick(self) -> None:
         was_ready = self._esp_seen and (
@@ -307,6 +356,7 @@ class StatusDisplayNode(Node):
             force = True
 
         if self._sync_from_disk():
+            self._note_state_composed()
             self._compose_pending(self._state)
         self._publish_if_needed(force=force)
 

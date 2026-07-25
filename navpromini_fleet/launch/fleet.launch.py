@@ -17,7 +17,11 @@ def generate_launch_description():
             executable='heartbeat_node',
             name='navpro_heartbeat',
             output='screen',
-            parameters=[{'config_path': config_path, 'period_s': 2.0}],
+            parameters=[{
+                'config_path': config_path,
+                'maps_dir': maps_dir,
+                'period_s': 2.0,
+            }],
         ),
         Node(
             package='navpromini_fleet',
@@ -28,5 +32,12 @@ def generate_launch_description():
                 'config_path': config_path,
                 'maps_dir': maps_dir,
             }],
+        ),
+        # RMF goals over zenoh topics (PoseStamped) → local Nav2 action.
+        Node(
+            package='navpromini_fleet',
+            executable='nav_goal_relay',
+            name='navpro_nav_goal_relay',
+            output='screen',
         ),
     ])

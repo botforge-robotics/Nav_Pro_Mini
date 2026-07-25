@@ -27,12 +27,24 @@ def generate_launch_description():
                 'start_nav': LaunchConfiguration('start_nav'),
             }.items(),
         ),
+        # Zenoh RELIABLE fleet_teleop → BEST_EFFORT fleet_drive for twist_mux.
+        Node(
+            package='navpromini_fleet',
+            executable='fleet_teleop_bridge',
+            name='navpro_fleet_teleop_bridge',
+            output='screen',
+            parameters=[{
+                'input_topic': 'fleet_teleop',
+                'output_topic': 'fleet_drive',
+            }],
+        ),
         Node(
             package='twist_mux',
             executable='twist_mux',
             name='twist_mux',
             output='screen',
             parameters=[mux_yaml],
-            # Publishes to cmd_vel → ESP32 micro-ROS subscription
+            # Jazzy twist_mux default output is cmd_vel_out; ESP32 expects cmd_vel.
+            remappings=[('cmd_vel_out', 'cmd_vel')],
         ),
     ])

@@ -1,7 +1,7 @@
 # twist_mux: exactly one cmd source reaches ESP32 /cmd_vel.
-# mapping-bridge publishes geometry_msgs/Twist on fleet_teleop (zenoh → local).
-# Manual teleop must publish to cmd_vel_teleop (not cmd_vel).
-# Nav2 (later) publishes to cmd_vel_nav.
+# Zenoh delivers RELIABLE Twist on fleet_teleop → fleet_teleop_bridge →
+# BEST_EFFORT fleet_drive (this file). Manual teleop → cmd_vel_teleop.
+# Nav2 (later) → cmd_vel_nav.
 
 twist_mux:
   ros__parameters:
@@ -16,7 +16,7 @@ twist_mux:
         timeout: 0.5
         priority: 50
       fleet_teleop:
-        topic: fleet_teleop
+        topic: fleet_drive
         timeout: 0.5
         priority: 80
     locks:
