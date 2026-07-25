@@ -18,7 +18,27 @@ NAME="${NAVPRO_ROBOT_NAME:-}"
 CFG="${NAVPRO_ROBOT_YAML:-/etc/navpro/robot.yaml}"
 ALT_CFG="${NAVPRO_ALT_ROBOT_YAML:-/etc/navpro/fleet.yaml}"
 HINT=/run/navpro/display_state
+CONN_AP="navpro-setup-ap"
 
+wifi_site_online() {
+  # Site Wi‑Fi connected (not the setup AP) with an address.
+  local line device dtype state conn
+  while IFS= read -r line; do
+    IFS=':' read -r device dtype state conn <<<"${line}"
+    [[ "${dtype}" == "wifi" ]] || continue
+    [[ "${state}" == "connected" ]] || continue
+    [[ -n "${conn}" && "${conn}" != "${CONN_AP}" ]] || continue
+    hostname -I 2>/dev/null | grep -q '[0-9]' && return 0
+  done < <(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null || true)
+  return 1
+}
+
+setup_ap_up() {
+  nmcli -t -f NAME,STATE connection show --active 2>/dev/null \
+    | grep -q "^${CONN_AP}:activated$"
+}
+
+# --- decide initial OLED state from reality, not stale hints ---
 if [[ -f "${CFG}" ]] || [[ -f "${ALT_CFG}" ]]; then
   USE_CFG="${CFG}"
   [[ -f "${CFG}" ]] || USE_CFG="${ALT_CFG}"
@@ -34,22 +54,49 @@ robot=d.get("robot") if isinstance(d.get("robot"), dict) else {}
 print(d.get("name") or robot.get("name") or "")
 PY
 )"
+elif setup_ap_up; then
+  # Real hotspot is on — show setup credentials from hint if present.
+  STATE="${STATE:-setup}"
+  if [[ -f "${HINT}" ]]; then
+    HINT_STATE="$(head -n1 "${HINT}" | tr -d '\r')"
+    HINT_L2="$(sed -n '2p' "${HINT}" | tr -d '\r')"
+    HINT_L3="$(sed -n '3p' "${HINT}" | tr -d '\r')"
+    STATE="${HINT_STATE:-setup}"
+    AP_SSID="${HINT_L2:-${AP_SSID}}"
+    AP_PASSWORD="${HINT_L3:-${AP_PASSWORD:-navprosetup}}"
+  fi
+elif wifi_site_online; then
+  # Already on Wi‑Fi — never show fake setup mode.
+  STATE="${STATE:-ready}"
+  if [[ "${STATE}" == "setup" ]]; then
+    STATE=ready
+  fi
+  if [[ -f "${HINT}" ]]; then
+    HINT_STATE="$(head -n1 "${HINT}" | tr -d '\r')"
+    HINT_L2="$(sed -n '2p' "${HINT}" | tr -d '\r')"
+    if [[ "${HINT_STATE}" != "setup" ]]; then
+      STATE="${HINT_STATE:-ready}"
+      NAME="${HINT_L2:-${NAME}}"
+    fi
+  fi
+  # Clear stale setup hint so the node does not flip back.
+  mkdir -p /run/navpro
+  printf 'ready\n%s\n\n' "${NAME}" > /run/navpro/display_state
 elif [[ -f "${HINT}" ]]; then
   HINT_STATE="$(head -n1 "${HINT}" | tr -d '\r')"
   HINT_L2="$(sed -n '2p' "${HINT}" | tr -d '\r')"
   HINT_L3="$(sed -n '3p' "${HINT}" | tr -d '\r')"
-  STATE="${STATE:-${HINT_STATE:-setup}}"
-  case "${STATE}" in
-    setup)
-      AP_SSID="${HINT_L2:-${AP_SSID}}"
-      AP_PASSWORD="${HINT_L3:-${AP_PASSWORD:-navprosetup}}"
-      ;;
-    *)
-      NAME="${HINT_L2:-${NAME}}"
-      ;;
-  esac
+  # Stale "setup" hint with no AP → treat as boot/ready, not setup.
+  if [[ "${HINT_STATE}" == "setup" ]]; then
+    STATE="${STATE:-boot}"
+  else
+    STATE="${STATE:-${HINT_STATE:-boot}}"
+    NAME="${HINT_L2:-${NAME}}"
+    AP_SSID="${HINT_L2:-${AP_SSID}}"
+    AP_PASSWORD="${HINT_L3:-${AP_PASSWORD:-navprosetup}}"
+  fi
 else
-  STATE="${STATE:-setup}"
+  STATE="${STATE:-boot}"
 fi
 
 export NAVPRO_DISPLAY_STATE="${STATE}"

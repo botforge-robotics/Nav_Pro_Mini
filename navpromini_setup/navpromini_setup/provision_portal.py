@@ -366,21 +366,53 @@ def _parse_nm_colon_line(line: str) -> list[str]:
     return parts
 
 
+def setup_ap_active() -> bool:
+    """True only when the NavPro setup hotspot connection is actually up."""
+    r = _nmcli('-t', '-f', 'NAME,DEVICE,STATE', 'connection', 'show', '--active')
+    for line in (r.stdout or '').splitlines():
+        parts = line.split(':')
+        if len(parts) < 3:
+            continue
+        name, _device, state = parts[0], parts[1], parts[2]
+        if name == CONN_AP and state.lower() in ('activated', 'activating'):
+            return True
+    return False
+
+
 def wifi_already_online() -> bool:
-    """True if wlan has a non-empty IPv4 and is not the setup AP."""
+    """True if any Wi‑Fi iface is connected to a non-setup network with an IP."""
     r = _nmcli('-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status')
     for line in (r.stdout or '').splitlines():
         parts = line.split(':')
         if len(parts) < 4:
             continue
-        device, dtype, state, conn = parts[0], parts[1], parts[2], parts[3]
-        if dtype != 'wifi' or device != AP_IFACE:
+        _device, dtype, state, conn = parts[0], parts[1], parts[2], parts[3]
+        if dtype != 'wifi':
             continue
-        if state == 'connected' and conn and conn != CONN_AP:
-            ip = _run(['hostname', '-I'])
-            if ip.returncode == 0 and ip.stdout.strip():
-                return True
+        if state != 'connected' or not conn or conn == CONN_AP:
+            continue
+        if conn.startswith('NavPro-Setup-'):
+            continue
+        ip = _run(['hostname', '-I'])
+        if ip.returncode == 0 and ip.stdout.strip():
+            return True
     return False
+
+
+def mark_display_ready() -> None:
+    """Leave OLED/LED setup mode when Wi‑Fi is already up (no hotspot)."""
+    name = ''
+    try:
+        from navpromini_setup.robot_config import load_robot_config
+        cfg = load_robot_config()
+        if cfg is not None:
+            name = cfg.name or ''
+    except Exception:  # noqa: BLE001
+        pass
+    write_display_hint('ready', name)
+    # Drop stale setup AP profile so it cannot confuse state later.
+    _nmcli('connection', 'down', CONN_AP)
+    _nmcli('connection', 'delete', CONN_AP)
 
 
 def list_saved_wifi() -> list[tuple[str, str]]:
@@ -394,12 +426,14 @@ def list_saved_wifi() -> list[tuple[str, str]]:
         name, ctype = parts[0], parts[1]
         if ctype != '802-11-wireless' or name == CONN_AP:
             continue
-        ssid_r = _nmcli('-g', '802-11-wireless.ssid', 'connection', 'show', name)
+        ssid_r = _nmcli('-g', '802-11-wireless.ssid',
+                        'connection', 'show', name)
         ssid = (ssid_r.stdout or '').strip()
         if not ssid or ssid.startswith('NavPro-Setup-'):
             continue
         # Skip AP-mode profiles
-        mode_r = _nmcli('-g', '802-11-wireless.mode', 'connection', 'show', name)
+        mode_r = _nmcli('-g', '802-11-wireless.mode',
+                        'connection', 'show', name)
         if (mode_r.stdout or '').strip() == 'ap':
             continue
         out.append((name, ssid))
@@ -408,12 +442,14 @@ def list_saved_wifi() -> list[tuple[str, str]]:
 
 def scan_wifi_networks(rescan: bool = True) -> list[tuple[str, int]]:
     """Return [(ssid, signal%), ...] sorted by signal, unique SSIDs."""
-    args = ['-t', '-f', 'SSID,SIGNAL', 'device', 'wifi', 'list', 'ifname', AP_IFACE]
+    args = ['-t', '-f', 'SSID,SIGNAL', 'device',
+            'wifi', 'list', 'ifname', AP_IFACE]
     if rescan:
         args.extend(['--rescan', 'yes'])
     r = _nmcli(*args)
     if r.returncode != 0:
-        r = _nmcli('-t', '-f', 'SSID,SIGNAL', 'device', 'wifi', 'list', 'ifname', AP_IFACE)
+        r = _nmcli('-t', '-f', 'SSID,SIGNAL', 'device',
+                   'wifi', 'list', 'ifname', AP_IFACE)
     seen: dict[str, int] = {}
     for line in (r.stdout or '').splitlines():
         parts = _parse_nm_colon_line(line)
@@ -449,7 +485,8 @@ def try_connect_saved_nearby() -> bool:
 
     print(f'Saved Wi‑Fi profiles: {[s for _, s in saved]}')
     nearby = {ssid for ssid, _ in scan_wifi_networks(rescan=True)}
-    print(f'Nearby SSIDs: {sorted(nearby)[:20]}…' if len(nearby) > 20 else f'Nearby SSIDs: {sorted(nearby)}')
+    print(f'Nearby SSIDs: {sorted(nearby)[:20]}…' if len(
+        nearby) > 20 else f'Nearby SSIDs: {sorted(nearby)}')
 
     for conn_name, ssid in saved:
         if ssid not in nearby:
@@ -605,7 +642,8 @@ class PortalState:
 def make_handler(state: PortalState):  # noqa: ANN201
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args) -> None:  # noqa: ANN002
-            sys.stderr.write(f'[provision] {self.address_string()} {fmt % args}\n')
+            sys.stderr.write(
+                f'[provision] {self.address_string()} {fmt % args}\n')
 
         def _send_html(self, code: int, body: str) -> None:
             data = body.encode('utf-8')
@@ -693,13 +731,15 @@ def make_handler(state: PortalState):  # noqa: ANN201
                 return
             length = int(self.headers.get('Content-Length', '0') or 0)
             raw = self.rfile.read(length).decode('utf-8', errors='replace')
-            form = {k: (v[0] if v else '') for k, v in parse_qs(raw, keep_blank_values=True).items()}
+            form = {k: (v[0] if v else '')
+                    for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
             if state.busy:
                 self._redirect('/status')
                 return
 
-            wifi_ssid = form.get('wifi_ssid', '').strip() or form.get('wifi_ssid_custom', '').strip()
+            wifi_ssid = form.get('wifi_ssid', '').strip(
+            ) or form.get('wifi_ssid_custom', '').strip()
             wifi_password = form.get('wifi_password', '')
             robot_name = form.get('robot_name', '').strip()
             if not all([wifi_ssid, wifi_password, robot_name]):
@@ -758,24 +798,32 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Only rule: skip hotspot if saved Wi‑Fi is online or a saved SSID is nearby.
     try:
         if try_connect_saved_nearby():
-            print('Skipping hotspot — Wi‑Fi available via saved profile.')
-            # Ensure robot/display are up even if provision unit exits.
+            print('Skipping hotspot — Wi‑Fi already available.')
+            mark_display_ready()
+            # Bring display/hardware up; stop this unit so it does not flap.
             maybe_restart_robot_units()
             return 0
     except Exception as exc:  # noqa: BLE001
-        print(f'Saved-Wi‑Fi check failed ({exc}); continuing to hotspot', file=sys.stderr)
+        print(
+            f'Saved-Wi‑Fi check failed ({exc}); continuing to hotspot', file=sys.stderr)
 
     try:
         ap_ssid, mac, networks = start_access_point()
     except Exception as exc:  # noqa: BLE001
         print(f'Failed to start AP: {exc}', file=sys.stderr)
+        # Do not leave OLED stuck in setup if AP never came up.
+        if wifi_already_online():
+            mark_display_ready()
+        else:
+            write_display_hint('error', 'WiFi setup failed')
         return 1
     print(
         f'AP up: {ap_ssid}  password={AP_PASSWORD}  mac={mac}  '
         f'portal=http://{AP_ADDR}/  ssids={len(networks)}'
     )
 
-    state = PortalState(serial=serial, ap_ssid=ap_ssid, mac=mac, networks=networks)
+    state = PortalState(serial=serial, ap_ssid=ap_ssid,
+                        mac=mac, networks=networks)
     handler = make_handler(state)
     port = int(os.environ.get('NAVPRO_PROVISION_PORT', '80'))
     server = HTTPServer(('0.0.0.0', port), handler)

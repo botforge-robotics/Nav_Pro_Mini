@@ -157,10 +157,60 @@ class StatusDisplayNode(Node):
         except OSError:
             return None
 
+    def _setup_ap_really_up(self) -> bool:
+        """True only if nmcli reports the setup AP connection active."""
+        try:
+            import subprocess
+            r = subprocess.run(
+                ['nmcli', '-t', '-f', 'NAME,STATE', 'connection', 'show', '--active'],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in (r.stdout or '').splitlines():
+                if line.startswith('navpro-setup-ap:') and 'activated' in line.lower():
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    def _wifi_site_online(self) -> bool:
+        try:
+            import subprocess
+            r = subprocess.run(
+                ['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in (r.stdout or '').splitlines():
+                parts = line.split(':')
+                if len(parts) < 4:
+                    continue
+                _dev, dtype, state, conn = parts[0], parts[1], parts[2], parts[3]
+                if dtype != 'wifi' or state != 'connected':
+                    continue
+                if not conn or conn == 'navpro-setup-ap':
+                    continue
+                ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
+                if ip.returncode == 0 and (ip.stdout or '').strip():
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
     def _sync_from_disk(self, force: bool = False) -> bool:
         """React to robot.yaml / display hint changes (post-portal)."""
         changed = False
         hint_live = self._read_hint_state()
+
+        # Reality check: never keep OLED in "setup" if hotspot is not actually up
+        # and site Wi‑Fi is already connected (stale hint / race on boot).
+        if self._state == 'setup' and not self._setup_ap_really_up() and self._wifi_site_online():
+            self.get_logger().info('Wi‑Fi online and no setup AP — display setup → ready')
+            self._state = 'ready'
+            try:
+                HINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+                HINT_PATH.write_text(f'ready\n{self._param_str("robot_name")}\n\n', encoding='utf-8')
+            except OSError:
+                pass
+            changed = True
 
         # 1) Config file is authoritative over setup hotspot — but do not
         # clobber an in-progress joining/error hint (portal still driving UI).
@@ -175,16 +225,17 @@ class StatusDisplayNode(Node):
                 if cfg is not None:
                     if self._set_robot_name(cfg.name):
                         changed = True
-                    if hint_live in ('joining', 'setup', 'error'):
-                        # Portal / hint file owns the transition right now.
+                    # Stale setup hint while AP is down: leave setup.
+                    if hint_live == 'setup' and not self._setup_ap_really_up():
+                        if self._state in ('boot', 'setup', 'joining', 'error'):
+                            self._state = 'ready'
+                            changed = True
+                    elif hint_live in ('joining', 'error'):
                         pass
                     elif self._state in ('boot', 'setup', 'joining', 'error'):
                         self.get_logger().info(
                             f'robot.yaml present — display {self._state} → ready'
                         )
-                        self._state = 'ready'
-                        changed = True
-                    elif self._state == 'setup':
                         self._state = 'ready'
                         changed = True
 
@@ -207,32 +258,29 @@ class StatusDisplayNode(Node):
             line2 = (lines[1] if len(lines) > 1 else '').strip()
             line3 = (lines[2] if len(lines) > 2 else '').strip()
 
-            # Ignore stale setup hint once robot.yaml exists (unless re-setup).
-            if hint_state == 'setup' and config_path_present() and hint_live == 'setup':
-                # Allow re-setup when provision deliberately rewrote setup hint
-                # while yaml still exists (wifi lost / reconfigure).
-                pass
-
             if hint_state == 'setup':
+                # Only honor setup hint when the AP is really active.
+                if not self._setup_ap_really_up():
+                    if self._wifi_site_online() and self._state == 'setup':
+                        self._state = 'ready'
+                        changed = True
+                    return changed
                 if self._set_ap(line2, line3 or 'navprosetup'):
                     changed = True
-                if self._state in ('boot',) or self._state != 'setup':
-                    # Prefer setup when portal starts AP (even if yaml exists).
-                    if hint_state != self._state:
-                        self._state = 'setup'
-                        changed = True
+                if self._state != 'setup':
+                    self._state = 'setup'
+                    changed = True
             else:
                 if line2 and self._set_robot_name(line2):
                     changed = True
                 if hint_state in STATE_FX and hint_state != self._state:
-                    # Don't regress ready/nav/mapping back to joining unless forced.
                     regress = {'ready', 'nav', 'mapping'}
-                    if self._state in regress and hint_state in ('joining', 'setup'):
-                        # joining after ready is OK when portal is reconnecting.
-                        if hint_state == 'joining':
-                            self.get_logger().info(f'display hint → {hint_state}')
-                            self._state = hint_state
-                            changed = True
+                    if self._state in regress and hint_state == 'setup':
+                        pass
+                    elif self._state in regress and hint_state == 'joining':
+                        self.get_logger().info(f'display hint → {hint_state}')
+                        self._state = hint_state
+                        changed = True
                     else:
                         self.get_logger().info(f'display hint → {hint_state}')
                         self._state = hint_state
