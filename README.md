@@ -709,7 +709,7 @@ docker compose up --build -d
 | Lidar              | `/scan`                                            |
 | Camera             | empty / disabled                                   |
 
-Wrappers accept Mission Planner’s `map:=office.yaml` and pass `map_name` into `navpromini_navigation`.
+Wrappers follow the Mission Planner docs: mapping = Nav2 + slam_toolbox; navigation accepts `map:=office.yaml` and joins `navpromini_mapping/maps/<file>`.
 
 ---
 
