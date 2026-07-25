@@ -1,4 +1,4 @@
-"""Hardware bringup + twist_mux (teleop / Nav2 only — no fleet)."""
+"""Hardware bringup + twist_mux (teleop / Nav2)."""
 
 import os
 

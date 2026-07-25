@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Captive portal for Wi‑Fi + robot name setup (no fleet / RMF).
+"""Captive portal for Wi‑Fi + robot name setup.
 
 Hotspot rule (only):
   Start AP only when there is no usable saved Wi‑Fi profile whose SSID is
   visible nearby (and the robot is not already online on Wi‑Fi).
   Otherwise try to bring up a saved connection and exit.
 
-Form fields: site Wi‑Fi + password + robot name only.
+Form fields: Wi‑Fi + password + robot name.
 Writes /etc/navpro/robot.yaml
 """
 
@@ -494,7 +494,7 @@ def write_display_hint(state: str, line2: str = '', line3: str = '') -> None:
             f.write(f'{state}\n{line2}\n{line3}\n')
     except OSError:
         pass
-    # Ensure the node that applies OLED/LED is up (same pattern as fleet).
+    # Ensure the display service that applies OLED/LED is up.
     _run(['systemctl', 'start', 'navpro-display'], check=False)
 
 

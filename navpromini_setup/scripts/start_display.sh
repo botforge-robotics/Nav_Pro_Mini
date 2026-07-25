@@ -16,12 +16,12 @@ AP_PASSWORD="${NAVPRO_AP_PASSWORD:-navprosetup}"
 NAME="${NAVPRO_ROBOT_NAME:-}"
 
 CFG="${NAVPRO_ROBOT_YAML:-/etc/navpro/robot.yaml}"
-LEGACY="${NAVPRO_FLEET_YAML:-/etc/navpro/fleet.yaml}"
+ALT_CFG="${NAVPRO_ALT_ROBOT_YAML:-/etc/navpro/fleet.yaml}"
 HINT=/run/navpro/display_state
 
-if [[ -f "${CFG}" ]] || [[ -f "${LEGACY}" ]]; then
+if [[ -f "${CFG}" ]] || [[ -f "${ALT_CFG}" ]]; then
   USE_CFG="${CFG}"
-  [[ -f "${CFG}" ]] || USE_CFG="${LEGACY}"
+  [[ -f "${CFG}" ]] || USE_CFG="${ALT_CFG}"
   STATE="${STATE:-ready}"
   if [[ "${STATE}" == "setup" ]]; then
     STATE=ready

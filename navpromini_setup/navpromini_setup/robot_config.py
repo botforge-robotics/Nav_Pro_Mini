@@ -12,8 +12,8 @@ from typing import Any, Optional
 import yaml
 
 DEFAULT_ROBOT_PATH = Path(os.environ.get('NAVPRO_ROBOT_YAML', '/etc/navpro/robot.yaml'))
-# Legacy path from fleet branch — still recognized as "configured".
-LEGACY_FLEET_PATH = Path('/etc/navpro/fleet.yaml')
+# Older installs may still have this path; treated as configured if present.
+_ALT_ROBOT_PATH = Path('/etc/navpro/fleet.yaml')
 
 
 @dataclass
@@ -99,13 +99,13 @@ DEFAULT_AP_PASSWORD = 'navprosetup'
 
 
 def config_path_present() -> bool:
-    return DEFAULT_ROBOT_PATH.is_file() or LEGACY_FLEET_PATH.is_file()
+    return DEFAULT_ROBOT_PATH.is_file() or _ALT_ROBOT_PATH.is_file()
 
 
 def load_robot_config(path: Path | None = None) -> Optional[RobotConfig]:
     path = path or (
         DEFAULT_ROBOT_PATH if DEFAULT_ROBOT_PATH.is_file()
-        else LEGACY_FLEET_PATH if LEGACY_FLEET_PATH.is_file()
+        else _ALT_ROBOT_PATH if _ALT_ROBOT_PATH.is_file()
         else DEFAULT_ROBOT_PATH
     )
     if not path.is_file():

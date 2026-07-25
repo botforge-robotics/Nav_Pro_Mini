@@ -1,4 +1,4 @@
-# twist_mux: teleop + Nav2 only (no fleet / zenoh).
+# twist_mux: teleop + Nav2.
 
 twist_mux:
   ros__parameters:

@@ -9,9 +9,8 @@ ESP32 micro-ROS uses BEST_EFFORT + VOLATILE — no latch. We wait until a
 subscriber (or /joint_states) appears, then push. Same OLED text is not
 re-sent while connected. On ESP reconnect we push again.
 
-Dynamic updates (same pattern as rmf_fleet — do NOT publish OLED/LED from
-other processes):
-  1) /run/navpro/display_state hint file (provision portal writes this)
+Dynamic updates (do NOT publish OLED/LED from other processes):
+  1) /run/navpro/display_state hint file (Wi‑Fi portal writes this)
   2) /navpro/display_state topic (optional; mapping/nav can publish later)
   3) /etc/navpro/robot.yaml presence (leave setup after Wi‑Fi saved)
 
