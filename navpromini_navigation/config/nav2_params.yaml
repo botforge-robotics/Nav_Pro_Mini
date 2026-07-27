@@ -88,64 +88,54 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.20
-      yaw_goal_tolerance: 0.30
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.40
 
-    # Rotate in place to face path, then DWB forward-only (no reverse)
-    # Note: primary_controller MUST be a string (nested map breaks configure → no costmaps)
+    # Direct DWB (no RotationShim) — shim rotate→drive handoff caused physical jerks.
+    # Teleop on /cmd_vel_teleop is smooth; Nav2 jerks were from planner/shim discontinuities.
     FollowPath:
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.785
-      angular_disengage_threshold: 0.3925
-      forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.6
-      max_angular_accel: 0.8
-      max_cost_threshold: 250.0
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false
+      plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.15
+      max_vel_x: 0.12
       max_vel_y: 0.0
-      max_vel_theta: 0.6
+      max_vel_theta: 0.45
       min_speed_xy: 0.0
-      max_speed_xy: 0.15
+      max_speed_xy: 0.12
       min_speed_theta: 0.0
-      acc_lim_x: 0.10
+      # Gentle accel — matches smooth teleop feel
+      acc_lim_x: 0.06
       acc_lim_y: 0.0
-      acc_lim_theta: 0.5
-      decel_lim_x: -0.12
+      acc_lim_theta: 0.30
+      decel_lim_x: -0.08
       decel_lim_y: 0.0
-      decel_lim_theta: -0.5
-      # Fewer samples → cheaper DWB on Pi (keeps 10 Hz steady)
-      vx_samples: 10
+      decel_lim_theta: -0.30
+      vx_samples: 12
       vy_samples: 1
       vtheta_samples: 16
-      sim_time: 1.5
+      sim_time: 1.8
       linear_granularity: 0.05
       angular_granularity: 0.05
       transform_tolerance: 0.3
-      xy_goal_tolerance: 0.20
-      trans_stopped_velocity: 0.05
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.40
+      trans_stopped_velocity: 0.04
       short_circuit_trajectory_evaluation: True
       stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
-      # Softer align critics → less left/right weave / jitter
-      PathAlign.scale: 16.0
-      PathAlign.forward_point_distance: 0.15
-      GoalAlign.scale: 12.0
-      GoalAlign.forward_point_distance: 0.15
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 24.0
-      RotateToGoal.slowing_factor: 5.0
+      # Prefer staying on path over aggressive lateral correction (reduces weave)
+      PathAlign.scale: 8.0
+      PathAlign.forward_point_distance: 0.25
+      PathDist.scale: 40.0
+      GoalDist.scale: 28.0
+      RotateToGoal.scale: 16.0
+      RotateToGoal.slowing_factor: 8.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.x_only_threshold: 0.05
-      Oscillation.oscillation_reset_dist: 0.15
-      Oscillation.oscillation_reset_angle: 0.25
+      Oscillation.oscillation_reset_dist: 0.20
+      Oscillation.oscillation_reset_angle: 0.30
 
 local_costmap:
   local_costmap:
@@ -318,25 +308,26 @@ route_server:
 
 velocity_smoother:
   ros__parameters:
-    # Match controller_frequency so accel limits actually shape cmd_vel
-    smoothing_frequency: 20.0
+    # Must match controller_frequency (10 Hz) — mismatch causes accel stair-steps / jerks
+    smoothing_frequency: 10.0
     stamp_smoothed_velocity_with_smoothing_time: False
-    scale_velocities: False
+    scale_velocities: True
     feedback: "OPEN_LOOP"
-    max_velocity: [0.15, 0.0, 0.6]
-    min_velocity: [0.0, 0.0, -0.6]
-    max_accel: [0.08, 0.0, 0.4]
-    max_decel: [-0.12, 0.0, -0.5]
+    max_velocity: [0.12, 0.0, 0.45]
+    min_velocity: [-0.0, 0.0, -0.45]
+    max_accel: [0.05, 0.0, 0.25]
+    max_decel: [-0.08, 0.0, -0.30]
     odom_topic: "odom"
-    odom_duration: 0.1
-    # Ignore tiny cmd chatter that causes physical jitter
-    deadband_velocity: [0.01, 0.0, 0.03]
+    odom_duration: 0.15
+    deadband_velocity: [0.005, 0.0, 0.02]
     velocity_timeout: 1.0
 
 collision_monitor:
   ros__parameters:
     base_frame_id: "base_link"
     odom_frame_id: "odom"
+    # Required pass-through: smoother → collision_monitor → /cmd_vel (twist_mux).
+    # Empty polygons:[] crashes the node and leaves the whole Nav2 stack unconfigured.
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
@@ -344,16 +335,17 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
+    # Keep polygon defined but disabled — pass-through only (no approach braking jerks)
     polygons: ["FootprintApproach"]
     FootprintApproach:
       type: "polygon"
       action_type: "approach"
-      footprint_topic: "/local_costmap/published_footprint"
-      time_before_collision: 0.8
+      footprint_topic: "local_costmap/published_footprint"
+      time_before_collision: 1.2
       simulation_time_step: 0.1
       min_points: 6
       visualize: False
-      enabled: True
+      enabled: False
     observation_sources: ["scan"]
     scan:
       type: "scan"
