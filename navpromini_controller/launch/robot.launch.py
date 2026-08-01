@@ -5,11 +5,13 @@ Starts:
   - robot_state_publisher (URDF → tf_static + wheel TF from joint_states)
   - micro-ROS agent (Pi GPIO UART ↔ ESP32)
   - RPLidar A1M8 (/scan, frame lidar_1)
-  - wheel odom node (/odom/wheel from encoders)
-  - EKF (robot_localization): fuse /odom/wheel + /imu → /odom + TF odom→base_link
+  - wheel odom node (encoders only → /odom + TF odom→base_link directly)
   - Daly Smart BMS battery node (/battery/* via FTDI USB–RS485)
 
 Optional:
+  - EKF (robot_localization): fuse /odom/wheel + /imu → /odom (off by
+    default — start_ekf:=true and set navpromini_odom.publish_tf:=false /
+    odom_topic:=odom/wheel + slip_gate_enable:=true to reintroduce IMU)
   - slam (navpromini_mapping)
   - navigation (navpromini_navigation)
 """
@@ -183,8 +185,13 @@ def generate_launch_description():
         DeclareLaunchArgument('start_odom', default_value='true'),
         DeclareLaunchArgument(
             'start_ekf',
-            default_value='true',
-            description='Fuse wheel odom + IMU gyro into /odom (robot_localization)',
+            default_value='false',
+            description=(
+                'Fuse wheel odom + IMU gyro into /odom via robot_localization. '
+                'Off by default (wheel-encoder-only odom from navpromini_odom). '
+                'If re-enabled, also set navpromini_odom odom_topic:=odom/wheel, '
+                'publish_tf:=false, slip_gate_enable:=true.'
+            ),
         ),
         DeclareLaunchArgument(
             'start_battery',
@@ -210,7 +217,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_rviz', default_value='false'),
         LogInfo(msg=[
             'NavProMini real robot: use_sim_time=false | '
-            'agent+lidar+odom+ekf+battery | ROS_DOMAIN_ID inherited from shell'
+            'agent+lidar+odom(encoders only)+battery | '
+            'ROS_DOMAIN_ID inherited from shell'
         ]),
         Node(
             package='robot_state_publisher',

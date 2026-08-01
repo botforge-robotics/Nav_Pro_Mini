@@ -1,4 +1,8 @@
-# Wheel odometry — encoders only (input to EKF). EKF publishes /odom + TF.
+# Wheel odometry — encoders only, no IMU fusion. This node owns /odom + TF
+# odom→base_link directly (EKF/IMU fusion stage disabled — see robot.launch.py
+# start_ekf). Re-enable slip_gate_enable + start_ekf together if IMU is
+# reintroduced; the slip gate is a wheel/IMU cross-check, not orientation
+# fusion, so it stays off here to keep odom purely encoder-derived.
 # https://wiki.ros.org/diff_drive_controller
 navpromini_odom:
   ros__parameters:
@@ -9,17 +13,16 @@ navpromini_odom:
     encoder_ticks_per_meter: 7800.0
     odom_frame: odom
     base_frame: base_link
-    odom_topic: odom/wheel
+    odom_topic: odom
     wheel_ticks_topic: wheel_ticks
     imu_topic: imu
-    # EKF owns odom→base_link — avoid competing TF publishers
-    publish_tf: false
+    # No EKF stage anymore — this node is the sole /odom + TF publisher.
+    publish_tf: true
     left_wheel_sign: 1.0
     right_wheel_sign: 1.0
     max_tick_jump: 2000
-    # Industrial AMR-style: freeze only when wheel yaw disagrees with IMU gyro
-    # (do NOT gate on "body still" — that false-triggers on straight cruise → jumps)
-    slip_gate_enable: true
+    # Encoder-only odom: no IMU cross-check either.
+    slip_gate_enable: false
     slip_yaw_err_thresh: 0.55
     slip_v_thresh: 0.06
     slip_gyro_still_thresh: 0.08
