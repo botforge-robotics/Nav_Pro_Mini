@@ -1,0 +1,25 @@
+# Official ROS laser self-filter (laser_filters / scan_to_scan_filter_chain).
+# Raw lidar: /scan  →  filtered: /scan_filtered (used by Nav2, AMCL, SLAM).
+#
+# Tune box bounds in base_link if pillars / top deck still appear as obstacles.
+# invert: false → remove points INSIDE the box (robot body + pillars).
+scan_to_scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: robot_body_box
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: base_link
+        min_x: -0.12
+        max_x: 0.14
+        min_y: -0.16
+        max_y: 0.16
+        min_z: -0.15
+        max_z: 0.35
+        invert: false
+    filter2:
+      name: inscribed_footprint
+      type: laser_filters/LaserScanFootprintFilter
+      params:
+        # Match Nav2 robot_radius (0.125 = 25 cm dia) with small margin for pillar legs
+        inscribed_radius: 0.13

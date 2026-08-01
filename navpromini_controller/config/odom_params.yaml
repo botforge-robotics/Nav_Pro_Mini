@@ -1,4 +1,4 @@
-# Wheel odometry — diff_drive_controller geometry model
+# Wheel odometry — encoders only (input to EKF). EKF publishes /odom + TF.
 # https://wiki.ros.org/diff_drive_controller
 navpromini_odom:
   ros__parameters:
@@ -9,9 +9,19 @@ navpromini_odom:
     encoder_ticks_per_meter: 7800.0
     odom_frame: odom
     base_frame: base_link
-    odom_topic: odom
+    odom_topic: odom/wheel
     wheel_ticks_topic: wheel_ticks
-    publish_tf: true
+    imu_topic: imu
+    # EKF owns odom→base_link — avoid competing TF publishers
+    publish_tf: false
     left_wheel_sign: 1.0
     right_wheel_sign: 1.0
     max_tick_jump: 2000
+    # Industrial AMR-style: freeze only when wheel yaw disagrees with IMU gyro
+    # (do NOT gate on "body still" — that false-triggers on straight cruise → jumps)
+    slip_gate_enable: true
+    slip_yaw_err_thresh: 0.55
+    slip_v_thresh: 0.06
+    slip_gyro_still_thresh: 0.08
+    slip_accel_still_thresh: 0.55
+    slip_hold_samples: 5
