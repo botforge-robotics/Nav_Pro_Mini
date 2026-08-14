@@ -16,7 +16,9 @@
   <depend>navpromini_mapping</depend>
   <depend>navpromini_navigation</depend>
   <depend>rplidar_ros</depend>
+  <depend>laser_filters</depend>
   <depend>robot_state_publisher</depend>
+  <depend>robot_localization</depend>
   <depend>tf2_ros</depend>
 
   <depend>geometry_msgs</depend>

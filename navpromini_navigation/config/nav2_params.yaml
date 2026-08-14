@@ -1,9 +1,9 @@
 amcl:
   ros__parameters:
-    alpha1: 0.15
-    alpha2: 0.15
-    alpha3: 0.15
-    alpha4: 0.15
+    alpha1: 0.20
+    alpha2: 0.20
+    alpha3: 0.25
+    alpha4: 0.25
     alpha5: 0.15
     base_frame_id: "base_link"
     beam_skip_distance: 0.5
@@ -16,28 +16,39 @@ amcl:
     laser_max_range: 12.0
     laser_min_range: 0.35
     laser_model_type: "likelihood_field"
-    max_beams: 60
-    max_particles: 1500
-    min_particles: 400
+    max_beams: 90
+    max_particles: 2500
+    min_particles: 800
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    recovery_alpha_fast: 0.0
-    recovery_alpha_slow: 0.0
-    resample_interval: 2
+    # Slow recovery helps when pose drifts / mislocalizes
+    recovery_alpha_fast: 0.1
+    recovery_alpha_slow: 0.001
+    resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true
-    transform_tolerance: 1.0
-    # Less frequent AMCL jumps → less physical weave / jitter
-    update_min_a: 0.30
-    update_min_d: 0.35
-    z_hit: 0.5
+    transform_tolerance: 0.5
+    # Publish map→odom immediately so global_costmap can activate at nav startup.
+    # Without this, Start Navigation before Pose Estimate leaves stack half-up
+    # (local costmap works, global/planner/bt stay inactive → can't send goals).
+    # Always re-set Pose Estimate on the map after Start Navigation.
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+    # Update pose more often (was too sparse → drift / wrong heading)
+    update_min_a: 0.15
+    update_min_d: 0.15
+    z_hit: 0.7
     z_max: 0.05
-    z_rand: 0.5
+    z_rand: 0.25
     z_short: 0.05
-    scan_topic: scan
+    scan_topic: scan_filtered
 
 bt_navigator:
   ros__parameters:
@@ -74,7 +85,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
+    failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -82,60 +93,79 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.15
-      movement_time_allowance: 25.0
+      required_movement_radius: 0.08
+      movement_time_allowance: 45.0
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.40
+      xy_goal_tolerance: 0.12
+      yaw_goal_tolerance: 0.22
 
-    # Direct DWB (no RotationShim) — shim rotate→drive handoff caused physical jerks.
-    # Teleop on /cmd_vel_teleop is smooth; Nav2 jerks were from planner/shim discontinuities.
+    # RotationShim: spin in place for larger heading errors; drive-correct for small ones.
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      # ~52° — earlier in-place turn than 1.05 (was driving straight into doors)
+      angular_dist_threshold: 0.90
+      angular_disengage_threshold: 0.35
+      forward_sampling_distance: 0.30
+      rotate_to_heading_angular_vel: 0.40
+      max_angular_accel: 0.55
+      simulate_ahead_time: 1.0
+      rotate_to_heading_once: true
+      rotate_to_goal_heading: false
+      closed_loop: true
+
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.12
+      max_vel_x: 0.18
       max_vel_y: 0.0
       max_vel_theta: 0.45
       min_speed_xy: 0.0
-      max_speed_xy: 0.12
+      max_speed_xy: 0.18
       min_speed_theta: 0.0
-      # Gentle accel — matches smooth teleop feel
-      acc_lim_x: 0.06
+      max_speed_theta: 0.45
+      acc_lim_x: 0.08
       acc_lim_y: 0.0
-      acc_lim_theta: 0.30
-      decel_lim_x: -0.08
+      acc_lim_theta: 0.40
+      decel_lim_x: -0.10
       decel_lim_y: 0.0
-      decel_lim_theta: -0.30
-      vx_samples: 12
+      decel_lim_theta: -0.45
+      vx_samples: 14
       vy_samples: 1
-      vtheta_samples: 16
-      sim_time: 1.8
+      vtheta_samples: 24
+      sim_time: 1.7
       linear_granularity: 0.05
-      angular_granularity: 0.05
+      angular_granularity: 0.04
       transform_tolerance: 0.3
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.40
-      trans_stopped_velocity: 0.04
+      xy_goal_tolerance: 0.12
+      yaw_goal_tolerance: 0.22
+      trans_stopped_velocity: 0.03
       short_circuit_trajectory_evaluation: True
       stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
-      # Prefer staying on path over aggressive lateral correction (reduces weave)
-      PathAlign.scale: 8.0
-      PathAlign.forward_point_distance: 0.25
-      PathDist.scale: 40.0
-      GoalDist.scale: 28.0
-      RotateToGoal.scale: 16.0
-      RotateToGoal.slowing_factor: 8.0
+      critics:
+        [
+          "RotateToGoal",
+          "Oscillation",
+          "BaseObstacle",
+          "PathAlign",
+          "PathDist",
+          "GoalDist",
+        ]
+      # PreferForward removed — it kept robot going straight through turns
+      BaseObstacle.scale: 14.0
+      PathAlign.scale: 28.0
+      PathAlign.forward_point_distance: 0.28
+      PathDist.scale: 36.0
+      GoalDist.scale: 18.0
+      RotateToGoal.scale: 12.0
+      RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
-      Oscillation.x_only_threshold: 0.05
-      Oscillation.oscillation_reset_dist: 0.20
-      Oscillation.oscillation_reset_angle: 0.30
+      Oscillation.x_only_threshold: 0.10
+      Oscillation.oscillation_reset_dist: 0.12
+      Oscillation.oscillation_reset_angle: 0.35
 
 local_costmap:
   local_costmap:
@@ -145,15 +175,18 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      width: 3
-      height: 3
+      width: 5
+      height: 5
       resolution: 0.05
-      robot_radius: 0.15
+      # Physical diameter 25 cm → radius 0.125 m
+      robot_radius: 0.125
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.30
+        # High = cost dies quickly → grey free strip in narrow corridors
+        cost_scaling_factor: 10.0
+        # 0.30 still sealed this choke; ~0.20 = body + ~7 cm soft standoff
+        inflation_radius: 0.20
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -165,15 +198,15 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_filtered
           max_obstacle_height: 2.0
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 8.0
+          raytrace_max_range: 10.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 3.0
-          obstacle_min_range: 0.05
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.0
       always_send_full_costmap: True
 
 global_costmap:
@@ -183,31 +216,33 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.15
+      robot_radius: 0.125
       resolution: 0.05
       track_unknown_space: true
+      # Extra wait if AMCL map TF is late (default ~60s still fails without pose)
+      initial_transform_timeout: 120.0
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_filtered
           max_obstacle_height: 2.0
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 8.0
+          raytrace_max_range: 10.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 3.0
-          obstacle_min_range: 0.05
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.0
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.30
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.20
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
@@ -232,7 +267,7 @@ planner_server:
     # Global planner: NavFn (Dijkstra). use_astar:true = A*
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
+      tolerance: 0.15
       use_astar: true
       allow_unknown: true
 
@@ -252,7 +287,8 @@ behavior_server:
     local_footprint_topic: local_costmap/published_footprint
     global_footprint_topic: global_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    behavior_plugins:
+      ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
     backup:
@@ -313,21 +349,22 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: True
     feedback: "OPEN_LOOP"
-    max_velocity: [0.12, 0.0, 0.45]
+    max_velocity: [0.18, 0.0, 0.45]
     min_velocity: [-0.0, 0.0, -0.45]
-    max_accel: [0.05, 0.0, 0.25]
-    max_decel: [-0.08, 0.0, -0.30]
+    max_accel: [0.10, 0.0, 0.40]
+    max_decel: [-0.10, 0.0, -0.45]
     odom_topic: "odom"
     odom_duration: 0.15
-    deadband_velocity: [0.005, 0.0, 0.02]
+    # Do not deadband yaw — small ω was killed → stick then surge
+    deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
 
 collision_monitor:
   ros__parameters:
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    # Required pass-through: smoother → collision_monitor → /cmd_vel (twist_mux).
-    # Empty polygons:[] crashes the node and leaves the whole Nav2 stack unconfigured.
+    # Pass-through node required by Nav2 lifecycle manager.
+    # Invalid polygon config leaves collision_monitor unconfigured → bt_navigator never activates.
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
@@ -335,7 +372,7 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    # Keep polygon defined but disabled — pass-through only (no approach braking jerks)
+    # Official FootprintApproach (disabled) — must stay listed so configure succeeds
     polygons: ["FootprintApproach"]
     FootprintApproach:
       type: "polygon"
@@ -349,7 +386,7 @@ collision_monitor:
     observation_sources: ["scan"]
     scan:
       type: "scan"
-      topic: "scan"
+      topic: "scan_filtered"
       min_height: 0.05
       max_height: 2.0
       enabled: True
@@ -369,9 +406,9 @@ docking_server:
     dock_prestaging_tolerance: 0.5
 
     # Types of docks
-    dock_plugins: ['simple_charging_dock']
+    dock_plugins: ["simple_charging_dock"]
     simple_charging_dock:
-      plugin: 'opennav_docking::SimpleChargingDock'
+      plugin: "opennav_docking::SimpleChargingDock"
       docking_threshold: 0.05
       staging_x_offset: -0.7
       use_external_detection_pose: true
@@ -412,7 +449,7 @@ loopback_simulator:
     base_frame_id: "base_link"
     odom_frame_id: "odom"
     map_frame_id: "map"
-    scan_frame_id: "lidar_1"  # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'
+    scan_frame_id: "lidar_1" # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'
     update_duration: 0.02
     scan_range_min: 0.35
     scan_range_max: 12.0

@@ -5,10 +5,13 @@ Starts:
   - robot_state_publisher (URDF → tf_static + wheel TF from joint_states)
   - micro-ROS agent (Pi GPIO UART ↔ ESP32)
   - RPLidar A1M8 (/scan, frame lidar_1)
-  - wheel odom node (/odom + TF odom→base_link)
+  - wheel odom node (encoders only → /odom + TF odom→base_link directly)
   - Daly Smart BMS battery node (/battery/* via FTDI USB–RS485)
 
 Optional:
+  - EKF (robot_localization): fuse /odom/wheel + /imu → /odom (off by
+    default — start_ekf:=true and set navpromini_odom.publish_tf:=false /
+    odom_topic:=odom/wheel + slip_gate_enable:=true to reintroduce IMU)
   - slam (navpromini_mapping)
   - navigation (navpromini_navigation)
 """
@@ -45,7 +48,9 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     start_agent = LaunchConfiguration('start_agent')
     start_lidar = LaunchConfiguration('start_lidar')
+    start_scan_filter = LaunchConfiguration('start_scan_filter')
     start_odom = LaunchConfiguration('start_odom')
+    start_ekf = LaunchConfiguration('start_ekf')
     start_battery = LaunchConfiguration('start_battery')
     start_slam = LaunchConfiguration('start_slam')
     start_nav = LaunchConfiguration('start_nav')
@@ -73,12 +78,32 @@ def generate_launch_description():
         condition=IfCondition(start_lidar),
     )
 
+    scan_filter = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'laser_scan_filter.launch.py')
+        ),
+        launch_arguments={
+            'scan_in': LaunchConfiguration('scan_in_topic'),
+            'scan_out': LaunchConfiguration('scan_out_topic'),
+            'params_file': LaunchConfiguration('scan_filter_params'),
+        }.items(),
+        condition=IfCondition(start_scan_filter),
+    )
+
     odom = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg, 'launch', 'odom.launch.py')
         ),
         launch_arguments={'use_sim_time': use_sim_time}.items(),
         condition=IfCondition(start_odom),
+    )
+
+    ekf = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'ekf.launch.py')
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        condition=IfCondition(start_ekf),
     )
 
     battery = IncludeLaunchDescription(
@@ -146,7 +171,28 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('start_agent', default_value='true'),
         DeclareLaunchArgument('start_lidar', default_value='true'),
+        DeclareLaunchArgument(
+            'start_scan_filter',
+            default_value='true',
+            description='laser_filters: drop /scan points on robot footprint (pillars/deck)',
+        ),
+        DeclareLaunchArgument('scan_in_topic', default_value='/scan'),
+        DeclareLaunchArgument('scan_out_topic', default_value='/scan_filtered'),
+        DeclareLaunchArgument(
+            'scan_filter_params',
+            default_value=os.path.join(pkg, 'config', 'scan_filter.yaml'),
+        ),
         DeclareLaunchArgument('start_odom', default_value='true'),
+        DeclareLaunchArgument(
+            'start_ekf',
+            default_value='false',
+            description=(
+                'Fuse wheel odom + IMU gyro into /odom via robot_localization. '
+                'Off by default (wheel-encoder-only odom from navpromini_odom). '
+                'If re-enabled, also set navpromini_odom odom_topic:=odom/wheel, '
+                'publish_tf:=false, slip_gate_enable:=true.'
+            ),
+        ),
         DeclareLaunchArgument(
             'start_battery',
             default_value='true',
@@ -171,7 +217,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_rviz', default_value='false'),
         LogInfo(msg=[
             'NavProMini real robot: use_sim_time=false | '
-            'agent+lidar+odom+battery | ROS_DOMAIN_ID inherited from shell'
+            'agent+lidar+odom(encoders only)+battery | '
+            'ROS_DOMAIN_ID inherited from shell'
         ]),
         Node(
             package='robot_state_publisher',
@@ -189,7 +236,9 @@ def generate_launch_description():
         ),
         microros,
         lidar,
+        scan_filter,
         odom,
+        ekf,
         battery,
         slam,
         nav,
