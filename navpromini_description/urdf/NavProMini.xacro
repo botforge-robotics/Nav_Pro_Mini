@@ -296,7 +296,7 @@
     <child link="FC_1"/>
   </joint>
 
-  <!-- Onboard QMI8658 (Waveshare General Driver); fuse later -->
+  <!-- QMI8658 + AK09918C on Waveshare General Driver; axes remapped in firmware to REP-103 -->
   <link name="imu_link">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>

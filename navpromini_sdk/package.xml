@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://relaxng.org/ns/structure/1.0"?>
+<package format="3">
+  <name>navpromini_sdk</name>
+  <version>1.0.0</version>
+  <description>HTTP + WebSocket API server for NavProMini. Exposes the robot's
+  navigation, mapping, docking and telemetry over a versioned REST surface so
+  clients other than the Flutter app can integrate without speaking ROS.</description>
+  <maintainer email="todo@todo.com">author</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>nav2_mission_planner_interfaces</depend>
+
+  <!-- Already present on the robot as rosbridge's own dependency, so this adds
+       no new runtime requirement. Serves HTTP and WebSocket from one loop. -->
+  <exec_depend>python3-tornado</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

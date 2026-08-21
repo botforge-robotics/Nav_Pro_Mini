@@ -1,0 +1,21 @@
+[Unit]
+Description=NavPro Mini Mission Planner (Botforge rosbridge + launch/map services)
+After=network-online.target navpro-robot.service
+Wants=network-online.target
+Requires=navpro-robot.service
+
+[Service]
+Type=simple
+User=root
+Environment=NAVPRO_USER=REPLACE_USER
+Environment=NAVPRO_WS=REPLACE_WS
+Environment=ROS_LOCALHOST_ONLY=0
+Environment=ROS_DOMAIN_ID=0
+ExecStart=/bin/bash /opt/navpro/scripts/start_mission_planner.sh
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

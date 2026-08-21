@@ -8,18 +8,22 @@ slam_toolbox uses TRANSIENT_LOCAL durability — map_saver must match.
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, LogInfo, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    LogInfo,
+    OpaqueFunction,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
 
-MAPS_DIR = os.environ.get(
-    'NAVPRO_MAPS_DIR',
-    os.path.join(
-        os.path.expanduser('~'),
-        'NavProMini_ws',
-        'src',
-        'navpromini_mapping',
-        'maps',
-    ),
+MAPS_DIR = os.path.join(
+    os.path.expanduser('~'),
+    'NavProMini_ws',
+    'src',
+    'navpromini_mapping',
+    'maps',
 )
 
 
@@ -36,23 +40,40 @@ def _setup(context, *args, **kwargs):
     os.makedirs(MAPS_DIR, exist_ok=True)
     map_path = os.path.join(MAPS_DIR, map_name)
 
+    saver = ExecuteProcess(
+        cmd=[
+            'ros2', 'run', 'nav2_map_server', 'map_saver_cli',
+            '-f', map_path,
+            '-t', map_topic,
+            '--free', '0.25',
+            '--occ', '0.65',
+            '--ros-args',
+            '-p', 'map_subscribe_transient_local:=true',
+            '-p', f'save_map_timeout:={timeout}',
+        ],
+        output='screen',
+    )
+
+    # Serialize the pose graph next to the image, AFTER the save completes so
+    # the two do not compete for CPU on a Pi that is usually also running
+    # SLAM. Best-effort by design: serialize_posegraph always exits 0, so a
+    # missing slam_toolbox never turns a successful map save into a failure.
+    # See that script for why keeping the graph matters — a .pgm cannot be
+    # extended, and re-mapping from scratch changes the map origin, which
+    # silently invalidates the dock pose and every bookmark.
+    serializer = ExecuteProcess(
+        cmd=['ros2', 'run', 'navpromini_mapping', 'serialize_posegraph', map_path],
+        output='screen',
+    )
+
     return [
         LogInfo(msg=[
             f'Saving map as {map_path}.pgm / .yaml from topic {map_topic} '
             f'(timeout={timeout}s). SLAM must be running.'
         ]),
-        ExecuteProcess(
-            cmd=[
-                'ros2', 'run', 'nav2_map_server', 'map_saver_cli',
-                '-f', map_path,
-                '-t', map_topic,
-                '--free', '0.25',
-                '--occ', '0.65',
-                '--ros-args',
-                '-p', 'map_subscribe_transient_local:=true',
-                '-p', f'save_map_timeout:={timeout}',
-            ],
-            output='screen',
+        saver,
+        RegisterEventHandler(
+            OnProcessExit(target_action=saver, on_exit=[serializer])
         ),
     ]
 

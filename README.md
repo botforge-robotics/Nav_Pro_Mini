@@ -1,19 +1,24 @@
 # NavProMini
 
-ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-drive robot: simulation, teleop, SLAM mapping, and Nav2 navigation. The same topic/TF contract is intended for a **real robot** (ESP32 micro-ROS + lidar + odom).
+ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-drive robot: simulation, teleop, SLAM mapping, Nav2 navigation, and **Mission Planner** (Botforge rosbridge + React web UI). The same topic/TF contract is intended for a **real robot** (ESP32 micro-ROS + lidar + odom).
 
 ---
 
 ## Packages
 
-| Package                  | Description                                                   |
-| ------------------------ | ------------------------------------------------------------- |
-| `navpromini_description` | URDF/xacro, meshes, sensors, DiffDrive plugins, RViz display  |
-| `navpromini_gazebo`      | Gazebo Harmonic worlds, spawn, ros_gz bridge                  |
-| `navpromini_teleop`      | Joystick / keyboard teleoperation                             |
-| `navpromini_mapping`     | slam_toolbox online mapping + map saver                       |
-| `navpromini_navigation`  | Nav2 localization + navigation                                |
-| `navpromini_controller`  | **Real robot:** micro-ROS agent, RPLidar, wheel odom, bringup |
+| Package                       | Description                                                              |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `navpromini_description`      | URDF/xacro, meshes, sensors, DiffDrive plugins, RViz display             |
+| `navpromini_gazebo`           | Gazebo Harmonic worlds, spawn, ros_gz bridge                             |
+| `navpromini_teleop`           | Joystick / keyboard teleoperation                                        |
+| `navpromini_mapping`          | slam_toolbox online mapping + map saver                                  |
+| `navpromini_navigation`       | Nav2 localization + navigation                                           |
+| `navpromini_controller`       | **Real robot:** micro-ROS agent, RPLidar, wheel odom, bringup            |
+| `navpromini_setup`            | Pi install, Wi‑Fi portal, systemd (robot / display / mission planner)    |
+| `navpromini_mission_planner`  | Launch wrappers for Mission Planner (`map` → `map_name`)                 |
+| `nav2_mission_planner`        | Companion services (`launch_with_args`, map list/delete, save map)       |
+| `nav2_mission_planner_interfaces` | Custom srv/action types for Mission Planner                          |
+| `rosbridge_suite`             | Botforge fork — WebSocket bridge on port **9090** (not apt rosbridge)    |
 
 ---
 
@@ -646,6 +651,68 @@ sudo timedatectl set-ntp true
 
 ---
 
+## Mission Planner (React web UI)
+
+Browser UI for teleop, SLAM, Nav2, and missions. **Rosbridge runs on the robot** (Botforge fork in this workspace). The PC Docker stack serves the React app **and a SQLite API** (claim + settings). Opens on the home screen → scan/claim robot (no connection wizard). Topics/launches are locked to NavProMini defaults.
+
+```text
+Browser  →  Docker React UI (PC :8080) + API/SQLite (:3001)
+Browser  →  ws://<claimed-robot-ip>:9090  (Botforge rosbridge)
+                →  nav2_mission_planner services + Nav2 / SLAM / twist_mux
+```
+
+### Robot (one-time)
+
+```bash
+# Prefer source build of Botforge rosbridge (already under src/rosbridge_suite)
+sudo apt remove ros-jazzy-rosbridge* ros-jazzy-rosapi* || true
+
+cd ~/NavProMini_ws
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
+source install/setup.bash
+
+# ROS_LOCALHOST_ONLY must be 0 (default in navpromini_setup env / systemd)
+export ROS_LOCALHOST_ONLY=0
+
+# Hardware bringup (systemd: navpro-robot) then companion stack:
+ros2 launch nav2_mission_planner nav2_mission_planner.launch.py
+# or: sudo systemctl start navpro-mission-planner
+```
+
+Re-run Pi install to enable the unit: `sudo bash src/navpromini_setup/scripts/install_navpro.sh`  
+(see [`navpromini_setup/README.md`](navpromini_setup/README.md)).
+
+### PC (Docker UI)
+
+From the Mission Planner **`react-web`** branch:
+
+```bash
+cd /path/to/nav2_mission_planner   # React web app repo
+docker compose up --build -d
+# open http://localhost:8080 → Scan nearby / Claim (or enter robot IP)
+# Topics & launches are locked to NavProMini defaults (SQLite stores claim + missions)
+```
+
+### NavProMini locked defaults (app)
+
+| Setting            | Value                                              |
+| ------------------ | -------------------------------------------------- |
+| Mapping launch     | `navpromini_mission_planner/mapping_launch`        |
+| Navigation launch  | `navpromini_mission_planner/navigation_launch`     |
+| Maps path          | `navpromini_mapping/maps`                          |
+| cmd_vel            | `/cmd_vel_teleop`                                  |
+| Twist type         | `geometry_msgs/msg/Twist`                          |
+| Pose (nav)         | `/amcl_pose`                                       |
+| Path               | `/plan`                                            |
+| Lidar              | `/scan`                                            |
+| Camera             | empty / disabled                                   |
+
+Wrappers follow the Mission Planner docs: mapping = Nav2 + slam_toolbox; navigation accepts `map:=office.yaml` and joins `navpromini_mapping/maps/<file>`.
+
+---
+
 ## Typical flow diagram
 
 ```text
@@ -654,11 +721,16 @@ colcon build && source install/setup.bash
         ├─ REAL ── navpromini_controller/robot.launch.py  [use_sim_time:=false]
         │           optional start_slam / start_nav  (use_rviz:=false on Pi)
         │           PC: RViz + teleop over ROS_DOMAIN_ID (see Multi-machine)
+        │           or: Mission Planner web → rosbridge :9090 (see above)
+        │
+        ├─ MISSION PLANNER ── nav2_mission_planner.launch.py  (rosbridge + services)
+        │           wrappers: navpromini_mission_planner/mapping|navigation_launch
         │
         ├─ SIM ── gazebo.launch.py  [use_rviz:=false by default]
         │           use_rviz:=true  → optional Gazebo RViz
         │
         ├─ TELEOP ── joystick / keyboard  → /cmd_vel
+        │              (mux: /cmd_vel_teleop + /cmd_vel_nav → /cmd_vel)
         │
         ├─ MAP ── slam.launch.py → map_saver.launch.py
         │
@@ -677,6 +749,8 @@ colcon build && source install/setup.bash
 - First `office` / `cafe` launch downloads Gazebo Fuel models (needs internet); later uses `~/.gz/fuel/`.
 - Map path resolution for Nav2: `~/NavProMini_ws/src/navpromini_mapping/maps/<map_name>.yaml` (then package share dirs).
 - Nav2 motion limits (params): ~**0.4 m/s** linear, ~**1.5 rad/s** angular (velocity smoother).
+- Mission Planner uses Botforge **rosbridge** on the robot (`:9090`); do not install apt `ros-jazzy-rosbridge*`.
+- With `twist_mux`, Mission Planner teleop should publish **`/cmd_vel_teleop`** (unstamped `Twist`), not `/cmd_vel` directly.
 
 ---
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=NavPro Mini Wi-Fi setup hotspot (only if no saved/nearby Wi-Fi)
+# Display node must be up so /run/navpro/display_state updates reach OLED/LED.
+After=NetworkManager.service navpro-display.service
+Wants=NetworkManager.service navpro-display.service
+
+[Service]
+Type=simple
+User=root
+Environment=NAVPRO_USER=REPLACE_USER
+Environment=NAVPRO_WS=REPLACE_WS
+Environment=ROS_LOCALHOST_ONLY=1
+ExecStart=/bin/bash /opt/navpro/scripts/start_provision.sh
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
