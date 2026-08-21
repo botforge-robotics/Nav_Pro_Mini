@@ -4,6 +4,29 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 
 ---
 
+## Start here
+
+| I want to… | Go to |
+| ---------- | ----- |
+| **Set up a physical robot** — first power-on, Wi-Fi, LED codes, install | **[ROBOT_SETUP.md](ROBOT_SETUP.md)** |
+| **Control a robot over HTTP** — no ROS needed | [SDK docs](https://botforge-robotics.github.io/navpromini_sdk/) · [navpromini_sdk repo](https://github.com/botforge-robotics/navpromini_sdk) |
+| **Develop / simulate / launch by hand** | The rest of this file |
+
+### Turning a new robot on, in 30 seconds
+
+1. **Power on.** LED goes 🔴 red while it boots (~30–45 s).
+2. **It looks for Wi-Fi it knows.** Finds one → 🔵 cyan → 🟢 green. Done.
+3. **Otherwise the setup hotspot opens** — LED blinks 🟠 amber.
+   Join `NavPro-Setup-XXXXXX` (password `navprosetup`) from a phone, open
+   **`http://10.42.0.1`**, pick your Wi-Fi, set a robot name, submit.
+4. **🟢 Green** and the OLED shows the robot's name. Find its IP on your
+   router, then `curl http://<robot-ip>:8090/api/v1/system/info`.
+
+Full LED table, troubleshooting and the from-source install:
+**[ROBOT_SETUP.md](ROBOT_SETUP.md)**.
+
+---
+
 ## Packages
 
 | Package                       | Description                                                              |
