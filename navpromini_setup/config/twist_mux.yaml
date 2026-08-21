@@ -1,4 +1,4 @@
-# twist_mux: teleop + Nav2.
+# twist_mux: teleop + Nav2 + IR docking.
 
 twist_mux:
   ros__parameters:
@@ -8,6 +8,15 @@ twist_mux:
         topic: cmd_vel_nav
         timeout: 0.5
         priority: 10
+      docking:
+        # ir_dock_node's final IR-guided approach. Above nav so the docking
+        # approach isn't fought by a stale controller_server command, below
+        # teleop so a human can always take over mid-dock — which matters,
+        # since this state deliberately drives the robot backward into a
+        # fixed object.
+        topic: cmd_vel_dock
+        timeout: 0.5
+        priority: 30
       teleop:
         topic: cmd_vel_teleop
         timeout: 0.5

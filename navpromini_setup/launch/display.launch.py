@@ -22,7 +22,12 @@ def generate_launch_description():
                 'robot_name': LaunchConfiguration('robot_name'),
                 'ap_ssid': LaunchConfiguration('ap_ssid'),
                 'ap_password': LaunchConfiguration('ap_password'),
-                'refresh_hz': 1.0,
+                # 4Hz, not 1Hz. This is the rate the OLED/LED composer runs
+                # at, so at 1Hz a charge-state change waited up to a second
+                # for the next tick (plus the repost interval on top) — the
+                # LED took 5-10s to react to the dock. The battery now
+                # publishes at 4Hz, so match it.
+                'refresh_hz': 4.0,
             }],
         ),
     ])

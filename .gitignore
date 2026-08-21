@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+
+# Loose upstream clones vendored into the workspace, each with its own .git.
+# They are NOT submodules — there is no .gitmodules — so `git add` would record
+# them as gitlinks pointing at commits this repo cannot resolve, and a fresh
+# clone would get empty directories. Clone them separately:
+#   nav2_mission_planner  https://github.com/botforge-robotics/nav2_mission_planner
+#   rosbridge_suite       https://github.com/RobotWebTools/rosbridge_suite
+/nav2_mission_planner/
+/rosbridge_suite/

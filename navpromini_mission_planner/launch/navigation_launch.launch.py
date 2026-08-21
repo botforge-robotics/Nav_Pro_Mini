@@ -78,6 +78,11 @@ def launch_setup(context, *args, **kwargs):
         [pkg_nav2_bringup, 'launch', 'navigation_launch.py'])
     launch_localization = PathJoinSubstitution(
         [pkg_nav2_bringup, 'launch', 'localization_launch.py'])
+    launch_dock_nodes = PathJoinSubstitution([
+        get_package_share_directory('navpromini_controller'),
+        'launch',
+        'docking.launch.py',
+    ])
 
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(launch_nav2),
@@ -98,7 +103,15 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    return [nav2, localization]
+    # dock_detector_node / dock_manager_node — see docking.launch.py for why
+    # this doesn't also start docking_server itself (nav2's own
+    # navigation_launch.py above already does).
+    dock_nodes = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(launch_dock_nodes),
+        launch_arguments=[('use_sim_time', use_sim_time)],
+    )
+
+    return [nav2, localization, dock_nodes]
 
 
 def generate_launch_description():

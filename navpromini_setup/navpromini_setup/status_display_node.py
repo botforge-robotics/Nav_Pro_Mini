@@ -13,6 +13,16 @@ Dynamic updates (do NOT publish OLED/LED from other processes):
   1) /run/navpro/display_state hint file (Wi‑Fi portal writes this)
   2) /navpro/display_state topic (optional; mapping/nav can publish later)
   3) /etc/navpro/robot.yaml presence (leave setup after Wi‑Fi saved)
+  4) /battery/state (battery_node) — overrides just the LED while the pack is
+     actually taking charge (charging → red breathe, full → green breathe).
+     OLED text and the underlying lifecycle state are untouched.
+
+     Driven by the BATTERY, deliberately, not by dock_manager's /dock_status.
+     The LED should reflect what is physically true, and charging is true
+     whether the robot drove onto the dock itself or someone pushed it on by
+     hand. Keying off the docking action meant a manually docked robot sat
+     there charging with an idle LED, and — worse — a failed dock attempt
+     could leave the LED claiming "charging" when nothing was connected.
 
 Without this node running, hint-file writes do nothing on the ESP.
 """
@@ -20,6 +30,7 @@ Without this node running, hint-file writes do nothing on the ESP.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -27,7 +38,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import BatteryState, JointState
 from std_msgs.msg import String
 
 from navpromini_setup.robot_config import DEFAULT_ROBOT_PATH, config_path_present, load_robot_config
@@ -42,6 +53,28 @@ STATE_FX: dict[str, tuple[str, str]] = {
     'error': ('Error', 'blink,255,0,0,300'),
     'offline': ('Offline', 'solid,80,80,80'),
 }
+
+# LED-only override while the pack is actually taking charge, taking priority
+# over STATE_FX's LED (OLED text is untouched). Anything else falls through to
+# the normal state LED — 'nav'/'ready' are already solid green, so "not
+# charging" needs no entry here.
+CHARGE_LED: dict[str, str] = {
+    'charging': 'breathe,255,0,0,1500',
+    'full': 'breathe,0,255,0,1500',
+}
+
+# Current thresholds, in amps, with the sign convention battery_node uses
+# (positive = into the pack). A deadband rather than a zero crossing because
+# a topped-off pack on the charger floats around zero and would otherwise
+# flicker between "full" and "not connected".
+CHARGE_CURRENT_A = 0.2
+DISCHARGE_CURRENT_A = -0.2
+
+# The pogo-pin contact bounces on arrival: a real dock was observed reporting
+# CHARGING and then DISCHARGING 1.2s apart while the robot settled. Requiring
+# a state to persist before showing it keeps the LED from strobing during
+# those first seconds.
+CHARGE_DEBOUNCE_SEC = 0.6
 
 HINT_PATH = Path(os.environ.get('NAVPRO_DISPLAY_HINT', '/run/navpro/display_state'))
 ROBOT_PATH = Path(os.environ.get('NAVPRO_ROBOT_YAML', str(DEFAULT_ROBOT_PATH)))
@@ -75,6 +108,13 @@ class StatusDisplayNode(Node):
         self._pub_led = self.create_publisher(String, 'led_command', ESP_QOS)
         self.create_subscription(String, 'navpro/display_state', self._on_state_msg, 10)
         self.create_subscription(JointState, 'joint_states', self._on_joint_states, JS_QOS)
+        self.create_subscription(BatteryState, 'battery/state', self._on_battery, 10)
+        # What the battery currently says, and what we have committed to
+        # showing — separated so the debounce can hold the LED steady while
+        # contact settles.
+        self._charge_raw: Optional[str] = None
+        self._charge_shown: Optional[str] = None
+        self._charge_since = 0.0
 
         self._state = str(self.get_parameter('state').value).strip().lower() or 'boot'
         self._pending_text: Optional[str] = None
@@ -126,6 +166,43 @@ class StatusDisplayNode(Node):
 
     def _on_joint_states(self, _msg: JointState) -> None:
         self._last_js_ns = self.get_clock().now().nanoseconds
+
+    @staticmethod
+    def _charge_state_of(msg: BatteryState) -> Optional[str]:
+        """'charging' | 'full' | None, from the pack itself.
+
+        Uses power_supply_status where the BMS reports it, and falls back to
+        current so a pack that only reports UNKNOWN still lights up. FULL only
+        counts while the robot is still connected — a full pack running on
+        battery must not sit there glowing "charged on dock".
+        """
+        status = msg.power_supply_status
+        current = float(msg.current) if msg.current == msg.current else 0.0
+
+        if status == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
+            return 'charging'
+        if status == BatteryState.POWER_SUPPLY_STATUS_FULL:
+            return 'full' if current > DISCHARGE_CURRENT_A else None
+        if current > CHARGE_CURRENT_A:
+            return 'charging'
+        return None
+
+    def _on_battery(self, msg: BatteryState) -> None:
+        raw = self._charge_state_of(msg)
+        now = time.monotonic()
+        if raw != self._charge_raw:
+            self._charge_raw = raw
+            self._charge_since = now
+            return
+        # Only commit once the reading has held — see CHARGE_DEBOUNCE_SEC.
+        if raw == self._charge_shown or now - self._charge_since < CHARGE_DEBOUNCE_SEC:
+            return
+        self.get_logger().info(
+            f'charge state → {raw or "not charging"} (LED follows the battery, '
+            'so manual docking shows it too)')
+        self._charge_shown = raw
+        self._note_state_composed()
+        self._compose_pending(self._state)
 
     def _set_robot_name(self, name: str) -> bool:
         name = (name or '').strip()
@@ -308,7 +385,14 @@ class StatusDisplayNode(Node):
             return f'Setup WiFi  pw:{pw}  http://10.42.0.1/'
         if state == 'joining':
             return f'{name} - Connecting WiFi...' if name else 'Connecting WiFi...'
-        if state in ('ready', 'nav', 'mapping', 'error') and name:
+        if state == 'ready':
+            # Idle: show the robot's name on its own. "Ready" adds nothing a
+            # person standing in front of the robot cannot already see, while
+            # the name is what actually distinguishes one unit from another in
+            # a room with several. States that convey activity (mapping, nav,
+            # error) keep their label, prefixed by the name.
+            return name or default_text
+        if state in ('nav', 'mapping', 'error') and name:
             return f'{name} - {default_text}'
         return default_text
 
@@ -335,7 +419,7 @@ class StatusDisplayNode(Node):
     def _compose_pending(self, state: str) -> None:
         text, led = STATE_FX.get(state, STATE_FX['boot'])
         self._pending_text = self._oled_ascii(self._compose_text(state, text))[:192]
-        self._pending_led = led
+        self._pending_led = CHARGE_LED.get(self._charge_shown or '', led)
 
     def _esp_ready(self) -> bool:
         text_subs = self._pub_text.get_subscription_count()

@@ -1,0 +1,20 @@
+[Unit]
+Description=NavProMini SDK (HTTP + WebSocket API)
+# Wants, not Requires: the API should still come up and report *why* the robot
+# is unhealthy when the robot stack is down. An API that refuses to start
+# whenever the thing it monitors is broken is useless exactly when needed.
+Wants=navpro-robot.service
+After=network-online.target navpro-robot.service
+
+[Service]
+Type=simple
+User=root
+Environment=ROS_DOMAIN_ID=0
+# Must be 0: the SDK talks to nodes in other processes.
+Environment=ROS_LOCALHOST_ONLY=0
+ExecStart=/opt/navpro/scripts/start_sdk.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -54,6 +54,7 @@ def generate_launch_description():
     start_battery = LaunchConfiguration('start_battery')
     start_slam = LaunchConfiguration('start_slam')
     start_nav = LaunchConfiguration('start_nav')
+    start_docking = LaunchConfiguration('start_docking')
 
     microros = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -117,6 +118,17 @@ def generate_launch_description():
         condition=IfCondition(start_battery),
     )
 
+    # Host health (CPU temperature) for the UI status bar. Unconditional and
+    # dependency-free — it only reads thermal sysfs, so it stays useful even
+    # when the BMS/lidar are disabled for bench work.
+    system_monitor = Node(
+        package='navpromini_controller',
+        executable='system_monitor_node',
+        name='navpromini_system_monitor',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
     slam = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -146,6 +158,14 @@ def generate_launch_description():
             'use_rviz': LaunchConfiguration('use_rviz'),
         }.items(),
         condition=IfCondition(start_nav),
+    )
+
+    docking = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg, 'launch', 'docking.launch.py')
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        condition=IfCondition(start_docking),
     )
 
     return LaunchDescription([
@@ -213,6 +233,11 @@ def generate_launch_description():
             default_value='false',
             description='Also launch Nav2 (needs map_name)',
         ),
+        DeclareLaunchArgument(
+            'start_docking',
+            default_value='false',
+            description='Also launch docking_server + dock detector/manager (needs Nav2 up)',
+        ),
         DeclareLaunchArgument('map_name', default_value='navpromini_map'),
         DeclareLaunchArgument('use_rviz', default_value='false'),
         LogInfo(msg=[
@@ -240,6 +265,8 @@ def generate_launch_description():
         odom,
         ekf,
         battery,
+        system_monitor,
         slam,
         nav,
+        docking,
     ])
