@@ -35,6 +35,100 @@ _LAUNCH = {
     'navigation': ('navpromini_mission_planner', 'navigation_launch.launch.py'),
 }
 
+# Node names unique to each launch, used by reconcile_mode() below to read
+# the true mode off the ROS graph. Both are started with an empty namespace
+# by navpromini_mission_planner's wrappers, so a plain name match is exact.
+_AMCL_NODE = 'amcl'
+_SLAM_NODE = 'slam_toolbox'
+
+
+def _once(bridge, delay_sec: float, fn) -> None:
+    """Run fn() once, delay_sec from now, on the executor's thread.
+
+    rclpy timers are periodic; self-cancelling on first fire is the standard
+    way to get a one-shot out of create_timer without pulling in a second
+    timer API.
+    """
+    holder: dict = {}
+
+    def _cb() -> None:
+        holder['timer'].cancel()
+        fn()
+
+    holder['timer'] = bridge.create_timer(delay_sec, _cb)
+
+
+def _seed_pose_from_dock(bridge, state) -> None:
+    """Skip the manual '2D Pose Estimate' step when navigation starts right
+    off the dock — the dock's saved pose already IS the robot's pose, to
+    within the docking approach's own tolerance.
+
+    Fires a few times over several seconds rather than once: AMCL is a
+    lifecycle node, and navigation_launch.launch.py reporting success only
+    means the *process* started, not that AMCL has a map yet and has
+    activated its `/initialpose` subscription — that can take a few seconds,
+    and a pose published before then is just dropped (the topic carries no
+    transient_local durability to catch a late subscriber). Each attempt
+    re-checks mode and dock status first, so a fast mode change or an
+    undock mid-window can't seed a now-stale pose.
+    """
+    status = bridge.get('dock_status')
+    if status not in ('charging', 'full'):
+        return
+    dock = bridge.get('dock_pose')
+    if not dock:
+        return
+    x, y, theta = dock['x'], dock['y'], dock['theta']
+    frame = dock.get('frame', 'map')
+
+    def _attempt(n: int) -> None:
+        if state.mode != 'navigation' or bridge.get('dock_status') not in ('charging', 'full'):
+            return
+        bridge.publish_initial_pose(x, y, theta, frame)
+        bridge.get_logger().info(
+            f'seeded AMCL initial pose from the dock ({x:.2f}, {y:.2f}) — '
+            f'robot is docked, attempt {n}/3')
+
+    for n, delay in enumerate((1.0, 3.0, 6.0), start=1):
+        _once(bridge, delay, lambda n=n: _attempt(n))
+
+
+def reconcile_mode(bridge, state) -> None:
+    """Keep ModeState honest when navigation/mapping was started by someone
+    else — the Flutter app talks to launch_manager directly, not through
+    switch_mode() below, so a launch it starts (or stops) never touches
+    ModeState and GET /mode just reports whatever the SDK itself last did,
+    however long ago (observed: 'idle' after 37 hours of the robot actually
+    running navigation).
+
+    Poll the real ROS graph instead of trusting only our own launches:
+    `/amcl` only exists while navigation_launch.launch.py is up, and
+    `/slam_toolbox` only while mapping is — ground truth regardless of who
+    started it. Called on a timer, not per-request, so GET /mode stays a
+    cheap cache read.
+    """
+    if state.busy:
+        return  # a switch_mode() we started is mid-flight; don't fight it
+    names = set(bridge.get_node_names())
+    if _AMCL_NODE in names:
+        observed = 'navigation'
+    elif _SLAM_NODE in names:
+        observed = 'mapping'
+    else:
+        observed = 'idle'
+
+    if observed == state.mode:
+        return
+    # launch_id and map are only known for launches the SDK itself started —
+    # reporting a guessed map name here would be exactly the kind of
+    # fabricated data GET /mode must not hand back. See the module docstring
+    # in ros_bridge.py: null over an invented value.
+    state.set(observed, None, None)
+    bridge.get_logger().info(f'mode reconciled from ROS graph: {observed} '
+                             '(started outside the SDK)')
+    if observed == 'navigation':
+        _seed_pose_from_dock(bridge, state)
+
 
 async def switch_mode(h: BaseHandler, mode: str, map_name: str | None) -> dict:
     """Perform a mode change. Shared by POST /mode and POST /maps/{n}/activate.
@@ -90,8 +184,10 @@ async def switch_mode(h: BaseHandler, mode: str, map_name: str | None) -> dict:
                            {'package': package, 'launch_file': launch_file})
 
         state.set(mode, map_name, resp.unique_id)
-        if mode == 'navigation' and map_name:
-            h.opts['store'].set_current_map(map_name)
+        if mode == 'navigation':
+            if map_name:
+                h.opts['store'].set_current_map(map_name)
+            _seed_pose_from_dock(h.bridge, state)
         return {'mode': mode, 'map': map_name, 'launch_id': resp.unique_id}
     finally:
         state.busy = False

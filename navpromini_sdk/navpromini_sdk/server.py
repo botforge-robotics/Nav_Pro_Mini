@@ -146,6 +146,12 @@ def main(args=None) -> None:
         'dock_pose_pub': bridge.create_publisher(PoseStamped, 'dock_pose', LATCHED_QOS),
     }
 
+    # GET /mode is a cache read (see ModeHandler) so it stays cheap under
+    # load; this timer is what keeps that cache honest when navigation or
+    # mapping is started by something other than this SDK — the Flutter app
+    # talks to launch_manager directly. See mode.reconcile_mode().
+    bridge.create_timer(2.0, lambda: mode.reconcile_mode(bridge, opts['mode_state']))
+
     app = build_app(bridge, store, opts)
     app.listen(port, address=address)
     bridge.get_logger().info(
