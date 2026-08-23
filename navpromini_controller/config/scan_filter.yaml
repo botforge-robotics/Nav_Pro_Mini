@@ -5,17 +5,16 @@
 # invert: false → remove points INSIDE the box (robot body + pillars).
 scan_to_scan_filter_chain:
   ros__parameters:
-    # Left empty (default), the filters below run against whatever TF
-    # happens to be cached at that instant instead of waiting for one — a
-    # transform that lags the scan by even a moment means that scan is
-    # filtered against a stale/missing base_link<-lidar_1 transform and can
-    # pass through un-filtered. Measured live: the box+footprint filters
-    # below both individually cover a real self-hit point (~0.12m, well
-    # inside inscribed_radius) yet it still reached /scan_filtered on
-    # roughly every other scan — this is why. Nav2/AMCL consume
-    # /scan_filtered directly, so an intermittent self-hit here reads as an
-    # obstacle 12cm away that moves with the robot everywhere it goes.
-    tf_message_filter_target_frame: base_link
+    # REVERTED — do not set tf_message_filter_target_frame. Setting it to
+    # base_link was meant to stop an intermittent self-hit point from
+    # slipping through (see git history for that diagnosis, still valid),
+    # but live-tested it instead killed /scan_filtered outright: 0 Hz,
+    # permanently, vs /scan's healthy 8.3Hz right next to it. Nav2/AMCL both
+    # consume /scan_filtered directly, so this took the entire nav stack
+    # down (AMCL never got a scan to localize against) — strictly worse
+    # than the intermittent self-hit it was meant to fix. If that self-hit
+    # is worth chasing again, it needs a fix that's been live-verified to
+    # not silently stop the filter chain outputting anything at all.
     filter1:
       name: robot_body_box
       type: laser_filters/LaserScanBoxFilter
