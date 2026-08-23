@@ -252,7 +252,15 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
+      # 5.0 -> 8.0 by request: a person stepping into the path collided
+      # before the robot stopped. At 5Hz, an obstacle can be up to 200ms
+      # stale before it even registers here, on top of whatever
+      # controller_server/collision_monitor then take to react — 8Hz
+      # roughly matches controller_frequency (10Hz below) and cuts that
+      # worst case to ~125ms. Real CPU cost; if this alone doesn't fix it,
+      # the next lever is FootprintApproach.time_before_collision below,
+      # not pushing this further.
+      update_frequency: 8.0
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
@@ -536,7 +544,10 @@ collision_monitor:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
-      time_before_collision: 1.2
+      # 1.2 -> 1.8s by request: a person stepping in front collided before
+      # the robot stopped. More lead time to react/decelerate, at the cost
+      # of stopping more cautiously in general.
+      time_before_collision: 1.8
       simulation_time_step: 0.1
       min_points: 6
       visualize: False
