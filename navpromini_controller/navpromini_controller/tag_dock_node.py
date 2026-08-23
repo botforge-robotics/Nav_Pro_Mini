@@ -151,6 +151,16 @@ class TagDockNode(Node):
         # definition; one that slides out of view is not, and creeping blind
         # while crooked is also how the dock gets pushed out of position.
         p('blind_max_dx_px', 60.0)
+        # ...and it must have been roughly SQUARE to the dock face, not just
+        # centred and close. dx and skew measure different things: dx is
+        # lateral offset, skew is heading. A robot can be dead-centred
+        # (dx~0) while still facing the dock several degrees off — measured
+        # live: skew grew to 0.085-0.117 (~7-10deg via skew_to_rad) across
+        # four separate close-in stalls that all reached blind_min_side_px
+        # yet never charged. Confirmed by watching it happen: the robot
+        # entered the dock's guide funnel on an incline and jammed against
+        # it, never reaching the pins. Neither dx nor side_px catches that.
+        p('blind_max_skew', 0.05)
 
         # Only trusted once the tag was last seen at blind_min_side_px or
         # bigger, i.e. plausibly close enough to touch. Without that gate, a
@@ -198,8 +208,10 @@ class TagDockNode(Node):
         self._blind_speed = float(g('blind_speed'))
         self._blind_min_side = float(g('blind_min_side_px'))
         self._blind_max_dx = float(g('blind_max_dx_px'))
+        self._blind_max_skew = float(g('blind_max_skew'))
         self._last_dx_px = 0.0
         self._last_side_px = 0.0
+        self._last_skew = 0.0
         self._stall_speed = float(g('stall_speed_mps'))
         self._stall_confirm = float(g('stall_confirm_sec'))
         self._stall_grace = float(g('stall_grace_sec'))
@@ -254,6 +266,7 @@ class TagDockNode(Node):
             self._tag_stamp = time.monotonic()
             self._last_side_px = float(msg.data[4])
             self._last_dx_px = float(msg.data[2])
+            self._last_skew = float(msg.data[6])
 
     def _on_odom(self, msg: Odometry) -> None:
         self._odom = msg
@@ -571,15 +584,24 @@ class TagDockNode(Node):
                 here = self._xy()
                 if blind_from is None:
                     if (self._last_side_px < self._blind_min_side
-                            or abs(self._last_dx_px) > self._blind_max_dx):
+                            or abs(self._last_dx_px) > self._blind_max_dx
+                            or abs(self._last_skew) > self._blind_max_skew):
                         self._stop()
+                        if self._last_side_px < self._blind_min_side:
+                            why = 'too small'
+                        elif abs(self._last_dx_px) > self._blind_max_dx:
+                            why = ('off-centre, so it slid out of frame rather '
+                                  'than filled it')
+                        else:
+                            why = (f'squared to only {self._last_skew:+.3f} — '
+                                  'blind at this heading drives into the '
+                                  'guide funnel at an angle instead of '
+                                  'through it')
                         self.get_logger().warn(
                             f'APPROACH: tag lost at {self._last_side_px:.0f}px, '
-                            f'dx={self._last_dx_px:+.0f}px — '
-                            + ('too small' if self._last_side_px < self._blind_min_side
-                               else 'off-centre, so it slid out of frame rather '
-                                    'than filled it')
-                            + '. Backing off instead of creeping in crooked')
+                            f'dx={self._last_dx_px:+.0f}px, skew='
+                            f'{self._last_skew:+.3f} — {why}. Backing off '
+                            'instead of creeping in crooked')
                         return False
                     blind_from = here
                     self.get_logger().info(
@@ -605,6 +627,20 @@ class TagDockNode(Node):
                 stalled_since = stalled_since or now
                 if now - stalled_since > self._stall_confirm:
                     self._stop()
+                    if abs(self._last_skew) > self._blind_max_skew:
+                        # Close and genuinely stopped, but not square — this
+                        # is a robot wedged into the guide funnel at an
+                        # angle, not one seated on the pins. Treat it like
+                        # any other failed approach (see the blind-creep
+                        # gate above for the same reasoning) rather than
+                        # spending charge_confirm_sec watching current that
+                        # structurally cannot arrive.
+                        self.get_logger().warn(
+                            f'APPROACH: stalled crooked at {travelled * 100:.0f}cm '
+                            f'(tag last {self._last_side_px:.0f}px, skew='
+                            f'{self._last_skew:+.3f}) — jammed against the '
+                            'guide funnel, not seated. Backing off')
+                        return False
                     self.get_logger().info(
                         f'CONTACT: stalled at {travelled * 100:.0f}cm '
                         f'(tag last {self._last_side_px:.0f}px) — '
