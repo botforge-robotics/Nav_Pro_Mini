@@ -1,0 +1,89 @@
+self_filter_node:
+  ros__parameters:
+    scan_topic: /scan
+    filtered_scan_topic: /scan_filtered
+    base_frame: base_link
+    lidar_frame: lidar_1
+    filter_enabled: true
+
+    # How close a measured range must be to a self-object's expected range
+    # to count as that object. Small and explicit, not a broad radius —
+    # see the README's Primary Safety Requirement.
+    range_tolerance: 0.02
+    angular_tolerance: 0.01
+    # TF lookup timeout, not a staleness-by-header-stamp check — see
+    # self_filter_node.py's _get_transform docstring for why.
+    max_tf_age: 0.5
+
+    debug_enabled: false
+    debug_publish_removed_points: false
+
+    # -- pillars -----------------------------------------------------------
+    #
+    # Measured live on the robot (see README "Measuring pillar positions"):
+    # base_link -> lidar_1 TF is translation=(0.032, 0.001, 0.189),
+    # identity rotation. Raw /scan surveyed over 60 samples / 8s, clustering
+    # every beam that read < 0.25m across >=3 samples.
+    #
+    # pillar_1 / pillar_2 (rear): real, confirmed, measured returns —
+    # enabled.
+    #
+    # pillar_3 / pillar_4 (front): the spec's own ~100mm estimate is BELOW
+    # this RPLidar's range_min (0.15m, confirmed from a live LaserScan
+    # message) — the driver discards a return that close before any
+    # software, this node's or the old filter's, ever sees it. They are not
+    # a filtering problem: they are physically invisible to this sensor at
+    # their current mounting distance. Configured present but disabled with
+    # placeholder geometry, so the schema is ready the moment that changes
+    # (relocated pillars, a different lidar, anything that brings them
+    # into range) — do not enable without re-measuring for real, the x/y
+    # below are not measurements.
+    self_object_names: ["pillar_1", "pillar_2", "pillar_3", "pillar_4"]
+
+    pillar_1:  # rear-left
+      enabled: true
+      geometry_type: circle
+      x: -0.046
+      y: 0.094
+      z: 0.189
+      radius: 0.004
+    pillar_2:  # rear-right
+      enabled: true
+      geometry_type: circle
+      x: -0.046
+      y: -0.090
+      z: 0.189
+      radius: 0.004
+    pillar_3:  # front-left — DISABLED, not measured, see note above
+      enabled: false
+      geometry_type: circle
+      x: 0.100
+      y: 0.06
+      z: 0.189
+      radius: 0.004
+    pillar_4:  # front-right — DISABLED, not measured, see note above
+      enabled: false
+      geometry_type: circle
+      x: 0.100
+      y: -0.06
+      z: 0.189
+      radius: 0.004
+
+    # -- future wires/cables -------------------------------------------
+    #
+    # Not enabled or even listed by default — per the spec, never filter
+    # something that was not explicitly configured. To add one once real
+    # wiring exists, both add its name to self_object_names above AND
+    # define it, e.g.:
+    #
+    # self_object_names: ["pillar_1", "pillar_2", "pillar_3", "pillar_4", "wire_1"]
+    # wire_1:
+    #   enabled: true
+    #   geometry_type: capsule
+    #   x1: -0.046
+    #   y1: 0.094
+    #   z1: 0.05
+    #   x2: -0.046
+    #   y2: 0.094
+    #   z2: 0.189
+    #   radius: 0.003
