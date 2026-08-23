@@ -40,11 +40,14 @@ amcl:
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 0.5
-    # Publish map→odom immediately so global_costmap can activate at nav startup.
-    # Without this, Start Navigation before Pose Estimate leaves stack half-up
-    # (local costmap works, global/planner/bt stay inactive → can't send goals).
-    # Always re-set Pose Estimate on the map after Start Navigation.
-    set_initial_pose: true
+    # Off, by request: this auto-seed only ever gets the stack to
+    # *attempt* activation off a placeholder (0,0,0) pose — it adds launch
+    # time for a self-seed that, live-diagnosed, was not reliably resulting
+    # in a real activation anyway (global_costmap stayed inactive waiting
+    # on map->odom regardless). A manual Pose Estimate after Start
+    # Navigation is the actual real pose either way, so skip the detour and
+    # go straight to map-only-loaded until that arrives.
+    set_initial_pose: false
     initial_pose:
       x: 0.0
       y: 0.0
