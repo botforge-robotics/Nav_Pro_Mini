@@ -116,8 +116,55 @@ controller_server:
       xy_goal_tolerance: 0.08
       yaw_goal_tolerance: 0.12
 
-    # RotationShim: spin in place for larger heading errors; drive-correct for small ones.
+    # Regulated Pure Pursuit, not DWB+RotationShim: DWB scores 14x24=336
+    # sampled trajectories every cycle, which is real CPU pressure on this
+    # Pi (see controller_frequency above) and — measured live — could
+    # settle on a DIFFERENT "best" trajectory direction from one cycle to
+    # the next when two candidates scored near-equal, producing a
+    # back-and-forth hunt: theta oscillated across a ~0.6rad band for 22s
+    # with almost no net progress, even with Oscillation critic's own
+    # reset thresholds already tightened (0.12m / 0.35rad — this wasn't a
+    # loose-default problem). RPP has no competing-candidate-set to flip
+    # between: one lookahead point, one curvature, each cycle — and it's
+    # geometric rather than sampled, so it's far cheaper to run.
+    #
+    # DWB+RotationShim is kept below as FollowPathDWB (not in
+    # controller_plugins, so unloaded/inert) — to revert, change
+    # controller_plugins back to that name.
     FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # == old max_vel_x. velocity_smoother's [0.18, 0, 0.45] stays the
+      # fixed safety ceiling above whatever the controller requests,
+      # unchanged by this swap.
+      desired_linear_vel: 0.135
+      use_velocity_scaled_lookahead_dist: true
+      min_lookahead_dist: 0.25
+      max_lookahead_dist: 0.5
+      use_rotate_to_heading: true
+      # Both reused as-is from the old RotationShimController tuning above
+      # — already field-validated (rotate speed: -20% per request; angle:
+      # "was driving straight into doors" below this threshold).
+      rotate_to_heading_angular_vel: 0.239
+      rotate_to_heading_min_angle: 0.90
+      max_angular_accel: 0.55
+      # RPP's own default, not the dock's 0.02 — that value is documented
+      # elsewhere in this workspace as barely above this robot's own
+      # motor breakaway/stall floor, not a speed to steer toward here.
+      min_approach_linear_velocity: 0.05
+      use_collision_detection: true
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: true
+      # Must match local/global costmap inflation_layer.cost_scaling_factor
+      # below — this is how RPP reads the cost gradient as real distance.
+      inflation_cost_scaling_factor: 3.0
+      transform_tolerance: 0.3
+      # No reversing in general nav, matches the old min_vel_x: 0.0 — the
+      # docking controller owns reverse motion on its own separate path.
+      allow_reversing: false
+
+    # Not loaded (absent from controller_plugins above) — kept only so a
+    # revert to DWB+RotationShim is a one-line change back to FollowPath.
+    FollowPathDWB:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "dwb_core::DWBLocalPlanner"
       # ~52° — earlier in-place turn than 1.05 (was driving straight into doors)
