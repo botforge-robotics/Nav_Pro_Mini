@@ -539,7 +539,12 @@ collision_monitor:
     # (see git history — the first attempt at that broke /scan_filtered
     # outright and was reverted). Worst case here is over-caution, not
     # reduced safety, so enabling anyway.
-    polygons: ["FootprintApproach"]
+    # SlowdownEarly added alongside FootprintApproach, not in place of it —
+    # a separate, earlier-triggering layer rather than touching the config
+    # already confirmed working. See SlowdownEarly's own comment below for
+    # the radius derivation and why "slowdown" (not "stop") was chosen here
+    # after "stop" broke FootprintApproach's configure entirely.
+    polygons: ["FootprintApproach", "SlowdownEarly"]
     FootprintApproach:
       type: "polygon"
       # REVERTED to "approach" — live-tested "stop" and it broke configure
@@ -560,6 +565,27 @@ collision_monitor:
       time_before_collision: 1.8
       simulation_time_step: 0.1
       min_points: 6
+      visualize: False
+      enabled: True
+    # Earlier-triggering speed cap, ahead of FootprintApproach's tighter
+    # window. A circular zone (not the actual footprint) — simplest, most
+    # standard collision_monitor shape, deliberately different plumbing
+    # from FootprintApproach so a mistake here doesn't share the exact
+    # failure mode that took "stop" down.
+    #
+    # radius derivation, worked from base_link (collision_monitor already
+    # transforms scan points into base_link before testing containment, so
+    # no separate lidar-offset correction is needed on this number itself):
+    #   radius = forward_obstacle_distance (0.30m, requested) + robot_radius
+    #            (0.16m, the costmap's own padded value, not the bare
+    #            0.125m physical radius)
+    #          = 0.46m
+    SlowdownEarly:
+      type: "circle"
+      action_type: "slowdown"
+      radius: 0.46
+      slowdown_ratio: 0.5
+      min_points: 4
       visualize: False
       enabled: True
     observation_sources: ["scan"]
