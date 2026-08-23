@@ -542,17 +542,17 @@ collision_monitor:
     polygons: ["FootprintApproach"]
     FootprintApproach:
       type: "polygon"
-      # "approach" -> "stop", after live-diagnosed contact: "approach" does
-      # not halt the robot when something enters the predicted-collision
-      # window — it proportionally REDUCES speed as time-to-collision
-      # shrinks, by design letting the robot keep creeping forward at a
-      # reduced (never zero) speed all the way to the obstacle. Confirmed
-      # live: repeated close encounters settled at ~0.096-0.13m, not a
-      # full stop with real margin — exactly what "approach" is supposed
-      # to do, just not what's wanted here. "stop" halts outright (v=0)
-      # once something crosses into the time_before_collision window,
-      # instead of easing down as it closes the distance.
-      action_type: "stop"
+      # REVERTED to "approach" — live-tested "stop" and it broke configure
+      # entirely: collision_monitor stuck unconfigured, which cascaded to
+      # bt_navigator/costmaps/everything downstream never activating (this
+      # exact cascade is the failure mode this file's own comment above
+      # already warns about: "Invalid polygon config leaves
+      # collision_monitor unconfigured -> bt_navigator never activates").
+      # Restoring the known-working value immediately rather than leaving
+      # navigation broken while re-investigating why "stop" specifically
+      # doesn't configure on this nav2_collision_monitor build — do not
+      # re-attempt "stop" without figuring that out first.
+      action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
       # 1.2 -> 1.8s by request: a person stepping in front collided before
       # the robot stopped. More lead time to react/decelerate, at the cost
