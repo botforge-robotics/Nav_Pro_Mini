@@ -387,9 +387,10 @@ planner_server:
       # Default is 2.0. Raised so any costed (near-wall) cell is penalized
       # more heavily relative to raw distance — the direct lever for
       # pulling the path toward the centre of free space instead of
-      # whichever side is marginally shorter. Moderate first step, not
-      # pushed further without seeing it run.
-      cost_travel_multiplier: 3.0
+      # whichever side is marginally shorter. 3.0 -> 4.0 by request after
+      # two clean passes tonight; still moderate, not pushed further
+      # without seeing this value run.
+      cost_travel_multiplier: 4.0
       use_final_approach_orientation: false
 
     # Not loaded (absent from planner_plugins above) — kept only so a
