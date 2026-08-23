@@ -493,7 +493,23 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    # Official FootprintApproach (disabled) — must stay listed so configure succeeds
+    # Enabled: RPP's own use_collision_detection checks along the
+    # path/carrot direction — the right question for forward driving, but
+    # it left a gap for a robot rotating near an obstacle, where the risk is
+    # the footprint SWEEPING into something during the turn rather than
+    # what's ahead of the lookahead point. Confirmed live: the robot
+    # physically touched something and stopped mid-turn (near-zero v, small
+    # w) on a route RPP's own check had been clean on. FootprintApproach
+    # checks the actual footprint sweep continuously regardless of travel
+    # direction, closing that gap.
+    #
+    # Caveat: this reads from scan_filtered, which still carries an
+    # unfixed intermittent self-hit at ~0.12m — well inside any reasonable
+    # approach threshold. Expect this to make the robot pause more often
+    # than strictly necessary until that scan self-hit is actually fixed
+    # (see git history — the first attempt at that broke /scan_filtered
+    # outright and was reverted). Worst case here is over-caution, not
+    # reduced safety, so enabling anyway.
     polygons: ["FootprintApproach"]
     FootprintApproach:
       type: "polygon"
@@ -503,7 +519,7 @@ collision_monitor:
       simulation_time_step: 0.1
       min_points: 6
       visualize: False
-      enabled: False
+      enabled: True
     observation_sources: ["scan"]
     scan:
       type: "scan"
