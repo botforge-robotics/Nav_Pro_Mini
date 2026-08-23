@@ -257,8 +257,18 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      width: 5
-      height: 5
+      # 5 -> 6m by request: reacting to a moving obstacle earlier means
+      # seeing it earlier, and this rolling window — not obstacle_max_range
+      # below, which already reaches 5m from the sensor — is what actually
+      # caps that: a dynamic obstacle isn't visible to the local planner or
+      # collision_monitor at all until it crosses into this window, i.e.
+      # within half its width/height of the robot regardless of scan range.
+      # +1m each side is a real CPU cost (~44% more cells at this
+      # resolution) — not pushed further without checking it against the
+      # controller_frequency=10Hz note above, which already exists because
+      # this Pi was missing cycles at the nominal rate.
+      width: 6
+      height: 6
       resolution: 0.05
       # Physical diameter 25 cm → radius 0.125 m
       # 0.16, not 0.125. The chassis is 260mm across (0.13 radius), so the old
