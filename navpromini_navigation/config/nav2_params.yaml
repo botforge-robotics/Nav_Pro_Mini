@@ -350,8 +350,38 @@ planner_server:
     expected_planner_frequency: 5.0
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
-    # Global planner: NavFn (Dijkstra). use_astar:true = A*
+    # Smac 2D, not NavFn: both are A* over the same inflated costmap, so
+    # similar CPU cost — the difference is cost_travel_multiplier below,
+    # which lets a nonzero-cost cell be weighted far more than 1:1 against
+    # distance during search. NavFn has no equivalent knob, so in a
+    # corridor where the inflation gradient doesn't fully bridge the width
+    # it just takes whichever side comes out fractionally shorter — this is
+    # the standard fix for "path hugs one wall in a narrow corridor" without
+    # having to keep pushing inflation_radius (already fought once, see the
+    # cost_scaling_factor comment below: pushed too far, it seals doorways
+    # shut).
+    #
+    # NavFn kept below as GridBasedNavFn (not in planner_plugins, so
+    # unloaded) — revert by pointing planner_plugins/GridBased back there.
     GridBased:
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.10
+      allow_unknown: true
+      downsample_costmap: false
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      # Default is 2.0. Raised so any costed (near-wall) cell is penalized
+      # more heavily relative to raw distance — the direct lever for
+      # pulling the path toward the centre of free space instead of
+      # whichever side is marginally shorter. Moderate first step, not
+      # pushed further without seeing it run.
+      cost_travel_multiplier: 3.0
+      use_final_approach_orientation: false
+
+    # Not loaded (absent from planner_plugins above) — kept only so a
+    # revert to NavFn is a one-line change back to GridBased.
+    GridBasedNavFn:
       plugin: "nav2_navfn_planner::NavfnPlanner"
       # Tightened for goal accuracy — see update_min_a comment above.
       tolerance: 0.10
