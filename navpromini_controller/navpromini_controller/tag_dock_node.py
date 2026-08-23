@@ -152,6 +152,13 @@ class TagDockNode(Node):
         # while crooked is also how the dock gets pushed out of position.
         p('blind_max_dx_px', 60.0)
 
+        # Only trusted once the tag was last seen at blind_min_side_px or
+        # bigger, i.e. plausibly close enough to touch. Without that gate, a
+        # brief friction hiccup at approach_speed (0.02 m/s, barely above
+        # stall_speed_mps) reads as "stalled against the dock" from anywhere
+        # along the approach — measured live: declared contact at ~55cm out,
+        # centred and moving fine, then burned charge_confirm_sec doing
+        # nothing and wasted a full retry backing off from empty space.
         p('stall_speed_mps', 0.008)
         p('stall_confirm_sec', 1.0)
         p('stall_grace_sec', 2.5)
@@ -590,14 +597,17 @@ class TagDockNode(Node):
                 self._drive(-self._blind_speed, 0.0)
 
             spd = abs(self._odom.twist.twist.linear.x) if self._odom else 1.0
-            if (now - started > self._stall_grace
+            close_enough = self._last_side_px >= self._blind_min_side
+            if (close_enough
+                    and now - started > self._stall_grace
                     and travelled > self._stall_min_travel
                     and spd < self._stall_speed):
                 stalled_since = stalled_since or now
                 if now - stalled_since > self._stall_confirm:
                     self._stop()
                     self.get_logger().info(
-                        f'CONTACT: stalled at {travelled * 100:.0f}cm — '
+                        f'CONTACT: stalled at {travelled * 100:.0f}cm '
+                        f'(tag last {self._last_side_px:.0f}px) — '
                         'charging check decides')
                     return True
             else:
