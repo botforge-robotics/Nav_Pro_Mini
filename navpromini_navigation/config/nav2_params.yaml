@@ -117,7 +117,11 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       # Tightened for goal accuracy — see update_min_a comment above.
       xy_goal_tolerance: 0.08
-      yaw_goal_tolerance: 0.12
+      # 0.12 -> 0.17 by request: final yaw was regularly needing 2-3
+      # correction passes to settle inside 0.12rad (~6.9deg) before the goal
+      # was accepted. 0.17rad (~9.7deg) still reasonably tight, gives the
+      # rotate-to-heading step some room to actually finish in one pass.
+      yaw_goal_tolerance: 0.17
 
     # Regulated Pure Pursuit, not DWB+RotationShim: DWB scores 14x24=336
     # sampled trajectories every cycle, which is real CPU pressure on this
@@ -214,9 +218,10 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.04
       transform_tolerance: 0.3
-      # Tightened, matches general_goal_checker above.
+      # Matches general_goal_checker above (kept in sync in case of a
+      # revert back to this block).
       xy_goal_tolerance: 0.08
-      yaw_goal_tolerance: 0.12
+      yaw_goal_tolerance: 0.17
       trans_stopped_velocity: 0.03
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -274,8 +279,12 @@ local_costmap:
         # like. A gentler decay spreads the penalty across the whole inflation
         # radius and pushes paths off the walls.
         cost_scaling_factor: 3.0
-        # 0.30 still sealed this choke; ~0.20 = body + ~7 cm soft standoff
-        inflation_radius: 0.25
+        # 0.30 still sealed this choke; ~0.20 = body + ~7 cm soft standoff.
+        # Nudged 0.25 -> 0.28 by request after two clean, obstacle-free
+        # passes tonight gave some confidence there's a little room — still
+        # a good margin under the known-bad 0.30, not pushed further without
+        # re-testing the narrow choke this history is about.
+        inflation_radius: 0.28
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -331,7 +340,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.25
+        # Matches local_costmap's inflation_radius — see its comment for why.
+        inflation_radius: 0.28
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
