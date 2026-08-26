@@ -26,6 +26,12 @@ setup(
         'console_scripts': [
             'odom_node = navpromini_controller.odom_node:main',
             'battery_node = navpromini_controller.battery_node:main',
+            'dock_manager_node = navpromini_controller.dock_manager_node:main',
+            'camera_node = navpromini_controller.camera_node:main',
+            'dock_tag_node = navpromini_controller.dock_tag_node:main',
+            'tag_dock_node = navpromini_controller.tag_dock_node:main',
+            'system_monitor_node = navpromini_controller.system_monitor_node:main',
+            'app_data_store_node = navpromini_controller.app_data_store_node:main',
         ],
     },
 )

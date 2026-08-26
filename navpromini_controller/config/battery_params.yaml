@@ -3,7 +3,18 @@ navpromini_battery:
   ros__parameters:
     serial_port: /dev/battery_bms
     baudrate: 9600
-    rate_hz: 2.0
+    # 4Hz (2x the old 2Hz), which is the practical ceiling of this link, NOT
+    # the 4x that was asked for. The Daly driver issues ~10 register requests
+    # per cycle and the bus is RS485 at 9600 baud 8N1, so one 13-byte
+    # request+response costs ~27ms and a full cycle ~271ms — a hard floor of
+    # ~3.7Hz. Asking for 8Hz would only make the timer re-fire while the
+    # previous read is still on the wire, giving irregular publishing rather
+    # than faster publishing.
+    #
+    # To go genuinely faster, split the poll: read 0x90 (voltage/current/SOC)
+    # every cycle and the cell/temperature registers only every Nth. Charging
+    # detection only needs current, so that would allow 10Hz+ on the same bus.
+    rate_hz: 4.0
     frame_id: base_link
     # auto tries classic A5 UART/485 first, then Modbus RTU (slave 0xD2)
     protocol: auto

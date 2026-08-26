@@ -18,6 +18,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('start_slam', default_value='false'),
         DeclareLaunchArgument('start_nav', default_value='false'),
+        DeclareLaunchArgument('start_docking', default_value='false'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(ctrl_share, 'launch', 'robot.launch.py')
@@ -25,6 +26,7 @@ def generate_launch_description():
             launch_arguments={
                 'start_slam': LaunchConfiguration('start_slam'),
                 'start_nav': LaunchConfiguration('start_nav'),
+                'start_docking': LaunchConfiguration('start_docking'),
             }.items(),
         ),
         Node(

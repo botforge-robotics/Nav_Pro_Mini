@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>navpromini_launch_manager</name>
+  <version>1.0.0</version>
+  <description>Relocated from nav2_mission_planner: process supervision for the mapping/
+  navigation launch files (LaunchWithArgs/StopLaunch/GetMapList/DeleteMap), plus rosbridge
+  and rosapi so the Flutter app and any ROS-native client keep working independent of
+  navpromini_sdk. Camera streaming and tf2_buffer_server were dropped in the move — nothing
+  currently depends on either.</description>
+  <maintainer email="reachus@botforge.in">Botforge Robotics Pvt Ltd</maintainer>
+  <license>MIT</license>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <depend>nav2_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>navpromini_launch_manager_interfaces</depend>
+  <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>rosapi</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

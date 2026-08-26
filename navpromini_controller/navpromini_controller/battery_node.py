@@ -24,7 +24,7 @@ class BatteryNode(Node):
 
         self.declare_parameter('serial_port', '/dev/battery_bms')
         self.declare_parameter('baudrate', 9600)
-        self.declare_parameter('rate_hz', 2.0)
+        self.declare_parameter('rate_hz', 4.0)
         self.declare_parameter('frame_id', 'base_link')
         self.declare_parameter('protocol', 'auto')  # auto | a5 | modbus
         self.declare_parameter('nominal_capacity_ah', 0.0)
@@ -37,6 +37,13 @@ class BatteryNode(Node):
         self._nominal_ah = float(self.get_parameter('nominal_capacity_ah').value)
 
         self._pub_state = self.create_publisher(BatteryState, 'battery/state', 10)
+        # docking_server's use_battery_status looks for the plain,
+        # unremapped 'battery_state' topic — mirror the same message there
+        # too. (Started via stock nav2_bringup navigation_launch.py, not our
+        # own launch file, so we can't apply a launch-time remap to it —
+        # publishing under both names sidesteps that regardless of who ends
+        # up owning docking_server's lifecycle.)
+        self._pub_state_docking = self.create_publisher(BatteryState, 'battery_state', 10)
         self._pub_cells = self.create_publisher(Float32MultiArray, 'battery/cells', 10)
         self._pub_temps = self.create_publisher(Float32MultiArray, 'battery/temperatures', 10)
         self._pub_soc = self.create_publisher(Float32, 'battery/soc', 10)
@@ -131,8 +138,15 @@ class BatteryNode(Node):
             # BatteryState has cell_temperature in newer msgs; Jazzy has it
             if hasattr(msg, 'cell_temperature'):
                 msg.cell_temperature = [float(t) for t in snap.temperatures_c]
+            # Also fill the scalar `temperature` field with the hottest cell.
+            # The UI already subscribes to BatteryState for charge level, so
+            # populating this saves it a second subscription just to show a
+            # pack temperature, and hottest-cell is the number that actually
+            # matters for a thermal warning.
+            msg.temperature = float(max(snap.temperatures_c))
 
         self._pub_state.publish(msg)
+        self._pub_state_docking.publish(msg)
 
         cells = Float32MultiArray()
         cells.data = [float(v) for v in snap.cell_voltages_v]

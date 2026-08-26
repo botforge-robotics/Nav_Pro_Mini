@@ -1,0 +1,21 @@
+# Defaults for the NavProMini SDK server.
+# Override per-launch:  ros2 launch navpromini_sdk sdk.launch.py port:=8090
+navpromini_sdk:
+  ros__parameters:
+    # 8090 avoids the provisioning portal (80), web_video_server (8081)
+    # and rosbridge (9090).
+    port: 8090
+    address: "0.0.0.0"
+
+    # Bearer token required on every REST request and as ?token= on the
+    # WebSocket. Empty disables auth.
+    #
+    # Disabled by default so the first request anyone makes works. On any
+    # network that is not a trusted lab, SET THIS: without it, anyone who can
+    # reach the robot can drive it.
+    auth_token: ""
+
+    # Used to hold rosbridge's client_count above zero while the SDK owns a
+    # mapping/navigation launch — otherwise launch_manager stops those
+    # launches when the last UI disconnects. See client_hold.py.
+    rosbridge_url: "ws://127.0.0.1:9090"

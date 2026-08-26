@@ -24,5 +24,9 @@ setup(
     description='SLAM Toolbox mapping for NavProMini',
     license='Apache-2.0',
     tests_require=['pytest'],
-    entry_points={'console_scripts': []},
+    entry_points={
+        'console_scripts': [
+            'serialize_posegraph = navpromini_mapping.serialize_posegraph:main',
+        ],
+    },
 )

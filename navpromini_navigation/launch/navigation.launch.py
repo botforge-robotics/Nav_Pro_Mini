@@ -20,13 +20,16 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# Same folder used by map_saver.launch.py
-MAPS_DIR = os.path.join(
-    os.path.expanduser('~'),
-    'NavProMini_ws',
-    'src',
-    'navpromini_mapping',
-    'maps',
+# Prefer NAVPRO_MAPS_DIR (production), then legacy workspace path.
+MAPS_DIR = os.environ.get(
+    'NAVPRO_MAPS_DIR',
+    os.path.join(
+        os.path.expanduser('~'),
+        'NavProMini_ws',
+        'src',
+        'navpromini_mapping',
+        'maps',
+    ),
 )
 
 
