@@ -65,34 +65,49 @@ def _seed_pose_from_dock(bridge, state) -> None:
     off the dock — the dock's saved pose already IS the robot's pose, to
     within the docking approach's own tolerance.
 
-    Fires a few times over several seconds rather than once: AMCL is a
-    lifecycle node, and navigation_launch.launch.py reporting success only
-    means the *process* started, not that AMCL has a map yet and has
-    activated its `/initialpose` subscription — that can take a few seconds,
-    and a pose published before then is just dropped (the topic carries no
-    transient_local durability to catch a late subscriber). Each attempt
-    re-checks mode and dock status first, so a fast mode change or an
-    undock mid-window can't seed a now-stale pose.
-    """
-    status = bridge.get('dock_status')
-    if status not in ('charging', 'full'):
-        return
-    dock = bridge.get('dock_pose')
-    if not dock:
-        return
-    x, y, theta = dock['x'], dock['y'], dock['theta']
-    frame = dock.get('frame', 'map')
+    Fires a few times over the better part of a minute rather than once:
+    AMCL is a lifecycle node, and navigation_launch.launch.py reporting
+    success only means the *process* started, not that AMCL has a map yet
+    and has activated its `/initialpose` subscription — a pose published
+    before then is just dropped (the topic carries no transient_local
+    durability to catch a late subscriber). Confirmed live on this
+    hardware: AMCL doesn't even start warning "please set the initial
+    pose" until ~18s after navigation_launch starts, so the retry window
+    needs real margin past that, not just "a few seconds".
 
-    def _attempt(n: int) -> None:
-        if state.mode != 'navigation' or bridge.get('dock_status') not in ('charging', 'full'):
+    Both the dock-status and dock-pose checks live *inside* `_attempt`,
+    run fresh on every retry, rather than once up front before scheduling
+    any of them — `dock_manager_node` (the thing that actually reports
+    dock_status) is itself only just starting at the moment this function
+    is first called (switch_mode calls it the instant launch_manager
+    acknowledges navigation_launch *started*, long before any of its own
+    nodes are up), so `bridge.get('dock_status')` is essentially
+    guaranteed to be stale or None on that first synchronous check.
+    Gating the retries themselves on that check — instead of only gating
+    each individual publish — meant no retry was ever scheduled at all,
+    silently, on every single boot: confirmed live (AMCL sat un-seeded for
+    over two minutes, until a manual localize). A fast mode change or an
+    undock mid-window still can't seed a now-stale pose: each attempt
+    re-checks live state right before it publishes.
+    """
+    def _attempt(n: int, total: int) -> None:
+        if state.mode != 'navigation':
             return
+        if bridge.get('dock_status') not in ('charging', 'full'):
+            return
+        dock = bridge.get('dock_pose')
+        if not dock:
+            return
+        x, y, theta = dock['x'], dock['y'], dock['theta']
+        frame = dock.get('frame', 'map')
         bridge.publish_initial_pose(x, y, theta, frame)
         bridge.get_logger().info(
             f'seeded AMCL initial pose from the dock ({x:.2f}, {y:.2f}) — '
-            f'robot is docked, attempt {n}/3')
+            f'robot is docked, attempt {n}/{total}')
 
-    for n, delay in enumerate((1.0, 3.0, 6.0), start=1):
-        _once(bridge, delay, lambda n=n: _attempt(n))
+    delays = (2.0, 5.0, 10.0, 18.0, 28.0)
+    for n, delay in enumerate(delays, start=1):
+        _once(bridge, delay, lambda n=n: _attempt(n, len(delays)))
 
 
 def _resolve_active_map_name(bridge, state) -> None:
@@ -231,6 +246,13 @@ def reconcile_mode(bridge, state) -> None:
     state.set(observed, None, None)
     bridge.get_logger().info(f'mode reconciled from ROS graph: {observed} '
                              '(started outside the SDK)')
+    if observed == 'idle':
+        # Whatever launch was running (started outside the SDK, hence this
+        # whole reconcile path) just went away — see switch_mode's own
+        # invalidate call and RosBridge.invalidate's docstring for why a
+        # stale pose_map/dock_status left behind reads as confidently
+        # correct instead of unknown.
+        bridge.invalidate('pose_map', 'dock_status')
     if observed == 'navigation':
         _seed_pose_from_dock(bridge, state)
         _resolve_active_map_name(bridge, state)
@@ -270,6 +292,14 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
             await call_service(bridge.cli_stop, req, 'stop_launch', timeout=90.0)
             state.set('idle', None, None)
             opts['client_hold'].release()
+            # These belong to the launch instance that just stopped, not the
+            # robot as a whole — left cached, they'd read as a perfectly
+            # fresh, confidently wrong answer (LOCALIZED off a pose AMCL's
+            # *previous* instance published, a dock state from the
+            # dock_manager that just died) for as long as it takes whatever
+            # starts next to publish its own first message. See
+            # RosBridge.invalidate's docstring.
+            bridge.invalidate('pose_map', 'dock_status')
 
         if mode == 'idle':
             return {'mode': 'idle'}

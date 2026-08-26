@@ -3,6 +3,7 @@ import rclpy
 from rclpy.node import Node
 from navpromini_launch_manager_interfaces.srv import LaunchWithArgs, StopLaunch, GetMapList, DeleteMap
 import subprocess
+import threading
 from collections import OrderedDict
 import os
 import signal
@@ -210,7 +211,9 @@ class LaunchManager(Node):
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                # Merged into stdout: one pipe, one reader thread below,
+                # and neither stream is ever left undrained.
+                stderr=subprocess.STDOUT,
                 text=True,
                 start_new_session=True
             )
@@ -220,12 +223,30 @@ class LaunchManager(Node):
 
             # Check if process started successfully
             if process.poll() is not None:
-                stderr_output = process.stderr.read()
+                output = process.stdout.read()
                 response.success = False
-                response.message = f"Process failed to start: {stderr_output}"
+                response.message = f"Process failed to start: {output}"
                 response.unique_id = ""
                 self.get_logger().error(response.message)
                 return response
+
+            # Continuously drain stdout/stderr into this node's own logger
+            # for the rest of this launch's life — previously nobody ever
+            # read this pipe once the process was confirmed alive, which
+            # meant every node started this way (Nav2's planner/controller/
+            # bt_navigator, dock_manager, camera, tag_dock, ...) was
+            # completely invisible in journalctl: systemd only captures a
+            # direct child's *inherited* stdout/stderr fd, not one manually
+            # piped here and never drained. Beyond visibility, an unread
+            # pipe also risks the child blocking on write() once the OS
+            # pipe buffer (64KB) fills — a real hang risk for something as
+            # long-running and chatty as the nav stack. See
+            # _stream_launch_output for the reader itself.
+            threading.Thread(
+                target=self._stream_launch_output,
+                args=(unique_id, process),
+                daemon=True,
+            ).start()
 
             # Store process information for async launches
             self.active_launches[unique_id] = {
@@ -252,6 +273,30 @@ class LaunchManager(Node):
             self.get_logger().error(response.message)
 
         return response
+
+    def _stream_launch_output(self, unique_id: str, process: subprocess.Popen) -> None:
+        """Reader-thread body: forwards a launched process's combined
+        stdout/stderr to this node's own logger, line by line, tagged with
+        the launch id so it's obvious which launch a given line came from
+        when several are active. `.readline()` blocks, hence its own
+        thread — rclpy's logger is safe to call off the main thread. Exits
+        on its own once the process closes its stdout (normal exit, or
+        after stop_callback/_on_zero_client_grace_elapsed kills it) — no
+        separate shutdown signalling needed.
+        """
+        tag = unique_id[:8]
+        try:
+            for line in iter(process.stdout.readline, ''):
+                self.get_logger().info(f'[{tag}] {line.rstrip()}')
+        except Exception as e:  # noqa: BLE001 — a dead logger thread should
+            # never take the launch down with it; just say so and stop.
+            self.get_logger().debug(
+                f"Output reader for {tag} stopped: {e}")
+        finally:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
 
     def stop_callback(self, request, response):
         self.get_logger().debug(

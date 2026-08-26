@@ -87,27 +87,129 @@ class TagDockNode(Node):
         # the approach started off-axis, which is exactly the observed
         # "reaches the funnel turned the wrong way and inclined to the dock".
         # Squaring up needs the face orientation as well — the standard
-        # differential-drive parking law is w = k_alpha*alpha + k_beta*beta.
+        # differential-drive parking law is w = k_alpha*alpha - k_beta*beta
+        # (k_beta a positive magnitude, subtracted — see _approach's own
+        # comment on the sign), where beta is NOT the raw heading signal on
+        # its own (an earlier version of this file used it that way — see
+        # _approach's own comment on why that's wrong) but
+        # beta = alpha + theta: coupled to alpha, per the closed-loop
+        # unicycle-parking result this is actually named after (Aicardi,
+        # Casalino, Bicchi, Balestrino 1995). Squaring up and centring are
+        # not independent goals for a
+        # nonholonomic vehicle — correcting one changes the other — and
+        # decoupling them is what let a large-but-real skew fight alpha's
+        # own convergence instead of complementing it.
         #
-        # beta is derived from skew, the signed difference between the tag's
-        # two vertical edge lengths: a square-on view gives 0, and the nearer
-        # edge projects longer as the view angle grows. Gain is deliberately
-        # well below k_alpha — beta corrects the final heading, and letting it
-        # dominate makes the robot swing wide instead of closing in.
-        p('k_beta', 0.9)
+        # theta (the raw heading signal beta is built from) comes from
+        # skew, the signed difference between the tag's two vertical edge
+        # lengths: a square-on view gives 0, and the nearer edge projects
+        # longer as the view angle grows. Gain is deliberately well below
+        # k_alpha — heading is the secondary correction here, and letting
+        # it dominate makes the robot swing wide instead of closing in.
+        #
+        # "Well below" matters quantitatively now that beta is properly
+        # coupled (beta = alpha + theta, see _approach): the *net* reaction
+        # to alpha works out to (k_alpha - k_beta)*alpha - k_beta*theta, so
+        # if k_beta sits anywhere close to k_alpha, that net alpha term
+        # collapses toward zero. Confirmed live at the previous value
+        # (0.9, only 25% below k_alpha's 1.2): alpha and theta grow
+        # together as the robot drifts off-centre (the same drift skews
+        # the tag's face too), so their contributions nearly cancelled —
+        # logged sitting at a=-0.402 b=+0.388 -> w=-0.013 for a dozen
+        # consecutive samples with dx frozen at 234px, essentially no net
+        # correction while badly off-centre. Dropping k_beta here keeps
+        # (k_alpha - k_beta) comfortably dominant so that cancellation
+        # can't happen regardless of how alpha and theta happen to align.
+        #
+        # 0.3 swung too far the other way: confirmed live, dx stayed well
+        # controlled (good — (k_alpha-k_beta)=0.9 is plenty dominant) but
+        # skew climbed steadily anyway — 0.094 to 0.181 over ~16s while w
+        # never exceeded 0.06 — because whenever alpha is already small,
+        # (k_alpha-k_beta)*alpha is tiny too and k_beta*theta is nearly the
+        # *only* thing reacting to heading drift; 0.3*theta wasn't enough
+        # authority to keep up with it, ending "jammed against the guide
+        # funnel, not seated". Splitting the difference: still leaves
+        # (k_alpha - k_beta)=0.65 comfortably dominant, well short of the
+        # 0.9 value that let alpha and beta cancel, while roughly doubling
+        # theta's own correction authority against real drift.
+        #
+        # 0.55 -> 0.62: a live run still showed theta climbing to +0.069
+        # rad on one approach (contact 3x without charging before the
+        # retry limit forced a full restart from staging) — same shape as
+        # the 0.3 failure above, just less severe. A second attempt in the
+        # same session stayed under blind_max_skew and mated fine, so this
+        # is marginal rather than broken. Small nudge for more authority;
+        # (k_alpha - k_beta) drops to 0.58, still comfortably clear of the
+        # 0.9 cancellation zone. Re-tune in small steps from here — do not
+        # jump straight back toward 0.9.
+        #
+        # 0.62 -> 0.68: still not enough on the very next run — skew hit
+        # the blind_max_skew (0.05) gate three separate times (0.060,
+        # 0.065, 0.053), every time backing off before ever reaching
+        # CONTACT, and the whole action errored out after 4 approach
+        # sub-attempts. Same direction of fix, another small step;
+        # (k_alpha - k_beta) drops to 0.52 — still positive and dominant,
+        # but getting closer to the range worth watching for the
+        # alpha/beta cancellation this file warns about. If 0.68 is still
+        # not enough, look at why the initial bearing entering approach is
+        # so large first (this run started at +448px/33.7deg and
+        # -282px/22.8deg — much worse than earlier runs) rather than
+        # keep raising k_beta past this.
+        p('k_beta', 0.68)
+        # Live data at 0.68 showed WHY raising k_beta further is the wrong
+        # lever: during the close-in growth phase the logged a/b components
+        # (k_alpha*alpha and -k_beta*beta) were nearly opposite —
+        # a=-0.173 b=+0.143 -> w=-0.030 — the same cancellation this file's
+        # own history already warned about at k_beta=0.9, just not fully
+        # there yet. Raising k_beta more only pushes closer to that.
+        #
+        # By request: correct heading EARLY, while there's still standoff
+        # distance/arc room to do it with, rather than only fighting it out
+        # close-in where there's little room left and cancellation eats
+        # the correction. This boosts k_beta's effective value while far
+        # (side_px small, near tag acquisition) and linearly tapers it back
+        # to the plain k_beta above by close_slow_side_px — so the
+        # already-tested close-in behavior is unchanged; this only adds
+        # authority earlier, where there's actual room to use it. 0.5 = up
+        # to 50% more at side_px~0, clamped in _approach so the effective
+        # k_beta can never approach k_alpha (the actual cancellation
+        # danger zone).
+        p('k_beta_far_boost', 0.5)
         # skew is a ratio, not an angle. This converts it to something the
         # same order as alpha so the two gains are comparable.
         p('skew_to_rad', 1.5)
-        # Simulated both signs through the closed-loop kinematics: -1
-        # converges to centred and within +/-2.6deg from every start tested,
-        # while +1 DIVERGES to 30-35deg. Still auto-checked on hardware rather
-        # than trusted, because the sim assumes a skew->angle mapping that
-        # depends on how the tag is mounted, and getting it wrong steers the
-        # robot into the dock at an angle.
-        p('beta_sign', -1)
-        p('beta_autocalibrate', True)
+        # That old simulation (-1 converges, +1 diverges) predates beta's
+        # coupling to alpha (beta = alpha + theta, see _approach's own
+        # comment) and doesn't apply to this formula. Flipped to +1 on a
+        # direct hardware report, watching the robot: with -1, a skew of
+        # e.g. -15deg was being driven toward +15deg before coming back
+        # rather than toward 0 — corrected in the wrong direction first.
+        # Plausibly related to this robot's specific kinematics (driven
+        # wheels at the front, a passive trailing caster at the back where
+        # the dock/camera are — not a centred differential pair), which the
+        # unicycle-style derivation beta = alpha + theta doesn't model; a
+        # geometry-driven sign flip specific to the coupled formula is
+        # consistent with -1 having worked fine for the old, uncoupled one.
+        #
+        # Autocalibrate is now OFF, deliberately: its "does |skew| grow or
+        # shrink" check can't distinguish "beta's own sign is wrong" from
+        # "alpha's own correction is dominating and masking it" now that
+        # the two are coupled — exactly the ambiguity that let a wrong
+        # value read as "confirmed" before. A direct report of which way it
+        # actually drove is better evidence than that heuristic; trust it
+        # over letting the runtime check silently re-flip this back.
+        p('beta_sign', 1)
+        p('beta_autocalibrate', False)
         p('beta_deadband', 0.02)       # ignore noise around square-on
-        p('max_omega', 0.35)
+        # 0.35 -> 0.25 by request. A live run showed SEARCH acquiring the
+        # tag at ~37deg off-axis (twice — SEARCH stops sweeping as soon as
+        # it first sees the tag, not once it's centred), and the servo
+        # commanding w up to 0.338 rad/s — right at the old 0.35 cap — to
+        # correct it, a fast, hard rotation right at the start of approach.
+        # Softer cap trades correction speed for a gentler turn; it will
+        # take longer to null a big initial bearing, not fail to null it
+        # (alpha's own gain still drives it, just slower at the extreme).
+        p('max_omega', 0.25)
         p('omega_slew', 1.2)           # rad/s^2, keeps the arc smooth
         # Ease off the throttle while badly off-axis so the turn leads the
         # approach rather than the robot committing to a crooked line.
@@ -144,6 +246,16 @@ class TagDockNode(Node):
         # margin and give it enough push through the funnel; still far
         # slower than approach_speed (0.02).
         p('blind_speed', 0.018)
+        # By request: the blind-creep heading nudge (added after 3/4
+        # attempts reached CONTACT but none seated) should be a very minor
+        # correction, not an attempt to fully null the residual error —
+        # there is no live measurement to center against here, only a
+        # dead-reckoned guess from the last real reading, and a confident
+        # guess is worse than none. Small dedicated gain (well under
+        # k_beta) and a tight cap, both independent of the live approach
+        # gains so tuning k_beta later doesn't silently change this too.
+        p('blind_nudge_gain', 0.20)
+        p('blind_nudge_max_frac', 0.10)  # of max_omega
         # Losing the tag only means "close" if it was BIG just before it went.
         # Losing a small tag means it went out of frame sideways, or the
         # camera was occluded — pushing blind on that would drive the robot
@@ -166,7 +278,37 @@ class TagDockNode(Node):
         # yet never charged. Confirmed by watching it happen: the robot
         # entered the dock's guide funnel on an incline and jammed against
         # it, never reaching the pins. Neither dx nor side_px catches that.
-        p('blind_max_skew', 0.05)
+        # 0.05 -> 0.07: small increase by request. Recent live runs (with
+        # k_beta already raised to 0.68 and staging standoff back to 0.75m)
+        # were still backing off on skew that only just missed 0.05 —
+        # 0.050, 0.053, 0.060, 0.065 — costing a full retry each time even
+        # though those are close, not the badly-crooked 0.085-0.117 case
+        # this gate was originally sized to catch. 0.07 lets the near-miss
+        # cases creep in blind while still rejecting anything in that
+        # original bad range. If jamming against the guide funnel shows up
+        # again at values in the new 0.05-0.07 band, that's this gate
+        # having been opened too far — tighten back toward 0.05 rather
+        # than reaching for k_beta again.
+        p('blind_max_skew', 0.07)
+        # Eases approach speed down further as the tag fills the frame, on
+        # top of alpha's own bearing-based slowdown below — that one only
+        # reacts to angular error, not proximity, so a well-centred
+        # approach kept closing at full speed even in the final stretch,
+        # giving the servo loop proportionally less time to correct a
+        # residual drift before pixel-sensitivity to a given real-world
+        # offset ramps up (the closer the camera, the more px a fixed cm of
+        # lateral error produces). Confirmed live: dx converging to
+        # ~30-40px mid-approach, then growing back past blind_max_dx_px
+        # specifically as side_px closed in past ~400-500px — losing an
+        # otherwise-good approach right at the finish line, not from a bad
+        # sign or a genuinely crooked line. Ramps from full speed at this
+        # value down to min_speed_frac at blind_min_side_px, so by the time
+        # it's close enough to actually go blind it's already moving at the
+        # same floor alpha's own slowdown uses — more correction time
+        # exactly where the log showed it was being lost, without loosening
+        # blind_max_dx_px itself (that one's tightened for a real,
+        # measured reason — see its own comment).
+        p('close_slow_side_px', 250.0)
 
         # Only trusted once the tag was last seen at blind_min_side_px or
         # bigger, i.e. plausibly close enough to touch. Without that gate, a
@@ -189,32 +331,63 @@ class TagDockNode(Node):
         # needs to sweep the camera past the dock, and this robot's odometry
         # under-reports in-place rotation badly enough that an odometry sweep
         # would be the wrong size. Coverage is what matters here, not angle.
-        p('search_omega', 0.25)
-        p('search_leg_sec', 4.0)       # ~57deg per leg at 0.25 rad/s
+        # 0.25 -> 0.15 by request: _search_for_tag stops the instant the tag
+        # is first decodable (checked every tick) and then sleeps 0.6s "to
+        # let the base settle" before the first bearing is read — but a
+        # faster sweep has more angular momentum to bleed off in that
+        # window, so the base keeps drifting past the point it was actually
+        # acquired at. Live logs showed SEARCH landing on a first bearing of
+        # ~37deg off-axis twice — plausibly this settle-drift, not the tag
+        # only becoming decodable that far off-axis. Slower sweep, less to
+        # bleed off, tighter first-bearing reading.
+        #
+        # search_leg_sec scaled up to match (4.0 -> 6.7): keeps the same
+        # ~57deg-per-leg angular coverage this was originally sized for
+        # (span = search_omega * search_leg_sec) — slowing the sweep alone
+        # without this would shrink coverage per leg and could cost search
+        # reliability within search_max_sec, which is not what was asked.
+        p('search_omega', 0.15)
+        p('search_leg_sec', 6.7)       # ~57deg per leg at 0.15 rad/s
         p('search_max_sec', 40.0)
 
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self._tag_timeout = float(g('tag_timeout_sec'))
         self._k_alpha = float(g('k_alpha'))
         self._k_beta = float(g('k_beta'))
+        self._k_beta_far_boost = float(g('k_beta_far_boost'))
         self._skew_to_rad = float(g('skew_to_rad'))
         self._beta_sign = 1.0 if int(g('beta_sign')) >= 0 else -1.0
         self._beta_autocal = bool(g('beta_autocalibrate'))
         self._beta_checked = False
         self._beta_deadband = float(g('beta_deadband'))
+        # Minimum |skew| before the one-shot beta-sign check arms its 3s
+        # confirmation window — see the check itself, in _approach. Well
+        # above beta_deadband (0.02): that deadband only screens out pure
+        # noise, not a borderline-but-real skew too small to say with any
+        # confidence which way squaring up should turn.
+        self._beta_check_min_skew0 = 0.08
         self._max_omega = float(g('max_omega'))
         self._omega_slew = float(g('omega_slew'))
         self._alpha_slow = float(g('alpha_slow_rad'))
         self._min_speed_frac = float(g('min_speed_frac'))
         self._sign = 1.0 if int(g('rotate_sign')) >= 0 else -1.0
         self._sign_checked = False
+        # Minimum |dx| (px) before the one-shot sign check even starts
+        # timing its 2.5s window — see the check itself, in _approach, for
+        # why a near-zero starting bearing must not be trusted to decide
+        # the sign. Comfortably above sensor/frame noise, well below a
+        # deliberately off-centre approach.
+        self._sign_check_min_dx0 = 40.0
         self._speed = float(g('approach_speed'))
         self._max_travel = float(g('max_travel_m'))
         self._blind_final = float(g('blind_final_m'))
         self._blind_speed = float(g('blind_speed'))
+        self._blind_nudge_gain = float(g('blind_nudge_gain'))
+        self._blind_nudge_max_frac = float(g('blind_nudge_max_frac'))
         self._blind_min_side = float(g('blind_min_side_px'))
         self._blind_max_dx = float(g('blind_max_dx_px'))
         self._blind_max_skew = float(g('blind_max_skew'))
+        self._close_slow_side_px = float(g('close_slow_side_px'))
         self._last_dx_px = 0.0
         self._last_side_px = 0.0
         self._last_skew = 0.0
@@ -485,7 +658,31 @@ class TagDockNode(Node):
         origin = self._xy()
         if origin is None:
             return
-        deadline = time.monotonic() + 20.0
+        # Extend the backoff distance when starting from a large skew.
+        # _backoff is a fixed distance, so it hands every entry the same
+        # limited room to straighten out regardless of how much correction
+        # is actually needed — but a badly-skewed entry is exactly the case
+        # this steering exists for (see the class doc above). Live-observed:
+        # successive retries starting progressively worse (13.5deg -> 22deg
+        # -> 37deg) rather than converging, consistent with the fixed
+        # distance running out before heading actually improved much, not
+        # with the steering being wrong. Up to 2x distance for a decisively
+        # bad starting skew; unchanged when skew is small or the tag isn't
+        # visible yet to judge by (same _beta_check_min_skew0 threshold the
+        # sign-flip check below already uses to mean "a real signal, not
+        # noise").
+        backoff_m = self._backoff
+        start_tag = self._tag_now()
+        if start_tag is not None:
+            start_skew = abs(float(start_tag[6]))
+            if start_skew > self._beta_check_min_skew0:
+                extra_frac = min(1.0, (start_skew - self._beta_check_min_skew0) / 0.15)
+                backoff_m = self._backoff * (1.0 + extra_frac)
+                self.get_logger().info(
+                    f'BACKOFF: starting skew {start_skew:+.3f} — extending '
+                    f'backoff {self._backoff:.2f}m -> {backoff_m:.2f}m for more '
+                    'room to straighten out')
+        deadline = time.monotonic() + max(20.0, backoff_m / max(self._speed, 1e-3) + 5.0)
         omega = 0.0
         # _approach() drives in REVERSE (negative speed, camera end leading)
         # while this drives FORWARD (positive speed, camera end trailing) —
@@ -502,7 +699,7 @@ class TagDockNode(Node):
         beta_checked = False
         beta_t0 = None
         beta_skew0 = None
-        while self._travelled(origin) < self._backoff:
+        while self._travelled(origin) < backoff_m:
             if time.monotonic() > deadline:
                 break
             tag = self._tag_now()
@@ -512,8 +709,14 @@ class TagDockNode(Node):
                 if abs(skew) > self._beta_deadband:
                     if not beta_checked:
                         now = time.monotonic()
+                        # Same fragility as _approach()'s own beta check,
+                        # same fix: arm the confirmation window only off a
+                        # clearly-decisive starting skew, not anything past
+                        # the plain noise deadband — see
+                        # _beta_check_min_skew0's own doc.
                         if beta_t0 is None:
-                            beta_t0, beta_skew0 = now, skew
+                            if abs(skew) > self._beta_check_min_skew0:
+                                beta_t0, beta_skew0 = now, skew
                         elif now - beta_t0 > 2.0:
                             beta_checked = True
                             if abs(skew) > abs(beta_skew0) + 0.03:
@@ -553,6 +756,7 @@ class TagDockNode(Node):
         omega = 0.0
         stalled_since = None
         blind_from = None
+        blind_omega = 0.0
         sign_t0 = None
         sign_dx0 = None
         beta_t0 = None
@@ -580,11 +784,26 @@ class TagDockNode(Node):
             if tag is not None:
                 blind_from = None
                 dx, alpha = float(tag[2]), float(tag[5])
+                side_px = float(tag[4])
                 skew = float(tag[6])
 
-                # One-shot sign check over the first ~2.5s of motion.
+                # One-shot sign check over the first ~2.5s of motion — but
+                # only once the starting bearing is a real signal, not
+                # noise. Confirmed live: this locked in a flip off a
+                # dx0 of -15.2px (~1.3deg, right at the noise floor), and
+                # every approach afterwards diverged instead of converging
+                # for the rest of the process's life — the near-zero
+                # starting offset barely constrained which way was
+                # actually correct, so it shouldn't have been trusted to
+                # decide anything. Waiting for a clearly-off-centre
+                # starting dx before even arming the window is what should
+                # have stopped that: a later attempt (this one, or the
+                # next) still gets to calibrate once a real signal shows
+                # up, same as before, just not off a coin-flip.
                 if not self._sign_checked:
-                    if sign_t0 is None:
+                    if abs(dx) < self._sign_check_min_dx0:
+                        pass
+                    elif sign_t0 is None:
                         sign_t0, sign_dx0 = now, dx
                     elif now - sign_t0 > 2.5:
                         self._sign_checked = True
@@ -598,18 +817,30 @@ class TagDockNode(Node):
                                 f'TAG: sign confirmed ({abs(sign_dx0):.0f}->'
                                 f'{abs(dx):.0f}px)')
 
-                # beta: how far the dock face is from square-on. Deadbanded so
-                # sensor noise near square does not add a permanent bias.
-                beta = 0.0
+                # theta: the dock face's own heading error relative to the
+                # robot, straight from skew (how far from square-on the
+                # view is) — deadbanded so sensor noise near square doesn't
+                # add a permanent bias. beta_sign is the same class of
+                # hardware fact _sign is for alpha — which way skew maps to
+                # a real angle depends on how the tag/camera are physically
+                # mounted and can't be derived from the image alone, so
+                # it's verified empirically below, same as _sign is.
+                theta = 0.0
                 if abs(skew) > self._beta_deadband:
-                    beta = (skew * self._skew_to_rad * self._beta_sign
-                            * self._sign)
-                # Same one-shot check as for alpha: if |skew| is growing, the
-                # heading term is fighting the geometry rather than correcting
-                # it, so flip and carry on.
+                    theta = skew * self._skew_to_rad * self._beta_sign
+                # Same one-shot check as for alpha, and the same fragility
+                # fixed there: arming this off anything above the plain
+                # noise deadband (0.02) let it "confirm" the sign off a
+                # borderline, barely-there skew — then a later approach
+                # with a genuinely large starting skew would show it was
+                # wrong all along (confirmed live: skew climbing instead of
+                # shrinking, well after this had already locked in
+                # "confirmed"). Requiring a clearly-decisive starting skew
+                # before even arming the window is what should have caught
+                # that, same reasoning as _sign_check_min_dx0.
                 if self._beta_autocal and not self._beta_checked:
                     if beta_t0 is None:
-                        if abs(skew) > self._beta_deadband:
+                        if abs(skew) > self._beta_check_min_skew0:
                             beta_t0, beta_skew0 = now, skew
                     elif now - beta_t0 > 3.0:
                         self._beta_checked = True
@@ -624,23 +855,81 @@ class TagDockNode(Node):
                                 f'TAG: beta sign confirmed '
                                 f'({abs(beta_skew0):.3f}->{abs(skew):.3f})')
 
-                target = self._sign * self._k_alpha * alpha + self._k_beta * beta
+                # beta: the standard differential-drive parking law's own
+                # heading term (see k_beta's own doc, above, for "w =
+                # k_alpha*alpha + k_beta*beta") — NOT theta directly, which
+                # this used to use in its place. beta is the heading error
+                # the robot would arrive with if it nulled alpha by
+                # rotating in place and then drove straight in without
+                # turning again: driving straight preserves heading, so
+                # that arrival heading is just the current bearing to the
+                # tag (alpha) plus the current heading error (theta) —
+                # beta = alpha + theta. Verified by direct construction,
+                # not just recalled: see the standalone geometry check this
+                # was worked through against before touching this file.
+                # For a nonholonomic vehicle, centring and squaring up
+                # aren't independent goals — correcting one changes the
+                # other — which is exactly what an uncoupled `beta = theta`
+                # missed. Confirmed live why that matters: a small starting
+                # skew converged fine because alpha was doing all the real
+                # work and theta rode along for it, but once skew was large
+                # enough for its own term to have real authority, it fought
+                # alpha instead of complementing it and the approach
+                # diverged, worse the longer it ran.
+                #
+                # The classical result (Aicardi, Casalino, Bicchi,
+                # Balestrino 1995) requires beta's gain to act with the
+                # opposite sign from alpha's for closed-loop stability —
+                # k_beta is kept as a positive *magnitude* (matching its
+                # existing tuning/doc above) and subtracted here, rather
+                # than folding a sign into k_beta itself, so both gains
+                # read as plain positive weights.
+                beta = alpha + theta
+                # Boost heading-correction authority while far (side_px
+                # small — plenty of standoff distance/arc room left),
+                # tapering back to the plain, already-tested k_beta by
+                # close_slow_side_px so nothing changes in the close-in
+                # stretch this was tuned against. See k_beta_far_boost's
+                # own doc. Clamped so effective k_beta can never reach
+                # k_alpha — that cancellation is the actual failure mode
+                # being avoided here, not something to risk reintroducing
+                # while trying to fix it.
+                k_beta_now = self._k_beta
+                if side_px < self._close_slow_side_px:
+                    far_frac = 1.0 - (side_px / max(self._close_slow_side_px, 1e-3))
+                    k_beta_now = self._k_beta * (1.0 + far_frac * self._k_beta_far_boost)
+                    k_beta_now = min(k_beta_now, self._k_alpha - 0.2)
+                target = self._sign * (self._k_alpha * alpha
+                                        - k_beta_now * beta)
                 target = max(-self._max_omega, min(self._max_omega, target))
                 step = self._omega_slew * _TICK
                 omega += max(-step, min(step, target - omega))
 
                 frac = max(self._min_speed_frac,
                            1.0 - abs(alpha) / max(self._alpha_slow, 1e-3))
-                v = self._speed * min(1.0, frac)
+                # See close_slow_side_px's own doc: ramps down further, on
+                # top of alpha's own slowdown above, as the tag fills the
+                # frame — reaching min_speed_frac by blind_min_side_px, the
+                # same point the approach goes blind anyway.
+                proximity_frac = 1.0
+                if side_px > self._close_slow_side_px:
+                    proximity_frac = max(
+                        self._min_speed_frac,
+                        1.0 - (side_px - self._close_slow_side_px)
+                        / max(self._blind_min_side - self._close_slow_side_px,
+                              1e-3),
+                    )
+                v = self._speed * min(1.0, frac, proximity_frac)
                 self._drive(-v, omega)
 
                 if now - last_log > 2.0:
                     last_log = now
                     self.get_logger().info(
                         f'SERVO: dx={dx:+6.1f}px ({math.degrees(alpha):+5.1f}deg) '
-                        f'side={tag[4]:.0f}px skew={skew:+.3f} '
+                        f'side={tag[4]:.0f}px skew={skew:+.3f} theta={theta:+.3f} '
                         f'(a={self._sign * self._k_alpha * alpha:+.3f} '
-                        f'b={self._k_beta * beta:+.3f}) -> '
+                        f'b={self._sign * -k_beta_now * beta:+.3f}'
+                        f'{" *" if k_beta_now != self._k_beta else ""}) -> '
                         f'v={-v:+.3f} w={omega:+.3f}')
             else:
                 here = self._xy()
@@ -666,19 +955,46 @@ class TagDockNode(Node):
                             'instead of creeping in crooked')
                         return False
                     blind_from = here
+                    # Small, capped, dead-reckoned heading correction from
+                    # the last real skew reading — not live feedback (there
+                    # is none here), so this is a one-shot nudge held for
+                    # the whole blind stretch, not a controller. Contact was
+                    # being reached reliably (see the far-boost/backoff
+                    # fixes above) but consistently failing "not seated"
+                    # afterward — the last 5-10cm run dead straight with
+                    # zero correction on a residual heading error that was
+                    # small on screen (2-5deg) but apparently still enough
+                    # to miss seating the connector. Own small gain and cap
+                    # (blind_nudge_gain/_max_frac) — deliberately NOT
+                    # k_beta/max_omega: this must stay a minor nudge, not an
+                    # attempt to fully null the error the way live approach
+                    # steering does, and must not silently change if those
+                    # live gains get retuned later.
+                    if abs(self._last_skew) > self._beta_deadband:
+                        last_theta = (self._last_skew * self._skew_to_rad
+                                      * self._beta_sign)
+                        blind_omega = self._sign * (
+                            -self._blind_nudge_gain * last_theta)
+                        blind_cap = self._max_omega * self._blind_nudge_max_frac
+                        blind_omega = max(-blind_cap, min(blind_cap, blind_omega))
+                    nudge_note = (
+                        f' (holding {blind_omega:+.3f} rad/s from last known '
+                        f'skew {self._last_skew:+.3f})' if blind_omega else '')
                     self.get_logger().info(
                         f'APPROACH: tag filled the frame at '
                         f'{self._last_side_px:.0f}px and dropped out — creeping '
                         f'the last {self._blind_final * 100:.0f}cm at '
-                        f'{self._blind_speed * 100:.1f}cm/s to find the contacts')
+                        f'{self._blind_speed * 100:.1f}cm/s to find the '
+                        f'contacts{nudge_note}')
                 elif math.dist(here, blind_from) > self._blind_final:
                     self._stop()
                     self.get_logger().warn(
                         'APPROACH: blind allowance used up without charging')
                     return False
-                # Straight and slow: no steering without a measurement.
-                omega = 0.0
-                self._drive(-self._blind_speed, 0.0)
+                # Slow, and only the one dead-reckoned nudge above (if any)
+                # — no live steering without a measurement.
+                omega = blind_omega
+                self._drive(-self._blind_speed, blind_omega)
 
             spd = abs(self._odom.twist.twist.linear.x) if self._odom else 1.0
             close_enough = self._last_side_px >= self._blind_min_side

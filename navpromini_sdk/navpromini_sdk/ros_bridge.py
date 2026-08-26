@@ -186,6 +186,25 @@ class RosBridge(Node):
             return None, None
         return entry[0], round(time.time() - entry[1], 3)
 
+    def invalidate(self, *keys: str) -> None:
+        """Drop cached values that belong to a specific launch instance
+        rather than the robot as a whole — 'pose_map' (`/amcl_pose`) and
+        'dock_status' in particular, which switch_mode() clears whenever it
+        stops the running launch. Without this, a value from the *previous*
+        AMCL/dock_manager process instance sits in the cache looking
+        perfectly fresh (get_with_age has nothing to compare against but
+        wall-clock time) for as long as it takes the new instance to
+        publish its own first message — during which every consumer
+        (GET /api/v1/state's 'localization.status', dock/status) reports a
+        confident, wrong answer instead of 'unknown'. Confirmed live: the
+        app read LOCALIZED for two minutes straight while AMCL genuinely
+        had no pose at all, off a pose_map entry left over from before this
+        navigation_launch instance even started.
+        """
+        with self._lock:
+            for key in keys:
+                self._cache.pop(key, None)
+
     def add_listener(self, fn: Callable[[str, Any], None]) -> None:
         self._listeners.append(fn)
 

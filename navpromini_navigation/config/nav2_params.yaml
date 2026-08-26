@@ -1,5 +1,18 @@
 amcl:
   ros__parameters:
+    # Left alone despite Zheng's "ROS Navigation Tuning Guide" (kaiyuzheng.me
+    # /documents/navguide.pdf §5.2) suggesting low alpha values (~0.005) once
+    # odometry is known reliable, and high ones otherwise — his own finding
+    # was tighter, more condensed particles either way. That advice assumes
+    # a robot where wheel odometry alone tracks motion; this one's drive
+    # wheels are at the front with a passive trailing caster at the back
+    # (see tag_dock_node.py's own docs on this — it's the same kinematics
+    # that needed the docking control law fixed for). A caster scrubs/drags
+    # during in-place rotation specifically, which is exactly what
+    # odometry-based dead reckoning can't see or correct for — that's a real
+    # unmodelled noise source these already-elevated values are the
+    # appropriate hedge against, not a case for lowering them without first
+    # actually measuring odometry drift against known ground truth.
     alpha1: 0.20
     alpha2: 0.20
     alpha3: 0.25
@@ -12,7 +25,15 @@ amcl:
     do_beamskip: false
     global_frame_id: "map"
     lambda_short: 0.1
-    laser_likelihood_max_dist: 2.0
+    # 2.0 -> 4.0, matching Zheng §5.2's own tuned value exactly (their
+    # default was the same 2.0 this started from) — a larger search radius
+    # for the nearest mapped obstacle per beam gives a smoother, more
+    # forgiving match against sensor/map noise. max_particles was
+    # independently cut on this same Pi for CPU reasons (see its own
+    # comment) — if that combination ever starves the local costmap's
+    # 5Hz again, the fix is trading particles for this, not hedging this
+    # number down first: this is what the guide's own case actually needed.
+    laser_likelihood_max_dist: 4.0
     # 8m, not the RPLidar's full 12m. Beyond ~8m indoors the returns are
     # walls already in the map, so the extra range costs CPU in the sensor
     # model without improving the pose estimate.
@@ -37,7 +58,11 @@ amcl:
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
-    sigma_hit: 0.2
+    # 0.2 -> 0.1, matching Zheng §5.2's own tuned value exactly (their
+    # default was also 0.2): narrowing the laser-hit Gaussian made an
+    # ambiguous hallway resolve to a single confident particle cluster
+    # instead of spreading across it.
+    sigma_hit: 0.1
     tf_broadcast: true
     transform_tolerance: 0.5
     # Off, by request: this auto-seed only ever gets the stack to
@@ -60,7 +85,16 @@ amcl:
     # relay, now fixed, so re-applying this batch.)
     update_min_a: 0.10
     update_min_d: 0.10
-    z_hit: 0.7
+    # z_hit 0.7->0.9, matching Zheng §5.2's own tuned value exactly (their
+    # default was 0.5, ours started already-tuned higher at 0.7). z_rand
+    # deliberately NOT touched: their own tuned example kept it identical
+    # to their default (0.5) — z_hit/sigma_hit were the whole change, so
+    # matching the guide means leaving this at its own prior value too, not
+    # additionally lowering it on top. z_max/z_short also untouched (0.05
+    # each) — those model sensor failure modes (max-range returns, early
+    # returns off something not in the map), not localisation confidence,
+    # and the guide's finding wasn't about them either.
+    z_hit: 0.9
     z_max: 0.05
     z_rand: 0.25
     z_short: 0.05
@@ -163,7 +197,14 @@ controller_server:
       # (see max_angular_accel note below) without re-testing doorway
       # traversal — raising it to 0.90 is what fixed that regression, and
       # it's a single global threshold, not a final-approach-only knob.
-      rotate_to_heading_angular_vel: 0.239
+      #
+      # 0.239 -> 0.18 by request: in-place rotation still read as
+      # aggressive after the ramp-up/ramp-down accel split (see
+      # max_angular_accel below) fixed the stall-then-jerk shape. This is
+      # the separate, safe lever — top speed, not ramp rate — do not touch
+      # max_angular_accel's fast ramp-up to chase this; that fixes a
+      # different, worse bug (see its own comment).
+      rotate_to_heading_angular_vel: 0.18
       rotate_to_heading_min_angle: 0.90
       # Was 0.55, then 0.40 (matched to velocity_smoother's own downstream
       # max_accel[theta], which was producing a stair-step/overshoot jerk at
@@ -187,7 +228,14 @@ controller_server:
       # ramp-UP fixes the stall-at-start; a fast ramp-DOWN is exactly the
       # jerky-stop bug already fixed above. The two needed opposite answers,
       # so only accel moved.
-      max_angular_accel: 0.75
+      #
+      # 0.75 -> 0.65 by request, small trim only: 0.75 was already close to
+      # the ~0.71 rad/s^2 minimum this same math implies for 1-tick floor
+      # clearance (0.071 rad/s / 0.1s), so this is deliberately a small cut,
+      # not a return toward 0.40-0.55. If in-place rotation goes back to
+      # not starting without a manual nudge, that is this margin having
+      # been real — put it back to 0.75, do not cut further.
+      max_angular_accel: 0.65
       # RPP's own default, not the dock's 0.02 — that value is documented
       # elsewhere in this workspace as barely above this robot's own
       # motor breakaway/stall floor, not a speed to steer toward here.
@@ -549,8 +597,13 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: True
     feedback: "OPEN_LOOP"
-    max_velocity: [0.18, 0.0, 0.45]
-    min_velocity: [-0.0, 0.0, -0.45]
+    # theta: 0.45 -> 0.35, alongside FollowPath's rotate_to_heading_angular_vel
+    # (0.239 -> 0.18) for the same "in-place rotation still aggressive"
+    # request. This is the fixed ceiling above whatever the controller
+    # requests (see FollowPath's own max_vel_x comment) — still comfortably
+    # above 0.18 so it stays a ceiling, not the binding constraint.
+    max_velocity: [0.18, 0.0, 0.35]
+    min_velocity: [-0.0, 0.0, -0.35]
     # x: 0.10 -> 0.22, theta: 0.40 -> 0.75 — matches FollowPath's own
     # max_angular_accel raise above (controller_server) and its full
     # reasoning: a real, documented firmware breakaway/stall floor
@@ -559,7 +612,12 @@ velocity_smoother:
     # joystick nudge". x follows the same logic at this robot's own linear
     # breakaway floor (~0.02 m/s) — 0.22 clears it in one 10 Hz tick instead
     # of two.
-    max_accel: [0.22, 0.0, 0.75]
+    #
+    # theta: 0.75 -> 0.65 to match FollowPath's own max_angular_accel trim
+    # (controller_server) — keep these two matched, see the stair-step/
+    # mismatch bug documented at max_angular_accel's own comment above for
+    # why. x (0.22) left untouched, not part of this request.
+    max_accel: [0.22, 0.0, 0.65]
     # UNCHANGED from the previous fix — matches FollowPath's own
     # max_angular_accel *before* this round's raise (both were 0.40),
     # which is what actually fixed the jerky/sudden final-yaw stop: a fast

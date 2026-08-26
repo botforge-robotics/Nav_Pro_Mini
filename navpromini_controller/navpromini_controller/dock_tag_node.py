@@ -110,6 +110,23 @@ class DockTagNode(Node):
         p('roi_enabled', True)
         p('roi_pad_factor', 1.6)       # window = tag side x this, each way
         p('roi_min_px', 160)
+        # camera_node has no manual exposure/gain control — it relies on
+        # re-opening the device fresh (on every dock() attempt) to give the
+        # UVC driver's auto-exposure a clean convergence attempt, since it
+        # can occasionally lock onto a bad value and stay there (see its own
+        # docstring). That reopen only happens between separate dock_manager
+        # attempts, though — not across tag_dock's own internal
+        # search/backoff retries within ONE attempt. Live-observed: a whole
+        # 40s SEARCH timeout plus three follow-up sub-attempts (~2 minutes)
+        # with zero or only marginal detections despite sweeping through the
+        # dock's actual bearing, immediately followed by a clean success on
+        # the very next dock() attempt (fresh camera open) — consistent with
+        # a bad exposure lock, not a real geometry/visibility miss. This
+        # closes that gap: if frames are arriving but nothing decodes for
+        # this many consecutive 5s report windows while active, ask
+        # camera_node to close and reopen the device for a fresh
+        # auto-exposure attempt, without waiting for the outer dock() retry.
+        p('blind_recycle_windows', 2)  # ~10s of frames-but-zero-detections
 
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self._want_id = int(g('tag_id'))
@@ -123,6 +140,9 @@ class DockTagNode(Node):
         self._roi: Optional[tuple] = None      # (x0, y0, x1, y1)
         self._roi_hits = 0
         self._full_scans = 0
+        self._blind_recycle_windows = int(g('blind_recycle_windows'))
+        self._blind_windows = 0
+        self._recycling = False
 
         self._dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
         self._params = _detector_params()
@@ -133,6 +153,9 @@ class DockTagNode(Node):
                                  self._on_info, 10)
         self._pub = self.create_publisher(Float32MultiArray, 'dock_tag', 10)
         self.create_service(SetBool, 'dock_tag/set_active', self._on_set_active)
+        # For the blind-recycle path below — cycles camera_node's own
+        # activation, it does not own the camera device itself.
+        self._camera_client = self.create_client(SetBool, 'camera/set_active')
         # Mirrors camera_node's own gating: detection only matters during the
         # AprilTag portion of a dock attempt, and running the detector the
         # rest of the time (idle, navigating, docked) burns CPU for nothing —
@@ -153,6 +176,11 @@ class DockTagNode(Node):
     def _on_set_active(self, request: SetBool.Request,
                        response: SetBool.Response) -> SetBool.Response:
         self._active = bool(request.data)
+        # Fresh activation (or a real deactivation) starts a clean blind
+        # streak — do not let a count from a previous dock attempt (or from
+        # mid-recycle) trigger another recycle immediately.
+        self._blind_windows = 0
+        self._recycling = False
         if not self._active:
             self._roi = None
             m = Float32MultiArray()
@@ -173,8 +201,45 @@ class DockTagNode(Node):
                 f'({100.0 * self._seen / self._frames:.0f}%), '
                 f'{self._roi_hits} via ROI / {self._full_scans} full scans'
             )
+            # Frames ARE arriving (camera_node is streaming fine) but
+            # nothing decoded all window — that's the exposure-lock
+            # symptom, not "camera not active" or "tag genuinely out of
+            # view the whole time" (see blind_recycle_windows' own
+            # comment). A window with no frames at all is a different
+            # problem (stream/activation issue) and isn't counted here.
+            self._blind_windows = self._blind_windows + 1 if self._seen == 0 else 0
         self._seen = self._frames = 0
         self._roi_hits = self._full_scans = 0
+
+        if (self._active and not self._recycling
+                and self._blind_windows >= self._blind_recycle_windows):
+            self._blind_windows = 0
+            self._recycle_camera()
+
+    def _recycle_camera(self) -> None:
+        if not self._camera_client.service_is_ready():
+            self.get_logger().warn(
+                'dock_tag: wanted to recycle the camera for a fresh '
+                'auto-exposure lock but camera/set_active is not up')
+            return
+        self.get_logger().warn(
+            f'dock_tag: {self._blind_recycle_windows * 5:.0f}s of frames '
+            'with zero detections — recycling the camera for a fresh '
+            'auto-exposure lock'
+        )
+        self._recycling = True
+
+        def _on_off_done(_future) -> None:
+            on_req = SetBool.Request()
+            on_req.data = True
+            self._camera_client.call_async(on_req).add_done_callback(_on_on_done)
+
+        def _on_on_done(_future) -> None:
+            self._recycling = False
+
+        off_req = SetBool.Request()
+        off_req.data = False
+        self._camera_client.call_async(off_req).add_done_callback(_on_off_done)
 
     def _on_image(self, msg: CompressedImage) -> None:
         if not self._active:

@@ -147,16 +147,37 @@ _SEAT_BACKUP_TIMEOUT_SEC = 5.0
 # needing the error gone before it starts. Closer staging means a shorter,
 # straighter, faster approach with less accumulated odometry drift.
 #
-# Was 0.60. The ~0.5m floor this comment used to warn about was reasoned
-# from pixel size alone (tag subtends more px, not fewer, as this shrinks —
-# 60cm gives ~90px, 40cm gives ~135px, both comfortably above the ~40px
-# marginal-decoding point) — closer was never a size problem. The real risk
-# at close range is the camera's own minimum focus distance / the tag
-# drifting toward frame-edge distortion, neither measured here — by request,
-# tightened anyway. If detection gets flaky specifically at this distance
-# (not the "search sweep" symptom, a genuine blur/framing one), that is the
-# mechanism to revisit, not pixel size.
-_STAGING_STANDOFF_M = 0.40
+# Was 0.60, tightened to 0.40 by request on the reasoning that a
+# continuously-steering controller doesn't need the extra "arc room" a
+# discrete IR approach did. Put back to 0.60: that reasoning assumed the
+# controller was actually converging reliably on the way in, which —
+# confirmed live, repeatedly — it wasn't; a real approach could stall
+# crooked, drift, or plain not correct in time within the tighter 40cm
+# run-in. The gain-tuning bug behind that is fixed separately (see
+# tag_dock_node's k_beta), but the extra distance is real, independent
+# margin on top of that fix, not a substitute for it — more room for the
+# same controller to actually finish converging before it has to seat.
+# The ~0.5m floor this comment used to warn about was reasoned from pixel
+# size alone (tag subtends more px, not fewer, as this shrinks — 60cm
+# gives ~90px, 40cm gives ~135px, both comfortably above the ~40px
+# marginal-decoding point) — closer was never a size problem, so there's
+# no detection-side cost to backing this off again either.
+#
+# 0.60 -> 0.75 (back to the original IR-era value): a live run at k_beta=
+# 0.68 still failed outright — every approach sub-attempt looked *good*
+# early (dx converged to +18px at side=280px on one) then blew up right
+# in the close-in stretch (dx back up to +107, +151px by side=441-588px)
+# before ever reaching CONTACT. That is this same pixel-sensitivity effect
+# the file already documents elsewhere: a fixed real-world residual error
+# reads as far more px once the tag fills more of the frame, so whatever
+# small drift is still left over when the controller enters that zone gets
+# amplified right when there is the least room left to react. More standoff
+# is exactly the lever this comment already reasoned about for the k_beta
+# fix — same logic applies again: more distance for the controller to
+# actually finish converging BEFORE it enters the high-sensitivity zone,
+# not a replacement for a further k_beta/close_slow_side_px look if this
+# alone isn't enough.
+_STAGING_STANDOFF_M = 0.75
 
 # Undocking is just "drive forward far enough to break the pogo-pin contact".
 # 40cm clears the connector and the funnel with margin.
@@ -275,6 +296,12 @@ class DockManagerNode(Node):
             self._dock_pose_pub.publish(self._dock_pose)
 
         self._docked = False
+        # True once _on_battery has looked at a real reading and either
+        # inferred _docked from it or explicitly decided not to — see
+        # _on_battery. A fresh process always starts _docked=False above
+        # regardless of where the robot actually is; this is what lets the
+        # very first battery reading override that default exactly once.
+        self._docked_state_known = False
         self._status = 'undocked'
         self._last_power_supply_status: Optional[int] = None
         # Tracks whichever child goal (dock_robot / drive_on_heading /
@@ -383,6 +410,30 @@ class DockManagerNode(Node):
 
     def _on_battery(self, msg: BatteryState) -> None:
         self._last_power_supply_status = msg.power_supply_status
+        if not self._docked_state_known:
+            self._docked_state_known = True
+            # This process just started, so _docked defaults to False no
+            # matter where the robot actually is — but the dock is
+            # wall-mounted, and a freshly (re)started process very often
+            # finds the robot exactly where it was left: parked flush
+            # against it. If the very first battery reading already shows
+            # CHARGING/FULL, that's as good a signal as we're going to
+            # get that we're still on the dock — trust it, so the next
+            # dock/undock/nav request backs the robot off the wall first
+            # (see _undock_gently) instead of undock() silently no-opping and Nav2
+            # rejecting every goal with "Start occupied", because the
+            # global costmap (correctly) sees the wall the robot is still
+            # sitting against. Only ever runs once — an explicit dock()/
+            # undock() afterwards sets _docked directly and this doesn't
+            # second-guess it.
+            if msg.power_supply_status in (
+                    BatteryState.POWER_SUPPLY_STATUS_CHARGING,
+                    BatteryState.POWER_SUPPLY_STATUS_FULL):
+                self._docked = True
+                self.get_logger().info(
+                    'First battery reading shows charging — inferring the '
+                    'robot is still parked at the dock from before this '
+                    'process started.')
         if not self._docked:
             return
         if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_FULL:
@@ -442,6 +493,14 @@ class DockManagerNode(Node):
 
     async def _execute_dock_inner(self, goal_handle):
         goal: DockRobot.Goal = goal_handle.request
+
+        # A dock() request arriving while already docked (a retry, a
+        # scheduled/app-triggered redock, anything) must back off first —
+        # see _undock_gently's own doc for what skipping this actually did.
+        if not await self._undock_gently(goal_handle):
+            return DockRobot.Result(
+                success=False, error_msg='failed to undock before redocking')
+
         self._set_status(_DOCK_STATE_TO_STATUS[DockRobot.Feedback.NAV_TO_STAGING_POSE])
 
         # use_dock_id repurposed as "use the pose we've saved" — any client
@@ -832,44 +891,70 @@ class DockManagerNode(Node):
         q = goal.pose.pose.orientation
         return (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) > 0.5
 
+    async def _undock_gently(self, goal_handle) -> bool:
+        """Back off via a controlled DriveOnHeading if currently docked.
+
+        Shared by _execute_dock_inner and _execute_undock_then_navigate_inner
+        — a dock() request that arrives while still physically docked used
+        to skip this entirely (only the dedicated undock/navigate action
+        checked `_docked`) and drop straight into ordinary nav2
+        NavigateToPose toward the staging pose: normal cruising speed and
+        accel, not a controlled backup, yanking the robot off the connector.
+        Live-observed: docked and charging, a fresh dock() request minutes
+        later (app showed "still docking and reattempting") separated it
+        abruptly with no gentle disengage at all.
+
+        Returns True if it's fine to proceed (wasn't docked, or the undock
+        succeeded); False if the caller should return its own failure/empty
+        Result — goal_handle.abort()/_set_status('error') are already
+        called here on a real failure, and left alone on a genuine cancel
+        (matching _await_with_cancel's own contract), so the caller doesn't
+        need to know which.
+        """
+        if not self._docked:
+            return True
+
+        self.get_logger().info('undock: currently docked — undocking before navigating')
+        if not self._undock_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error('drive_on_heading action server not available')
+            goal_handle.abort()
+            self._set_status('error')
+            return False
+
+        self._set_status('undocking')
+        undock_goal = DriveOnHeading.Goal()
+        undock_goal.target = Point(x=_UNDOCK_DISTANCE_M, y=0.0, z=0.0)
+        undock_goal.speed = _UNDOCK_SPEED
+        sec = int(_UNDOCK_TIMEOUT_SEC)
+        undock_goal.time_allowance.sec = sec
+        undock_goal.time_allowance.nanosec = int(
+            (_UNDOCK_TIMEOUT_SEC - sec) * 1e9)
+        child_undock_handle = await self._undock_client.send_goal_async(undock_goal)
+        if not child_undock_handle.accepted:
+            goal_handle.abort()
+            self._set_status('error')
+            return False
+
+        wrapped = await self._await_with_cancel(
+            goal_handle, child_undock_handle, child_undock_handle.get_result_async()
+        )
+        if wrapped is None:
+            return False
+        if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().error('drive_on_heading failed while undocking')
+            goal_handle.abort()
+            self._set_status('error')
+            return False
+
+        self._docked = False
+        self._set_status('undocked')
+        return True
+
     async def _execute_undock_then_navigate_inner(self, goal_handle):
         goal: NavigateToPose.Goal = goal_handle.request
 
-        if self._docked:
-            self.get_logger().info('undock: currently docked — undocking before navigating')
-            if not self._undock_client.wait_for_server(timeout_sec=5.0):
-                self.get_logger().error('drive_on_heading action server not available')
-                goal_handle.abort()
-                self._set_status('error')
-                return NavigateToPose.Result()
-
-            self._set_status('undocking')
-            undock_goal = DriveOnHeading.Goal()
-            undock_goal.target = Point(x=_UNDOCK_DISTANCE_M, y=0.0, z=0.0)
-            undock_goal.speed = _UNDOCK_SPEED
-            sec = int(_UNDOCK_TIMEOUT_SEC)
-            undock_goal.time_allowance.sec = sec
-            undock_goal.time_allowance.nanosec = int(
-                (_UNDOCK_TIMEOUT_SEC - sec) * 1e9)
-            child_undock_handle = await self._undock_client.send_goal_async(undock_goal)
-            if not child_undock_handle.accepted:
-                goal_handle.abort()
-                self._set_status('error')
-                return NavigateToPose.Result()
-
-            wrapped = await self._await_with_cancel(
-                goal_handle, child_undock_handle, child_undock_handle.get_result_async()
-            )
-            if wrapped is None:
-                return NavigateToPose.Result()
-            if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
-                self.get_logger().error('drive_on_heading failed while undocking')
-                goal_handle.abort()
-                self._set_status('error')
-                return NavigateToPose.Result()
-
-            self._docked = False
-            self._set_status('undocked')
+        if not await self._undock_gently(goal_handle):
+            return NavigateToPose.Result()
 
         if not self._has_nav_goal(goal):
             self.get_logger().info(
