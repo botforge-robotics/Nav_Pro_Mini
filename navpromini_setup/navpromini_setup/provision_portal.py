@@ -6,8 +6,17 @@ Hotspot rule (only):
   visible nearby (and the robot is not already online on Wi‑Fi).
   Otherwise try to bring up a saved connection and exit.
 
-Form fields: Wi‑Fi + password + robot name.
+Form fields: Wi‑Fi + password + robot name + time zone.
 Writes /etc/navpro/robot.yaml
+
+Time zone is applied via `timedatectl set-timezone` immediately on submit
+(root already — this whole portal runs as root), independent of whether
+Wi‑Fi joins successfully — it needs no network. The field is pre-filled
+from the submitting browser's own IANA zone (`Intl.DateTimeFormat`), so the
+common case takes zero extra taps; the dropdown underneath it is a real
+manual override. NTP itself (systemd-timesyncd) is enabled at the OS-image
+level, not by this script — once Wi‑Fi is up, the clock syncs on its own;
+what was missing was only ever the UTC *offset*, not the sync mechanism.
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+import zoneinfo
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Optional
 from urllib.parse import parse_qs
@@ -173,6 +183,21 @@ function beforeSubmit(form) {{
   if (btn) {{ btn.disabled = true; btn.textContent = 'Submitting…'; }}
   return true;
 }}
+// Pre-select whatever timezone this browser/phone already believes it's
+// in — Intl exposes the real IANA zone (e.g. "Asia/Kolkata"), not just an
+// offset, so this is a correct default, not a guess. Still just a
+// preselection: the dropdown stays a real manual choice underneath it.
+window.addEventListener('DOMContentLoaded', function() {{
+  try {{
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    var sel = document.getElementById('wifi_timezone');
+    if (tz && sel) {{
+      for (var i = 0; i < sel.options.length; i++) {{
+        if (sel.options[i].value === tz) {{ sel.selectedIndex = i; break; }}
+      }}
+    }}
+  }} catch (e) {{}}
+}});
 </script>
 </head>
 <body>
@@ -207,6 +232,12 @@ function beforeSubmit(form) {{
         <input name="wifi_password" type="password" required autocomplete="off" placeholder="Wi‑Fi password"/>
         <label>Robot name</label>
         <input name="robot_name" required placeholder="bot-1" autocomplete="off"/>
+        <label>Time zone</label>
+        <select id="wifi_timezone" name="timezone">
+          {timezone_options}
+        </select>
+        <span class="hint" style="margin:0">Pre-filled from this device — change it if the
+          robot lives somewhere else. Schedules and logged times run by this.</span>
         <button class="primary" type="submit">Save &amp; connect</button>
       </form>
       <p class="hint">Connect your phone to this hotspot, then enter site Wi‑Fi and a robot name.</p>
@@ -506,6 +537,22 @@ def try_connect_saved_nearby() -> bool:
     return False
 
 
+_TIMEZONES = sorted(zoneinfo.available_timezones())
+
+
+def timezone_options_html() -> str:
+    """All IANA zones the OS knows about (stdlib zoneinfo — no subprocess,
+    no dependency on tzdata being reachable over a network that isn't
+    joined yet). JS on the page pre-selects the browser's own detected
+    zone; this list is what makes that selection valid *and* gives anyone
+    without working JS (or filling the form by hand, e.g. via curl) a
+    manual choice instead of no choice at all."""
+    return '\n'.join(
+        f'<option value="{html.escape(tz, quote=True)}">{html.escape(tz)}</option>'
+        for tz in _TIMEZONES
+    )
+
+
 def wifi_options_html(networks: list[tuple[str, int]]) -> str:
     if not networks:
         return ''
@@ -587,6 +634,28 @@ def connect_site_wifi(ssid: str, password: str) -> None:
         ip = _run(['hostname', '-I'])
         if ip.returncode == 0 and ip.stdout.strip():
             return
+
+
+def apply_timezone(tz: str) -> None:
+    """Sets the system timezone via timedatectl — root already (this whole
+    portal runs as root, see navpro-provision.service), so no privilege
+    escalation needed here specifically. Purely local; unlike Wi‑Fi joining
+    this never needs network access, so it's applied immediately rather
+    than gated on the Wi‑Fi join succeeding — a robot that fails to join
+    Wi‑Fi at least ends up with the right clock for whenever it does.
+
+    Deliberately non-fatal: an unrecognised or unsupported zone logs and
+    moves on rather than aborting setup — Wi‑Fi + a robot name are the
+    load-bearing fields, timezone is a real but secondary one.
+    """
+    if not tz:
+        return
+    if tz not in _TIMEZONES:
+        sys.stderr.write(f'[provision] unknown timezone {tz!r} — leaving as-is\n')
+        return
+    r = _run(['timedatectl', 'set-timezone', tz], check=False)
+    if r.returncode != 0:
+        sys.stderr.write(f'[provision] set-timezone {tz!r} failed: {r.stderr or r.stdout}\n')
 
 
 def maybe_restart_robot_units() -> None:
@@ -683,6 +752,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
                 serial=html.escape(state.serial or '—'),
                 wifi_options=wifi_options_html(state.networks),
                 wifi_hint=hint,
+                timezone_options=timezone_options_html(),
                 message=msg,
             )
             self._send_html(200, page)
@@ -742,6 +812,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
             ) or form.get('wifi_ssid_custom', '').strip()
             wifi_password = form.get('wifi_password', '')
             robot_name = form.get('robot_name', '').strip()
+            timezone = form.get('timezone', '').strip()
             if not all([wifi_ssid, wifi_password, robot_name]):
                 self._render_form(
                     '<div class="flash err">Wi‑Fi, password, and robot name are required.</div>'
@@ -761,6 +832,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
 
             def worker() -> None:
                 try:
+                    apply_timezone(timezone)
                     state.set_phase('joining_wifi')
                     write_display_hint('joining', robot_name)
                     connect_site_wifi(wifi_ssid, wifi_password)
@@ -769,6 +841,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
                         name=robot_name,
                         serial=state.serial,
                         wifi_ssid=wifi_ssid,
+                        timezone=timezone,
                     )
                     save_robot_config(cfg)
                     write_display_hint('ready', cfg.name)

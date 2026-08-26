@@ -21,6 +21,12 @@ class RobotConfig:
     name: str = ''
     serial: str = ''
     wifi_ssid: str = ''
+    # IANA zone (e.g. "Asia/Kolkata"), set once during first-time setup —
+    # see provision_portal.py. Empty means never set (an older install, or
+    # setup run before this field existed): the system clock keeps whatever
+    # timezone the OS image shipped with, which is very likely wrong for the
+    # robot's actual deployment site.
+    timezone: str = ''
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -115,12 +121,13 @@ def load_robot_config(path: Path | None = None) -> Optional[RobotConfig]:
     if not isinstance(raw, dict):
         return None
     robot = raw.get('robot') if isinstance(raw.get('robot'), dict) else {}
-    known = {'name', 'serial', 'wifi_ssid', 'robot'}
+    known = {'name', 'serial', 'wifi_ssid', 'timezone', 'robot'}
     extra = {k: v for k, v in raw.items() if k not in known}
     return RobotConfig(
         name=str(raw.get('name') or robot.get('name') or ''),
         serial=str(raw.get('serial') or robot.get('serial') or read_cpu_serial()),
         wifi_ssid=str(raw.get('wifi_ssid') or ''),
+        timezone=str(raw.get('timezone') or ''),
         extra=extra,
     )
 
