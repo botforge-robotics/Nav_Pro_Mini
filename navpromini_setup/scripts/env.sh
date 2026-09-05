@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+umask 000
 # Source ROS + workspaces for systemd units.
 # Note: do not enable nounset here — ROS setup.bash references unset vars.
 set -eo pipefail

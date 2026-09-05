@@ -207,7 +207,22 @@ class LaunchManager(Node):
 
                 return response
 
-            # For normal async launches
+            # For normal async launches - terminate existing duplicate launch first
+            for existing_id, existing_info in list(self.active_launches.items()):
+                if existing_info.get('package') == request.package and existing_info.get('launch_file') == request.launch_file:
+                    self.get_logger().info(
+                        f"Stopping existing launch {existing_id} ({request.launch_file}) before starting new instance")
+                    try:
+                        p = existing_info['process']
+                        os.killpg(os.getpgid(p.pid), signal.SIGINT)
+                        try:
+                            p.wait(timeout=3.0)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                    except Exception as err:
+                        self.get_logger().warning(f"Error stopping prior launch: {err}")
+                    self.active_launches.pop(existing_id, None)
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -251,6 +266,8 @@ class LaunchManager(Node):
             # Store process information for async launches
             self.active_launches[unique_id] = {
                 'process': process,
+                'package': request.package,
+                'launch_file': request.launch_file,
                 'cmd': ' '.join(cmd),
                 'start_time': self.get_clock().now().to_msg()
             }
@@ -507,27 +524,8 @@ class LaunchManager(Node):
         """
         self.get_logger().debug(
             f"client_count_callback received count={msg.data}")
-        try:
-            if msg.data > 0:
-                if self._zero_client_timer is not None:
-                    self.get_logger().info(
-                        "Client reconnected before the zero-client grace "
-                        "period elapsed — cancelling auto-stop.")
-                    self._zero_client_timer.cancel()
-                    self._zero_client_timer = None
-                return
-
-            if not self.active_launches or self._zero_client_timer is not None:
-                return  # nothing running, or a stop is already pending
-
-            self.get_logger().info(
-                f"Client count is 0 — stopping active launches in "
-                f"{self._ZERO_CLIENT_GRACE_SEC:.0f}s unless a client "
-                "reconnects.")
-            self._zero_client_timer = self.create_timer(
-                self._ZERO_CLIENT_GRACE_SEC, self._on_zero_client_grace_elapsed)
-        except Exception as e:
-            self.get_logger().error(f"Client count callback error: {str(e)}")
+        # Client disconnects should not terminate active autonomous navigation/missions
+        pass
 
     # How long to wait, after the client count hits zero, before actually
     # stopping active launches — long enough to comfortably cover a page

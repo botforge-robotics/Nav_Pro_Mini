@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+*.bak
+*.orig
+*.swp
+__pycache__/
+*.pyc

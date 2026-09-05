@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import time
 
 from geometry_msgs.msg import PoseStamped
@@ -204,12 +206,16 @@ class DockStatusHandler(BaseHandler):
         battery = self.bridge.get('battery') or {}
         tag = self.bridge.get('dock_tag')
         dock_status, age = self.bridge.get_with_age('dock_status')
+        is_charging = bool(battery.get('charging')) or battery.get('status') in ('charging', 'full')
+        effective_state = dock_status or 'unknown'
+        if is_charging and effective_state in ('undocked', 'unknown'):
+            effective_state = 'full' if battery.get('status') == 'full' else 'charging'
         self.send({
-            'state': dock_status or 'unknown',
+            'state': effective_state,
             'age_sec': age,
             'operation': TRACKER.state,
             'message': TRACKER.message,
-            'charging': bool(battery.get('charging')),
+            'charging': is_charging,
             'battery_status': battery.get('status'),
             'tag_visible': bool(tag.get('visible')) if tag else False,
         })
@@ -220,6 +226,21 @@ class DockPoseHandler(BaseHandler):
 
     def get(self) -> None:
         value, age = self.bridge.get_with_age('dock_pose')
+        if value is None:
+            dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
+            if os.path.isfile(dock_file):
+                try:
+                    with open(dock_file, 'r') as f:
+                        d = json.load(f)
+                    theta = d.get('theta')
+                    if theta is None:
+                        qz = d.get('qz', 0.0)
+                        qw = d.get('qw', 1.0)
+                        theta = 2.0 * math.atan2(qz, qw)
+                    value = {'x': d['x'], 'y': d['y'], 'theta': theta}
+                    age = 0.0
+                except Exception:
+                    pass
         if value is None:
             raise ApiError(404, 'no_dock_pose',
                            'No dock pose is known. Set one, or map the area with '
@@ -238,4 +259,42 @@ class DockPoseHandler(BaseHandler):
         msg.pose.orientation.z = math.sin(theta / 2.0)
         msg.pose.orientation.w = math.cos(theta / 2.0)
         self.opts['dock_pose_pub'].publish(msg)
+
+        with self.bridge._lock:
+            self.bridge._cache['dock_pose'] = (
+            {'x': x, 'y': y, 'theta': theta, 'frame_id': 'map'},
+            self.bridge.get_clock().now().nanoseconds / 1e9,
+        )
+
+        dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
+        dock_dict = {
+            'frame_id': 'map',
+            'x': x,
+            'y': y,
+            'z': 0.0,
+            'qx': 0.0,
+            'qy': 0.0,
+            'qz': math.sin(theta / 2.0),
+            'qw': math.cos(theta / 2.0),
+            'theta': theta,
+        }
+        try:
+            tmp_path = dock_file + '.tmp'
+            with open(tmp_path, 'w') as f:
+                json.dump(dock_dict, f, indent=2)
+            os.replace(tmp_path, dock_file)
+        except Exception as exc:
+            pass
+
         self.send({'x': x, 'y': y, 'theta': theta})
+
+    def delete(self) -> None:
+        self.bridge.invalidate('dock_pose')
+        dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
+        if os.path.isfile(dock_file):
+            try:
+                os.remove(dock_file)
+            except Exception:
+                pass
+        self.send({'deleted': True})
+

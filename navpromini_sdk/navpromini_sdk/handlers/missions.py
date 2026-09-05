@@ -44,10 +44,14 @@ from rosidl_runtime_py import set_message_fields
 from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.utilities import get_action, get_service
 
+import os
 from .base import ApiError, BaseHandler
 from .docking import dock_robot, undock_robot
-from .navigation import navigate_to
+from .navigation import cancel_active_goal, navigate_to
 from .roscall import call_service, ros_future, send_goal
+
+LOW_BATTERY_DOCK_PERCENT = float(os.environ.get('NAVPRO_LOW_BATT_DOCK_PCT', 5.0))
+RESUME_BATTERY_PERCENT = float(os.environ.get('NAVPRO_RESUME_BATT_PCT', 95.0))
 
 VALID_STEP_TYPES = ('navigate', 'wait', 'dock', 'undock', 'call_service', 'call_action')
 
@@ -151,6 +155,7 @@ class _MissionRunner:
         self.started_at: float | None = None
         self.cancel_requested = False
         self.pause_requested = False
+        self.pause_reason: str | None = None
 
     def snapshot(self) -> dict:
         return {
@@ -160,6 +165,7 @@ class _MissionRunner:
             'loop_index': self.loop_index,
             'loop_total': self.loop_total,
             'message': self.message,
+            'pause_reason': self.pause_reason,
             'elapsed_sec': (round(time.time() - self.started_at, 1)
                             if self.started_at else None),
         }
@@ -220,6 +226,115 @@ async def _run_step(bridge, store, step: dict) -> tuple[bool, str]:
     return False, f'Unknown step type {stype!r}'  # unreachable — validated on save
 
 
+async def _handle_low_battery_dock_and_resume(bridge, opts, mission: dict) -> None:
+    """Auto-dock on low battery, wait on charger until charged, and auto-resume."""
+    RUNNER.state = 'charging_paused'
+    batt = bridge.get('battery') or {}
+    pct = float(batt.get('percentage') or 0.0)
+    bridge.emit_event('mission.battery_low_pause', {
+        'mission_id': mission['id'],
+        'step_index': RUNNER.step_index,
+        'loop_index': RUNNER.loop_index,
+        'percentage': pct,
+    })
+
+    bridge.get_logger().info(
+        f"Mission {mission['id']}: navigating to dock to recharge (battery at {pct:.1f}%)..."
+    )
+    docked = False
+    for attempt in range(2):
+        if RUNNER.cancel_requested:
+            RUNNER.state = 'canceled'
+            RUNNER.pause_reason = None
+            return
+        res = await dock_robot(bridge, navigate_to_staging=True)
+        if res.get('ok'):
+            docked = True
+            break
+        bridge.get_logger().warn(f"Auto-dock attempt {attempt + 1} failed: {res.get('message')}")
+        await asyncio.sleep(3.0)
+
+    if not docked:
+        bridge.get_logger().error(f"Mission {mission['id']}: auto-dock failed! Stopping robot in place.")
+        bridge.publish_cmd_vel(0.0, 0.0)
+        bridge.emit_event('mission.dock_failed', {
+            'mission_id': mission['id'],
+            'percentage': pct,
+            'message': 'Failed to reach dock automatically',
+        })
+        RUNNER.state = 'paused'
+        RUNNER.message = 'Low battery auto-dock failed'
+        # Wait for operator intervention — do not resume or drain battery
+        while RUNNER.pause_requested and not RUNNER.cancel_requested:
+            await asyncio.sleep(1.0)
+        return
+
+    bridge.emit_event('mission.docked_for_charge', {
+        'mission_id': mission['id'],
+        'percentage': pct,
+    })
+
+    bridge.get_logger().info(
+        f"Mission {mission['id']}: docked successfully. Recharging until >= {RESUME_BATTERY_PERCENT}%..."
+    )
+    while True:
+        if RUNNER.cancel_requested:
+            # User cancelled mission while robot is charging on the dock!
+            # Robot STAYS on the charger. Mission cancels cleanly.
+            RUNNER.state = 'canceled'
+            RUNNER.pause_reason = None
+            bridge.get_logger().info(f"Mission {mission['id']} canceled by user while on charger. Robot staying docked.")
+            return
+
+        # If user explicitly pressed "Resume" in the UI / API, honor it
+        if not RUNNER.pause_requested:
+            bridge.get_logger().info(f"Mission {mission['id']} manually resumed by user while on charger.")
+            break
+
+        batt = bridge.get('battery') or {}
+        cur_pct = batt.get('percentage')
+        status = batt.get('status', '')
+
+        # Check if battery reached target resume percentage or full
+        if cur_pct is not None and (cur_pct >= RESUME_BATTERY_PERCENT or status == 'full'):
+            bridge.get_logger().info(f"Mission {mission['id']}: battery charged ({cur_pct:.1f}%). Ready to resume.")
+            bridge.emit_event('mission.battery_charged', {
+                'mission_id': mission['id'],
+                'percentage': cur_pct,
+            })
+            break
+
+        await asyncio.sleep(2.0)
+
+    if RUNNER.cancel_requested:
+        RUNNER.state = 'canceled'
+        RUNNER.pause_reason = None
+        return
+
+    bridge.get_logger().info(f"Mission {mission['id']}: undocking to resume step {RUNNER.step_index}...")
+    undock_res = await undock_robot(bridge)
+    if not undock_res.get('ok'):
+        bridge.get_logger().warn(f"Undock reported: {undock_res.get('message')}")
+
+    # Settle for 2 seconds before resuming navigation
+    await asyncio.sleep(2.0)
+
+    if RUNNER.cancel_requested:
+        RUNNER.state = 'canceled'
+        RUNNER.pause_reason = None
+        return
+
+    RUNNER.pause_requested = False
+    RUNNER.pause_reason = None
+    RUNNER.state = 'running'
+    bridge.emit_event('mission.resumed', {
+        'mission_id': mission['id'],
+        'step_index': RUNNER.step_index,
+        'reason': 'charge_completed',
+    })
+    bridge.get_logger().info(f"Mission {mission['id']}: resumed successfully at step {RUNNER.step_index}.")
+
+
 async def _run_mission(bridge, opts, mission: dict) -> None:
     store = opts['store']
     steps = mission['steps']
@@ -235,51 +350,106 @@ async def _run_mission(bridge, opts, mission: dict) -> None:
     RUNNER.started_at = time.time()
     RUNNER.cancel_requested = False
     RUNNER.pause_requested = False
+    RUNNER.pause_reason = None
     bridge.emit_event('mission.started', {'mission_id': mission['id']})
 
-    iteration = 0
-    while loop_forever or iteration < loop_count:
-        RUNNER.loop_index = iteration
-        RUNNER.step_index = 0
-        while RUNNER.step_index < len(steps):
-            if RUNNER.cancel_requested:
-                RUNNER.state = 'canceled'
-                bridge.emit_event('mission.canceled', {'mission_id': mission['id'],
-                                                        'step_index': RUNNER.step_index})
-                return
+    stop_battery_monitor = asyncio.Event()
 
-            if RUNNER.pause_requested:
-                RUNNER.state = 'paused'
-                bridge.emit_event('mission.paused', {'mission_id': mission['id'],
-                                                      'step_index': RUNNER.step_index})
-                while RUNNER.pause_requested and not RUNNER.cancel_requested:
-                    await asyncio.sleep(0.2)
+    async def _battery_watcher():
+        while not stop_battery_monitor.is_set():
+            batt = bridge.get('battery') or {}
+            pct = batt.get('percentage')
+            is_charging = bool(batt.get('charging')) or batt.get('status') in ('charging', 'full')
+            if pct is not None and pct <= LOW_BATTERY_DOCK_PERCENT and not is_charging:
+                if RUNNER.state == 'running' and not RUNNER.pause_requested:
+                    bridge.get_logger().warn(
+                        f"Mission {RUNNER.mission_id}: battery critically low ({pct:.1f}% <= {LOW_BATTERY_DOCK_PERCENT}%)! "
+                        "Pausing mission for auto-dock & recharge."
+                    )
+                    RUNNER.pause_requested = True
+                    RUNNER.pause_reason = 'low_battery'
+                    try:
+                        await cancel_active_goal(bridge, reason='low_battery')
+                    except Exception as e:
+                        bridge.get_logger().error(f"Error canceling active goal on low battery: {e}")
+            await asyncio.sleep(1.0)
+
+    monitor_task = asyncio.create_task(_battery_watcher())
+
+    try:
+        iteration = 0
+        while loop_forever or iteration < loop_count:
+            RUNNER.loop_index = iteration
+            RUNNER.step_index = 0
+            while RUNNER.step_index < len(steps):
                 if RUNNER.cancel_requested:
                     RUNNER.state = 'canceled'
+                    RUNNER.pause_reason = None
                     bridge.emit_event('mission.canceled', {'mission_id': mission['id'],
                                                             'step_index': RUNNER.step_index})
                     return
-                RUNNER.state = 'running'
-                bridge.emit_event('mission.resumed', {'mission_id': mission['id'],
-                                                       'step_index': RUNNER.step_index})
 
-            ok, message = await _run_step(bridge, store, steps[RUNNER.step_index])
-            if not ok:
-                RUNNER.state = 'failed'
-                RUNNER.message = message
-                bridge.emit_event('mission.failed', {'mission_id': mission['id'],
-                                                      'step_index': RUNNER.step_index,
-                                                      'message': message})
-                return
-            RUNNER.step_index += 1
+                if RUNNER.pause_requested:
+                    if RUNNER.pause_reason == 'low_battery':
+                        await _handle_low_battery_dock_and_resume(bridge, opts, mission)
+                        if RUNNER.cancel_requested:
+                            RUNNER.state = 'canceled'
+                            RUNNER.pause_reason = None
+                            bridge.emit_event('mission.canceled', {'mission_id': mission['id'],
+                                                                    'step_index': RUNNER.step_index})
+                            return
+                        continue
 
-        iteration += 1
-        if loop_forever or iteration < loop_count:
-            bridge.emit_event('mission.lap_completed', {'mission_id': mission['id'],
-                                                         'loop_index': RUNNER.loop_index})
+                    RUNNER.state = 'paused'
+                    bridge.emit_event('mission.paused', {'mission_id': mission['id'],
+                                                          'step_index': RUNNER.step_index})
+                    while RUNNER.pause_requested and not RUNNER.cancel_requested:
+                        await asyncio.sleep(0.2)
+                    if RUNNER.cancel_requested:
+                        RUNNER.state = 'canceled'
+                        bridge.emit_event('mission.canceled', {'mission_id': mission['id'],
+                                                                'step_index': RUNNER.step_index})
+                        return
+                    RUNNER.state = 'running'
+                    bridge.emit_event('mission.resumed', {'mission_id': mission['id'],
+                                                           'step_index': RUNNER.step_index})
 
-    RUNNER.state = 'completed'
-    bridge.emit_event('mission.completed', {'mission_id': mission['id']})
+                ok, message = await _run_step(bridge, store, steps[RUNNER.step_index])
+                if not ok:
+                    if RUNNER.pause_reason == 'low_battery':
+                        # Interrupted by low battery monitor mid-step; loop back to enter dock & recharge handler
+                        continue
+                    if RUNNER.cancel_requested:
+                        RUNNER.state = 'canceled'
+                        bridge.emit_event('mission.canceled', {'mission_id': mission['id'],
+                                                                'step_index': RUNNER.step_index})
+                        return
+                    if RUNNER.pause_requested:
+                        continue
+
+                    RUNNER.state = 'failed'
+                    RUNNER.message = message
+                    bridge.emit_event('mission.failed', {'mission_id': mission['id'],
+                                                          'step_index': RUNNER.step_index,
+                                                          'message': message})
+                    return
+                RUNNER.step_index += 1
+
+            iteration += 1
+            if loop_forever or iteration < loop_count:
+                bridge.emit_event('mission.lap_completed', {'mission_id': mission['id'],
+                                                             'loop_index': RUNNER.loop_index})
+
+        RUNNER.state = 'completed'
+        RUNNER.step_index = max(0, len(steps) - 1)
+        bridge.emit_event('mission.completed', {'mission_id': mission['id']})
+    finally:
+        stop_battery_monitor.set()
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
 
 
 class MissionsHandler(BaseHandler):
@@ -309,7 +479,7 @@ class MissionHandler(BaseHandler):
         self.send({'mission': mission})
 
     def delete(self, mission_id: str) -> None:
-        if RUNNER.mission_id == mission_id and RUNNER.state in ('running', 'paused'):
+        if RUNNER.mission_id == mission_id and RUNNER.state in ('running', 'paused', 'charging_paused'):
             raise ApiError(409, 'mission_active',
                            'Cancel the running mission before deleting it')
         if not self.opts['store'].delete_mission(mission_id):
@@ -327,7 +497,7 @@ class MissionControlHandler(BaseHandler):
 
     async def post(self, mission_id: str, action: str) -> None:
         if action == 'start':
-            if RUNNER.state in ('running', 'paused'):
+            if RUNNER.state in ('running', 'paused', 'charging_paused'):
                 raise ApiError(409, 'mission_active',
                                f'Mission {RUNNER.mission_id!r} is already {RUNNER.state}')
             mission = self.opts['store'].get_mission(mission_id)
@@ -337,13 +507,15 @@ class MissionControlHandler(BaseHandler):
             self.send({'accepted': True, 'mission_id': mission_id}, status=202)
             return
 
-        if RUNNER.mission_id != mission_id or RUNNER.state not in ('running', 'paused'):
+        if RUNNER.mission_id != mission_id or RUNNER.state not in ('running', 'paused', 'charging_paused'):
             raise ApiError(409, 'mission_not_active',
-                           f'Mission {mission_id!r} is not currently running')
+                           f'Mission {mission_id!r} is not currently active')
         if action == 'pause':
             RUNNER.pause_requested = True
+            RUNNER.pause_reason = 'user_requested'
         elif action == 'resume':
             RUNNER.pause_requested = False
+            RUNNER.pause_reason = None
         elif action == 'cancel':
             RUNNER.cancel_requested = True
         else:

@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from nav2_msgs.action import DockRobot, DriveOnHeading, NavigateToPose, Spin
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -43,6 +43,7 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import BatteryState, Imu, LaserScan
 from std_msgs.msg import Float32, Float32MultiArray, String
+from std_srvs.srv import Empty
 
 from navpromini_launch_manager_interfaces.srv import (
     DeleteMap,
@@ -108,7 +109,13 @@ class RosBridge(Node):
         self._charging_shown: Optional[bool] = None
 
         # --- telemetry subscriptions -------------------------------------
-        self.create_subscription(Odometry, 'odom', self._on_odom, 10, callback_group=cb)
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.create_subscription(Odometry, 'odom', self._on_odom, sensor_qos, callback_group=cb)
         self.create_subscription(BatteryState, 'battery/state', self._on_battery, 10,
                                  callback_group=cb)
         self.create_subscription(String, 'battery/info', self._on_battery_info, 10,
@@ -128,6 +135,8 @@ class RosBridge(Node):
         # than waiting for the next publish — which may never come, since it
         # is only published when the pose changes.
         self.create_subscription(PoseStamped, 'dock_pose', self._on_dock_pose,
+                                 LATCHED_QOS, callback_group=cb)
+        self.create_subscription(OccupancyGrid, 'map', self._on_map,
                                  LATCHED_QOS, callback_group=cb)
         self.create_subscription(Float32MultiArray, 'dock_tag', self._on_dock_tag, 10,
                                  callback_group=cb)
@@ -149,6 +158,7 @@ class RosBridge(Node):
         # didn't start itself is using.
         self.cli_map_server_param = self.create_client(
             GetParameters, '/map_server/get_parameters', callback_group=cb)
+        self.cli_global_loc = self.create_client(Empty, '/reinitialize_global_localization', callback_group=cb)
 
         # --- action clients -------------------------------------------------
         # Navigation goes through dock_manager's `undock`, never bt_navigator
@@ -346,6 +356,10 @@ class RosBridge(Node):
             'frame': m.header.frame_id or 'map',
         })
 
+    
+    def _on_map(self, m: OccupancyGrid) -> None:
+        self._put('map_msg', m)
+
     def _on_dock_tag(self, m: Float32MultiArray) -> None:
         d = list(m.data)
         if len(d) < 7:
@@ -370,6 +384,16 @@ class RosBridge(Node):
         t.linear.x = float(linear)
         t.angular.z = float(angular)
         self._pub_cmd_vel.publish(t)
+
+    def reinitialize_global_localization(self, timeout_sec: float = 2.0) -> bool:
+        """Call AMCL's /reinitialize_global_localization service to disperse particles."""
+        if not self.cli_global_loc.wait_for_service(timeout_sec=timeout_sec):
+            self.get_logger().warn('/reinitialize_global_localization service unavailable')
+            return False
+        req = Empty.Request()
+        self.cli_global_loc.call_async(req)
+        self.get_logger().info('Triggered AMCL /reinitialize_global_localization')
+        return True
 
     def publish_initial_pose(self, x: float, y: float, theta: float,
                              frame: str = 'map') -> None:

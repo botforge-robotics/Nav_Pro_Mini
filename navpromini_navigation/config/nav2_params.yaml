@@ -1,18 +1,5 @@
 amcl:
   ros__parameters:
-    # Left alone despite Zheng's "ROS Navigation Tuning Guide" (kaiyuzheng.me
-    # /documents/navguide.pdf §5.2) suggesting low alpha values (~0.005) once
-    # odometry is known reliable, and high ones otherwise — his own finding
-    # was tighter, more condensed particles either way. That advice assumes
-    # a robot where wheel odometry alone tracks motion; this one's drive
-    # wheels are at the front with a passive trailing caster at the back
-    # (see tag_dock_node.py's own docs on this — it's the same kinematics
-    # that needed the docking control law fixed for). A caster scrubs/drags
-    # during in-place rotation specifically, which is exactly what
-    # odometry-based dead reckoning can't see or correct for — that's a real
-    # unmodelled noise source these already-elevated values are the
-    # appropriate hedge against, not a case for lowering them without first
-    # actually measuring odometry drift against known ground truth.
     alpha1: 0.20
     alpha2: 0.20
     alpha3: 0.25
@@ -22,78 +9,35 @@ amcl:
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
-    do_beamskip: false
+    do_beamskip: true
     global_frame_id: "map"
     lambda_short: 0.1
-    # 2.0 -> 4.0, matching Zheng §5.2's own tuned value exactly (their
-    # default was the same 2.0 this started from) — a larger search radius
-    # for the nearest mapped obstacle per beam gives a smoother, more
-    # forgiving match against sensor/map noise. max_particles was
-    # independently cut on this same Pi for CPU reasons (see its own
-    # comment) — if that combination ever starves the local costmap's
-    # 5Hz again, the fix is trading particles for this, not hedging this
-    # number down first: this is what the guide's own case actually needed.
     laser_likelihood_max_dist: 4.0
-    # 8m, not the RPLidar's full 12m. Beyond ~8m indoors the returns are
-    # walls already in the map, so the extra range costs CPU in the sensor
-    # model without improving the pose estimate.
     laser_max_range: 8.0
     laser_min_range: 0.35
     laser_model_type: "likelihood_field"
     max_beams: 90
-    # Cut from 2500/800. AMCL cost is roughly particles x beams, and on a
-    # small indoor map 1200 particles localise just as well while leaving CPU
-    # for the costmaps — which matters more for obstacle avoidance than
-    # particle count does for pose: under load the local costmap was not
-    # hitting its configured 5Hz, and a stale costmap is what actually makes
-    # the robot hit things.
     max_particles: 1200
     min_particles: 500
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    # Slow recovery helps when pose drifts / mislocalizes
-    recovery_alpha_fast: 0.1
+    recovery_alpha_fast: 0.15
     recovery_alpha_slow: 0.001
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
-    # 0.2 -> 0.1, matching Zheng §5.2's own tuned value exactly (their
-    # default was also 0.2): narrowing the laser-hit Gaussian made an
-    # ambiguous hallway resolve to a single confident particle cluster
-    # instead of spreading across it.
     sigma_hit: 0.1
     tf_broadcast: true
     transform_tolerance: 0.5
-    # Off, by request: this auto-seed only ever gets the stack to
-    # *attempt* activation off a placeholder (0,0,0) pose — it adds launch
-    # time for a self-seed that, live-diagnosed, was not reliably resulting
-    # in a real activation anyway (global_costmap stayed inactive waiting
-    # on map->odom regardless). A manual Pose Estimate after Start
-    # Navigation is the actual real pose either way, so skip the detour and
-    # go straight to map-only-loaded until that arrives.
-    set_initial_pose: false
+    set_initial_pose: true
     initial_pose:
-      x: 0.0
+      x: -0.13
       y: 0.0
       z: 0.0
       yaw: 0.0
-    # Update pose more often (was too sparse → drift / wrong heading).
-    # Tightened for goal accuracy. (Previously reverted alongside the other
-    # accuracy tuning below when plain goals started aborting — root cause
-    # was actually an unrelated asyncio.sleep crash in dock_manager_node's
-    # relay, now fixed, so re-applying this batch.)
-    update_min_a: 0.10
-    update_min_d: 0.10
-    # z_hit 0.7->0.9, matching Zheng §5.2's own tuned value exactly (their
-    # default was 0.5, ours started already-tuned higher at 0.7). z_rand
-    # deliberately NOT touched: their own tuned example kept it identical
-    # to their default (0.5) — z_hit/sigma_hit were the whole change, so
-    # matching the guide means leaving this at its own prior value too, not
-    # additionally lowering it on top. z_max/z_short also untouched (0.05
-    # each) — those model sensor failure modes (max-range returns, early
-    # returns off something not in the map), not localisation confidence,
-    # and the guide's finding wasn't about them either.
+    update_min_a: 0.05
+    update_min_d: 0.05
     z_hit: 0.9
     z_max: 0.05
     z_rand: 0.25
@@ -106,22 +50,14 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: /odom
     bt_loop_duration: 10
-    default_server_timeout: 20
-    wait_for_service_timeout: 1000
+    default_server_timeout: 2000
+    wait_for_service_timeout: 2000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
-
-    # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
-    # Built-in plugins are added automatically
-    # plugin_lib_names: []
 
     error_code_names:
       - compute_path_error_code
@@ -129,13 +65,12 @@ bt_navigator:
 
 controller_server:
   ros__parameters:
-    # Pi 5 + DWB: 20 Hz often misses (~10 Hz) → cmd_vel stutter. Hold a rate we can meet.
     controller_frequency: 10.0
     costmap_update_timeout: 0.50
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 1.0
+    failure_tolerance: 2.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -143,140 +78,55 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.08
-      movement_time_allowance: 45.0
+      required_movement_radius: 0.05
+      movement_time_allowance: 60.0
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      # Tightened for goal accuracy — see update_min_a comment above.
-      xy_goal_tolerance: 0.08
-      # 0.12 -> 0.17 by request: final yaw was regularly needing 2-3
-      # correction passes to settle inside 0.12rad (~6.9deg) before the goal
-      # was accepted. 0.17rad (~9.7deg) still reasonably tight, gives the
-      # rotate-to-heading step some room to actually finish in one pass.
-      yaw_goal_tolerance: 0.17
+      xy_goal_tolerance: 0.10
+      # 0.17 -> 0.25 (upstream Nav2 example-config default, not a fresh
+      # guess): at rotate_to_heading_angular_vel's own floor (~0.178 rad/s,
+      # this robot's real wheel breakaway speed), the accel/decel ramp
+      # necessarily dwells on sub-floor commands the wheels can't actually
+      # produce, so the final heading lands via a stick-slip jump rather
+      # than a controlled approach. 0.17 rad was tighter than that jump size
+      # can reliably land inside, causing repeated correction attempts
+      # ("bump, stop, bump"). This is global (every FollowPath goal on the
+      # robot uses general_goal_checker, not just docking staging) because
+      # the same wheel-floor physics apply to every in-place rotation.
+      yaw_goal_tolerance: 0.20
 
-    # Regulated Pure Pursuit, not DWB+RotationShim: DWB scores 14x24=336
-    # sampled trajectories every cycle, which is real CPU pressure on this
-    # Pi (see controller_frequency above) and — measured live — could
-    # settle on a DIFFERENT "best" trajectory direction from one cycle to
-    # the next when two candidates scored near-equal, producing a
-    # back-and-forth hunt: theta oscillated across a ~0.6rad band for 22s
-    # with almost no net progress, even with Oscillation critic's own
-    # reset thresholds already tightened (0.12m / 0.35rad — this wasn't a
-    # loose-default problem). RPP has no competing-candidate-set to flip
-    # between: one lookahead point, one curvature, each cycle — and it's
-    # geometric rather than sampled, so it's far cheaper to run.
-    #
-    # DWB+RotationShim is kept below as FollowPathDWB (not in
-    # controller_plugins, so unloaded/inert) — to revert, change
-    # controller_plugins back to that name.
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      # == old max_vel_x. velocity_smoother's [0.18, 0, 0.45] stays the
-      # fixed safety ceiling above whatever the controller requests,
-      # unchanged by this swap.
-      desired_linear_vel: 0.135
-      # 0.25/0.5 -> 0.15/0.3 by request: RPP steers toward a point AHEAD on
-      # the path (the whole pure-pursuit idea), which inherently cuts
-      # corners rather than tracking the path exactly — the tighter the
-      # turn or the closer to an obstacle, the more it can cut inside the
-      # margin Smac2D actually planned for. 0.5m max was over 3x this
-      # robot's own body diameter (0.25m); a shorter lookahead makes the
-      # arc it draws hug the actual path much more closely, at some cost
-      # to how smooth the motion looks.
+      desired_linear_vel: 0.08
+      lookahead_dist: 0.25
+      min_lookahead_dist: 0.20
+      max_lookahead_dist: 0.50
+      lookahead_time: 1.5
       use_velocity_scaled_lookahead_dist: true
-      min_lookahead_dist: 0.15
-      max_lookahead_dist: 0.3
       use_rotate_to_heading: true
-      # Both reused as-is from the old RotationShimController tuning above
-      # — already field-validated (rotate speed: -20% per request; angle:
-      # "was driving straight into doors" below this threshold). Do NOT
-      # lower rotate_to_heading_min_angle to chase final-approach jitter
-      # (see max_angular_accel note below) without re-testing doorway
-      # traversal — raising it to 0.90 is what fixed that regression, and
-      # it's a single global threshold, not a final-approach-only knob.
-      #
-      # 0.239 -> 0.18 by request: in-place rotation still read as
-      # aggressive after the ramp-up/ramp-down accel split (see
-      # max_angular_accel below) fixed the stall-then-jerk shape. This is
-      # the separate, safe lever — top speed, not ramp rate — do not touch
-      # max_angular_accel's fast ramp-up to chase this; that fixes a
-      # different, worse bug (see its own comment).
-      rotate_to_heading_angular_vel: 0.18
-      rotate_to_heading_min_angle: 0.90
-      # Was 0.55, then 0.40 (matched to velocity_smoother's own downstream
-      # max_accel[theta], which was producing a stair-step/overshoot jerk at
-      # final in-place rotation when the two didn't agree — see max_decel's
-      # own comment below, that half of the fix is unchanged).
-      #
-      # Raised again, 0.40 -> 0.75, for a different bug: reported directly —
-      # in-place rotation (and general goal motion) doesn't actually move
-      # the robot until a manual joystick nudge, or "struggles". Real cause,
-      # not guessed: tag_dock_node.py documents an actual firmware
-      # creep/breakaway floor ("very low commands stop producing motion at
-      # all") and sets its own approach_speed to 0.02 m/s to stay above it.
-      # At this robot's own wheel_separation (0.225 m, odom_params.yaml), a
-      # pure in-place rotation needs omega >= ~0.071 rad/s for EACH wheel's
-      # surface speed to clear that same 0.02 m/s floor. Ramping from a
-      # stop at the old 0.40 rad/s^2 and this smoother's 10 Hz took 2 whole
-      # ticks (0.2s) to get there — a real, if short, window where the
-      # commanded rotation is below the floor and the wheels don't actually
-      # turn. 0.75 clears it inside the very first tick instead. Deliberately
-      # NOT touching max_decel (still 0.40 in magnitude, see below) — a fast
-      # ramp-UP fixes the stall-at-start; a fast ramp-DOWN is exactly the
-      # jerky-stop bug already fixed above. The two needed opposite answers,
-      # so only accel moved.
-      #
-      # 0.75 -> 0.65 by request, small trim only: 0.75 was already close to
-      # the ~0.71 rad/s^2 minimum this same math implies for 1-tick floor
-      # clearance (0.071 rad/s / 0.1s), so this is deliberately a small cut,
-      # not a return toward 0.40-0.55. If in-place rotation goes back to
-      # not starting without a manual nudge, that is this margin having
-      # been real — put it back to 0.75, do not cut further.
-      max_angular_accel: 0.65
-      # RPP's own default, not the dock's 0.02 — that value is documented
-      # elsewhere in this workspace as barely above this robot's own
-      # motor breakaway/stall floor, not a speed to steer toward here.
+      rotate_to_heading_angular_vel: 0.28
+      rotate_to_heading_min_angle: 0.45
+      max_angular_accel: 0.22
+      use_approach_linear_velocity_scaling: true
+      approach_velocity_scaling_dist: 0.60
       min_approach_linear_velocity: 0.05
       use_collision_detection: true
-      # RPP's own internal collision check horizon, projected forward along
-      # the carrot/lookahead. Left at the upstream default (1.0s) until now
-      # -- raising it gives RPP's own check the same extra lead time already
-      # given to FootprintApproach (time_before_collision 1.2->1.8), and
-      # compensates for the shrunk lookahead (min/max 0.25/0.5 -> 0.15/0.3):
-      # a shorter carrot alone would otherwise mean less distance for this
-      # check to look ahead over. Per docs.nav2.org RPP config reference.
       max_allowed_time_to_collision_up_to_carrot: 1.8
       use_regulated_linear_velocity_scaling: true
-      # Curvature-based slowdown floor. Left at the upstream default (0.25
-      # m/s) until now -- that default is HIGHER than this robot's own
-      # desired_linear_vel (0.135), so curvature regulation could never
-      # actually take effect: the robot already cruises below the floor it
-      # was supposedly regulating down to. Set below desired_linear_vel,
-      # matching the existing min_approach_linear_velocity, so regulation
-      # can genuinely slow the robot through corners.
-      regulated_linear_scaling_min_speed: 0.05
-      use_cost_regulated_linear_velocity_scaling: true
-      # Must match local/global costmap inflation_layer.cost_scaling_factor
-      # below — this is how RPP reads the cost gradient as real distance.
-      inflation_cost_scaling_factor: 3.0
+      regulated_linear_scaling_min_speed: 0.055
+      use_cost_regulated_linear_velocity_scaling: false
+      inflation_cost_scaling_factor: 2.2
       transform_tolerance: 0.3
-      # No reversing in general nav, matches the old min_vel_x: 0.0 — the
-      # docking controller owns reverse motion on its own separate path.
       allow_reversing: false
 
-    # Not loaded (absent from controller_plugins above) — kept only so a
-    # revert to DWB+RotationShim is a one-line change back to FollowPath.
     FollowPathDWB:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "dwb_core::DWBLocalPlanner"
-      # ~52° — earlier in-place turn than 1.05 (was driving straight into doors)
       angular_dist_threshold: 0.90
       angular_disengage_threshold: 0.35
       forward_sampling_distance: 0.30
-      # In-place rotation speed, -20% (was 0.40) per request.
       rotate_to_heading_angular_vel: 0.239
       max_angular_accel: 0.55
       simulate_ahead_time: 1.0
@@ -287,15 +137,6 @@ controller_server:
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      # Navigation velocities: cut 35% from the original, then raised 15%, so
-      # they now sit ~25% below where they started (0.18 -> 0.135 etc).
-      # min_rotational_vel tracks them: it is the floor the recovery spin
-      # uses, and leaving it fixed would make recoveries faster than normal
-      # driving.
-      #
-      # velocity_smoother's max_velocity stays at the original [0.18, 0, 0.45]
-      # as a fixed safety ceiling above whatever the controller requests. If
-      # these are ever raised past it, the smoother will silently clamp them.
       max_vel_x: 0.135
       max_vel_y: 0.0
       max_vel_theta: 0.337
@@ -316,8 +157,6 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.04
       transform_tolerance: 0.3
-      # Matches general_goal_checker above (kept in sync in case of a
-      # revert back to this block).
       xy_goal_tolerance: 0.08
       yaw_goal_tolerance: 0.17
       trans_stopped_velocity: 0.03
@@ -332,9 +171,6 @@ controller_server:
           "PathDist",
           "GoalDist",
         ]
-      # PreferForward removed — it kept robot going straight through turns
-      # Reverted 14.0 -> 20.0 obstacle-avoidance bump — see update_min_a
-      # comment above.
       BaseObstacle.scale: 14.0
       PathAlign.scale: 28.0
       PathAlign.forward_point_distance: 0.28
@@ -350,57 +186,20 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      # 5.0 -> 8.0 by request: a person stepping into the path collided
-      # before the robot stopped. At 5Hz, an obstacle can be up to 200ms
-      # stale before it even registers here, on top of whatever
-      # controller_server/collision_monitor then take to react — 8Hz
-      # roughly matches controller_frequency (10Hz below) and cuts that
-      # worst case to ~125ms. Real CPU cost; if this alone doesn't fix it,
-      # the next lever is FootprintApproach.time_before_collision below,
-      # not pushing this further.
       update_frequency: 8.0
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      # 5 -> 6m by request: reacting to a moving obstacle earlier means
-      # seeing it earlier, and this rolling window — not obstacle_max_range
-      # below, which already reaches 5m from the sensor — is what actually
-      # caps that: a dynamic obstacle isn't visible to the local planner or
-      # collision_monitor at all until it crosses into this window, i.e.
-      # within half its width/height of the robot regardless of scan range.
-      # +1m each side is a real CPU cost (~44% more cells at this
-      # resolution) — not pushed further without checking it against the
-      # controller_frequency=10Hz note above, which already exists because
-      # this Pi was missing cycles at the nominal rate.
       width: 6
       height: 6
       resolution: 0.05
-      # Physical diameter 25 cm → radius 0.125 m
-      # 0.16, not 0.125. The chassis is 260mm across (0.13 radius), so the old
-      # value modelled the robot as SMALLER than it is — the planner was
-      # allowed to graze walls by 5mm before anything even counted as a
-      # collision. 0.16 restores the true radius plus 3cm for the rear camera
-      # and mounting hardware. Still leaves a 320mm footprint, comfortable in
-      # any doorway.
       robot_radius: 0.16
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # High = cost dies quickly → grey free strip in narrow corridors
-        # 3.0, not 10.0. cost_scaling_factor is the exponential decay rate of
-        # the inflation cost: at 10.0 the cost collapses within a couple of
-        # centimetres of the obstacle, so the planner paid almost nothing for
-        # driving right along a wall — which is what clipping corners looks
-        # like. A gentler decay spreads the penalty across the whole inflation
-        # radius and pushes paths off the walls.
-        cost_scaling_factor: 3.0
-        # 0.30 still sealed this choke; ~0.20 = body + ~7 cm soft standoff.
-        # Nudged 0.25 -> 0.28 by request after two clean, obstacle-free
-        # passes tonight gave some confidence there's a little room — still
-        # a good margin under the known-bad 0.30, not pushed further without
-        # re-testing the narrow choke this history is about.
-        inflation_radius: 0.28
+        cost_scaling_factor: 2.2
+        inflation_radius: 0.32
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -433,7 +232,6 @@ global_costmap:
       robot_radius: 0.16
       resolution: 0.05
       track_unknown_space: true
-      # Extra wait if AMCL map TF is late (default ~60s still fails without pose)
       initial_transform_timeout: 120.0
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       obstacle_layer:
@@ -455,17 +253,9 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        # Matches local_costmap's inflation_radius — see its comment for why.
-        inflation_radius: 0.28
+        cost_scaling_factor: 2.2
+        inflation_radius: 0.32
       always_send_full_costmap: True
-
-# The yaml_filename does not need to be specified since it going to be set by defaults in launch.
-# If you'd rather set it in the yaml, remove the default "map" value in the tb3_simulation_launch.py
-# file & provide full path to map below. If CLI map configuration or launch default is provided, that will be used.
-# map_server:
-#   ros__parameters:
-#     yaml_filename: ""
 
 map_saver:
   ros__parameters:
@@ -479,19 +269,6 @@ planner_server:
     expected_planner_frequency: 5.0
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
-    # Smac 2D, not NavFn: both are A* over the same inflated costmap, so
-    # similar CPU cost — the difference is cost_travel_multiplier below,
-    # which lets a nonzero-cost cell be weighted far more than 1:1 against
-    # distance during search. NavFn has no equivalent knob, so in a
-    # corridor where the inflation gradient doesn't fully bridge the width
-    # it just takes whichever side comes out fractionally shorter — this is
-    # the standard fix for "path hugs one wall in a narrow corridor" without
-    # having to keep pushing inflation_radius (already fought once, see the
-    # cost_scaling_factor comment below: pushed too far, it seals doorways
-    # shut).
-    #
-    # NavFn kept below as GridBasedNavFn (not in planner_plugins, so
-    # unloaded) — revert by pointing planner_plugins/GridBased back there.
     GridBased:
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.10
@@ -500,20 +277,11 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 2.0
-      # Default is 2.0. Raised so any costed (near-wall) cell is penalized
-      # more heavily relative to raw distance — the direct lever for
-      # pulling the path toward the centre of free space instead of
-      # whichever side is marginally shorter. 3.0 -> 4.0 by request after
-      # two clean passes tonight; still moderate, not pushed further
-      # without seeing this value run.
-      cost_travel_multiplier: 4.0
+      cost_travel_multiplier: 6.0
       use_final_approach_orientation: false
 
-    # Not loaded (absent from planner_plugins above) — kept only so a
-    # revert to NavFn is a one-line change back to GridBased.
     GridBasedNavFn:
       plugin: "nav2_navfn_planner::NavfnPlanner"
-      # Tightened for goal accuracy — see update_min_a comment above.
       tolerance: 0.10
       use_astar: true
       allow_unknown: true
@@ -551,7 +319,6 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    # Spin recovery in-place rotation speed, -20% (was 0.6/0.25) per request.
     max_rotational_vel: 0.359
     min_rotational_vel: 0.149
     rotational_acc_lim: 0.8
@@ -569,10 +336,6 @@ waypoint_follower:
 
 route_server:
   ros__parameters:
-    # The graph_filepath does not need to be specified since it going to be set by defaults in launch.
-    # If you'd rather set it in the yaml, remove the default "graph" value in the launch file(s).
-    # file & provide full path to map below. If graph config or launch default is provided, it is used
-    # graph_filepath: $(find-pkg-share nav2_route)/graphs/aws_graph.geojson
     boundary_radius_to_achieve_node: 1.0
     radius_to_achieve_node: 2.0
     smooth_corners: true
@@ -592,51 +355,38 @@ route_server:
 
 velocity_smoother:
   ros__parameters:
-    # Must match controller_frequency (10 Hz) — mismatch causes accel stair-steps / jerks
     smoothing_frequency: 10.0
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: True
     feedback: "OPEN_LOOP"
-    # theta: 0.45 -> 0.35, alongside FollowPath's rotate_to_heading_angular_vel
-    # (0.239 -> 0.18) for the same "in-place rotation still aggressive"
-    # request. This is the fixed ceiling above whatever the controller
-    # requests (see FollowPath's own max_vel_x comment) — still comfortably
-    # above 0.18 so it stays a ceiling, not the binding constraint.
-    max_velocity: [0.18, 0.0, 0.35]
+    max_velocity: [0.09, 0.0, 0.35]
     min_velocity: [-0.0, 0.0, -0.35]
-    # x: 0.10 -> 0.22, theta: 0.40 -> 0.75 — matches FollowPath's own
-    # max_angular_accel raise above (controller_server) and its full
-    # reasoning: a real, documented firmware breakaway/stall floor
-    # (tag_dock_node.py) that the old ramp took ~0.2s to climb past from a
-    # stop, read live as "goal motion doesn't start without a manual
-    # joystick nudge". x follows the same logic at this robot's own linear
-    # breakaway floor (~0.02 m/s) — 0.22 clears it in one 10 Hz tick instead
-    # of two.
-    #
-    # theta: 0.75 -> 0.65 to match FollowPath's own max_angular_accel trim
-    # (controller_server) — keep these two matched, see the stair-step/
-    # mismatch bug documented at max_angular_accel's own comment above for
-    # why. x (0.22) left untouched, not part of this request.
-    max_accel: [0.22, 0.0, 0.65]
-    # UNCHANGED from the previous fix — matches FollowPath's own
-    # max_angular_accel *before* this round's raise (both were 0.40),
-    # which is what actually fixed the jerky/sudden final-yaw stop: a fast
-    # ramp-DOWN there was the bug, so decel deliberately did not follow
-    # accel up this time. See FollowPath's own max_angular_accel comment
-    # (controller_server) for why the two needed opposite treatment.
-    max_decel: [-0.10, 0.0, -0.40]
+    max_accel: [0.11, 0.0, 0.22]
+    max_decel: [-0.11, 0.0, -0.25]
     odom_topic: "odom"
     odom_duration: 0.15
-    # Do not deadband yaw — small ω was killed → stick then surge
-    deadband_velocity: [0.0, 0.0, 0.0]
+    # theta left at its prior values (0.35 ceiling, 0.18/-0.18 accel/decel):
+    # rotate_to_heading_angular_vel (0.18) sits right at this robot's real
+    # wheel breakaway floor, so the accel-limited ramp asks for several
+    # sub-floor angular velocities on the way up and down that the wheels
+    # physically can't produce (stiction) — the wheels sit still through
+    # those requests, then break loose all at once when the ramp finally
+    # crosses the floor, which is the "bump" felt live.
+    # deadband_velocity is Nav2's own mechanism for exactly this: values
+    # inside the band are commanded as 0 instead, so the smoother stops
+    # dwelling in the impossible zone and reaches the floor in one clean
+    # step. Left just under 0.18 so cruise speed itself isn't zeroed.
+    # x halved for the "reduce autonomous speed" pass (2026-08-29): the
+    # linear wheel breakaway floor is ~0.02 m/s (see docking work), so 0.09
+    # cruise / 0.11 accel / -0.05 decel still sit comfortably above it —
+    # unlike theta, there's no stiction deadband tension here to preserve.
+    deadband_velocity: [0.0, 0.0, 0.06]
     velocity_timeout: 1.0
 
 collision_monitor:
   ros__parameters:
     base_frame_id: "base_link"
     odom_frame_id: "odom"
-    # Pass-through node required by Nav2 lifecycle manager.
-    # Invalid polygon config leaves collision_monitor unconfigured → bt_navigator never activates.
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
@@ -644,69 +394,21 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    # Enabled: RPP's own use_collision_detection checks along the
-    # path/carrot direction — the right question for forward driving, but
-    # it left a gap for a robot rotating near an obstacle, where the risk is
-    # the footprint SWEEPING into something during the turn rather than
-    # what's ahead of the lookahead point. Confirmed live: the robot
-    # physically touched something and stopped mid-turn (near-zero v, small
-    # w) on a route RPP's own check had been clean on. FootprintApproach
-    # checks the actual footprint sweep continuously regardless of travel
-    # direction, closing that gap.
-    #
-    # Caveat: this reads from scan_filtered, which still carries an
-    # unfixed intermittent self-hit at ~0.12m — well inside any reasonable
-    # approach threshold. Expect this to make the robot pause more often
-    # than strictly necessary until that scan self-hit is actually fixed
-    # (see git history — the first attempt at that broke /scan_filtered
-    # outright and was reverted). Worst case here is over-caution, not
-    # reduced safety, so enabling anyway.
-    # SlowdownEarly added alongside FootprintApproach, not in place of it —
-    # a separate, earlier-triggering layer rather than touching the config
-    # already confirmed working. See SlowdownEarly's own comment below for
-    # the radius derivation and why "slowdown" (not "stop") was chosen here
-    # after "stop" broke FootprintApproach's configure entirely.
     polygons: ["FootprintApproach", "SlowdownEarly"]
     FootprintApproach:
       type: "polygon"
-      # REVERTED to "approach" — live-tested "stop" and it broke configure
-      # entirely: collision_monitor stuck unconfigured, which cascaded to
-      # bt_navigator/costmaps/everything downstream never activating (this
-      # exact cascade is the failure mode this file's own comment above
-      # already warns about: "Invalid polygon config leaves
-      # collision_monitor unconfigured -> bt_navigator never activates").
-      # Restoring the known-working value immediately rather than leaving
-      # navigation broken while re-investigating why "stop" specifically
-      # doesn't configure on this nav2_collision_monitor build — do not
-      # re-attempt "stop" without figuring that out first.
       action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
-      # 1.2 -> 1.8s by request: a person stepping in front collided before
-      # the robot stopped. More lead time to react/decelerate, at the cost
-      # of stopping more cautiously in general.
-      time_before_collision: 1.8
+      time_before_collision: 1.4
       simulation_time_step: 0.1
       min_points: 6
       visualize: False
       enabled: True
-    # Earlier-triggering speed cap, ahead of FootprintApproach's tighter
-    # window. A circular zone (not the actual footprint) — simplest, most
-    # standard collision_monitor shape, deliberately different plumbing
-    # from FootprintApproach so a mistake here doesn't share the exact
-    # failure mode that took "stop" down.
-    #
-    # radius derivation, worked from base_link (collision_monitor already
-    # transforms scan points into base_link before testing containment, so
-    # no separate lidar-offset correction is needed on this number itself):
-    #   radius = forward_obstacle_distance (0.30m, requested) + robot_radius
-    #            (0.16m, the costmap's own padded value, not the bare
-    #            0.125m physical radius)
-    #          = 0.46m
     SlowdownEarly:
       type: "circle"
       action_type: "slowdown"
-      radius: 0.46
-      slowdown_ratio: 0.5
+      radius: 0.40
+      slowdown_ratio: 0.75
       min_points: 4
       visualize: False
       enabled: True
@@ -720,90 +422,16 @@ collision_monitor:
 
 docking_server:
   ros__parameters:
-    controller_frequency: 50.0
-    initial_perception_timeout: 5.0
-    wait_charge_timeout: 5.0
-    dock_approach_timeout: 30.0
-    undock_linear_tolerance: 0.05
-    undock_angular_tolerance: 0.1
-    max_retries: 3
-    base_frame: "base_link"
-    fixed_frame: "odom"
-    # Robot's connector is on the back — approach/dock in reverse, front-out.
-    dock_backwards: true
-    dock_prestaging_tolerance: 0.5
-
-    # battery_state (relative topic) is remapped to /battery/state in
-    # docking.launch.py — battery_node.py publishes there, not on the
-    # unremapped default name docking_server expects.
-
-    # Types of docks
     dock_plugins: ["simple_charging_dock"]
     simple_charging_dock:
       plugin: "opennav_docking::SimpleChargingDock"
-      docking_threshold: 0.05
-      # Standoff in front of the dock before the final approach segment.
-      # Sign confirmed via live test (dock bookmark oriented correctly,
-      # robot still staged toward the back of the room) — SimpleChargingDock
-      # computes staging_pose = dock_pose + staging_x_offset*(cos yaw, sin
-      # yaw) using the dock pose's own yaw; with our convention (yaw = the
-      # connector's outward-facing direction), the staging point needs a
-      # POSITIVE offset to land out in the room in front of the dock, not
-      # negative (which put it behind/into the wall side). Flipped -0.6 ->
-      # +0.6, then reduced 0.6 -> 0.3 (was staging further out than wanted,
-      # ~60-80cm live) — shorter final approach for the still-flaky
-      # lidar-detection segment to cover, closer to the odometry fallback's
-      # own effective range too.
-      staging_x_offset: 0.3
-      use_external_detection_pose: true
-      use_battery_status: true
-      use_stall_detection: false # true — needs joint_states effort feedback; unverified on this robot
-
-      # Raised from 1.0: the RPLidar A1M8 cannot see closer than its
-      # range_min of 0.15m, and the lidar sits only ~0.15m ahead of the
-      # robot's rear edge, so detection necessarily drops out right as the
-      # dock reaches the robot. 1.0s left no margin for that final blind
-      # stretch (mechanical guides + the battery check own it) and a
-      # momentary dropout could abort an otherwise-good approach.
-      external_detection_timeout: 3.0
-      # dock_detector_node publishes detected_dock_pose directly in the dock's
-      # own frame convention (X out through the connector, Z up) — no
-      # camera/fiducial-mount offset to correct for, unlike the stock example
-      # values this repo previously had here (calibrated for a tilted camera).
-      external_detection_translation_x: 0.0
-      external_detection_translation_y: 0.0
-      external_detection_rotation_roll: 0.0
-      external_detection_rotation_pitch: 0.0
-      external_detection_rotation_yaw: 0.0
-      filter_coef: 0.1
-
-    # Dock instances
-    # The following example illustrates configuring dock instances.
-    # docks: ['home_dock']  # Input your docks here
-    # home_dock:
-    #   type: 'simple_charging_dock'
-    #   frame: map
-    #   pose: [0.0, 0.0, 0.0]
-
-    controller:
-      k_phi: 3.0
-      k_delta: 2.0
-      v_linear_min: 0.15
-      v_linear_max: 0.15
-      use_collision_detection: true
-      costmap_topic: "local_costmap/costmap_raw"
-      footprint_topic: "local_costmap/published_footprint"
-      transform_tolerance: 0.1
-      projection_time: 5.0
-      simulation_step: 0.1
-      dock_collision_threshold: 0.3
 
 loopback_simulator:
   ros__parameters:
     base_frame_id: "base_link"
     odom_frame_id: "odom"
     map_frame_id: "map"
-    scan_frame_id: "lidar_1" # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'
+    scan_frame_id: "lidar_1"
     update_duration: 0.02
     scan_range_min: 0.35
     scan_range_max: 12.0

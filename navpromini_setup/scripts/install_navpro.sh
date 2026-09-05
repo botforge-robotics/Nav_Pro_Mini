@@ -46,7 +46,10 @@ fi
 usermod -aG dialout "${USER_NAME}" || true
 
 # --- dirs ---
-install -d -m 0755 /opt/navpro/scripts /etc/navpro /var/lib/navpro/maps
+install -d -m 0755 /opt/navpro/scripts /etc/navpro /etc/ros /var/lib/navpro/maps
+if [[ -f "/config/fastdds_udp.xml" ]]; then
+  install -m 0644 "/config/fastdds_udp.xml" /etc/ros/fastdds_udp.xml
+fi
 
 # --- USB udev ---
 if [[ -f "${PKG_ROOT}/udev/99-navpro.rules" ]]; then
@@ -78,7 +81,7 @@ fi
 nmcli device set wlan0 managed yes 2>/dev/null || true
 
 # --- helper scripts for systemd ---
-for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission_planner.sh; do
+for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission_planner.sh start_sdk.sh; do
   if [[ -f "${PKG_ROOT}/scripts/${f}" ]]; then
     install -m 0755 "${PKG_ROOT}/scripts/${f}" "/opt/navpro/scripts/${f}"
   fi
@@ -115,7 +118,7 @@ rm -f /etc/navpro/fleet.yaml /etc/navpro/fleet.yaml.tmp 2>/dev/null || true
 
 # --- systemd services ---
 UNIT_DIR="${PKG_ROOT}/systemd"
-for unit in navpro-robot.service navpro-provision.service navpro-display.service navpro-mission-planner.service; do
+for unit in navpro-robot.service navpro-provision.service navpro-display.service navpro-mission-planner.service navpro-sdk.service; do
   src="${UNIT_DIR}/${unit}"
   dst="/etc/systemd/system/${unit}"
   sed -e "s|REPLACE_USER|${USER_NAME}|g" -e "s|REPLACE_WS|${WS}|g" "${src}" > "${dst}"
@@ -123,9 +126,9 @@ for unit in navpro-robot.service navpro-provision.service navpro-display.service
 done
 
 systemctl daemon-reload
-systemctl enable navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service
-systemctl restart navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service || \
-  systemctl start navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service
+systemctl enable navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service navpro-sdk.service
+systemctl restart navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service navpro-sdk.service || \
+  systemctl start navpro-display.service navpro-robot.service navpro-provision.service navpro-mission-planner.service navpro-sdk.service
 
 echo ""
 echo "==> Install complete"
@@ -133,7 +136,8 @@ echo "    Services:"
 echo "      navpro-display          — OLED / LED status"
 echo "      navpro-robot            — lidar, odom, micro-ROS hardware"
 echo "      navpro-provision        — Wi‑Fi setup hotspot (when needed)"
-echo "      navpro-mission-planner  — Botforge rosbridge (:9090) + mission services"
+echo "      navpro-mission-planner  — Botforge rosbridge (:9090) + mission services
+      navpro-sdk              — NavPro Mini HTTP/WebSocket API (:8090)"
 echo ""
 echo "    If no known Wi‑Fi is nearby, connect your phone to:"
 echo "      SSID  NavPro-Setup-<last6 of MAC>"

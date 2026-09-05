@@ -47,7 +47,7 @@ STATE_FX: dict[str, tuple[str, str]] = {
     'boot': ('NavProMini', 'solid,255,0,0'),
     'setup': ('Setup WiFi - pass: navprosetup', 'blink,255,160,0,400'),
     'joining': ('Connecting WiFi...', 'solid,0,200,220'),
-    'ready': ('Ready', 'solid,0,200,40'),
+    'ready': ('', 'solid,0,200,40'),
     'mapping': ('Mapping...', 'chase,0,120,255,80'),
     'nav': ('Nav ready', 'solid,0,200,40'),
     'error': ('Error', 'blink,255,0,0,300'),
@@ -120,6 +120,8 @@ class StatusDisplayNode(Node):
         # Liveness-only (see _hardware_ready) — not processed for anything
         # else, so best-effort/shallow queue is fine, same as joint_states.
         self.create_subscription(LaserScan, 'scan', self._on_scan, JS_QOS)
+        self.create_subscription(String, 'dock_status', self._on_dock_status, 10)
+        self._dock_status: Optional[str] = None
         # What the battery currently says, and what we have committed to
         # showing — separated so the debounce can hold the LED steady while
         # contact settles.
@@ -181,6 +183,13 @@ class StatusDisplayNode(Node):
 
     def _on_scan(self, _msg: LaserScan) -> None:
         self._last_scan_ns = self.get_clock().now().nanoseconds
+
+    def _on_dock_status(self, msg: String) -> None:
+        status = (msg.data or '').strip().lower()
+        if status != self._dock_status:
+            self._dock_status = status
+            self._note_state_composed()
+            self._compose_pending(self._state)
 
     def _hardware_ready(self) -> bool:
         """Encoders (joint_states) and LiDAR (scan) both publishing recently
@@ -404,6 +413,21 @@ class StatusDisplayNode(Node):
         raw = str(self.get_parameter(name).value).strip()
         return '' if raw in ('', '_') else raw
 
+    def _get_robot_ip(self) -> str:
+        try:
+            import subprocess
+            r = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2)
+            if r.returncode == 0 and r.stdout:
+                ips = r.stdout.strip().split()
+                for addr in ips:
+                    if not addr.startswith('127.') and not addr.startswith('10.42.'):
+                        return addr
+                if ips:
+                    return ips[0]
+        except Exception:
+            pass
+        return ""
+
     def _compose_text(self, state: str, default_text: str) -> str:
         name = self._param_str('robot_name')
         ap = self._param_str('ap_ssid')
@@ -415,12 +439,11 @@ class StatusDisplayNode(Node):
         if state == 'joining':
             return f'{name} - Connecting WiFi...' if name else 'Connecting WiFi...'
         if state == 'ready':
-            # Idle: show the robot's name on its own. "Ready" adds nothing a
-            # person standing in front of the robot cannot already see, while
-            # the name is what actually distinguishes one unit from another in
-            # a room with several. States that convey activity (mapping, nav,
-            # error) keep their label, prefixed by the name.
-            return name or default_text
+            # Always show robot IP when everything is OK (never show 'Ready' text)
+            ip = self._get_robot_ip()
+            if ip:
+                return ip
+            return name or default_text or 'No IP'
         if state in ('nav', 'mapping', 'error') and name:
             return f'{name} - {default_text}'
         return default_text
@@ -452,8 +475,12 @@ class StatusDisplayNode(Node):
         # method's already-intricate hint/mtime race handling untouched.
         display_state = 'boot' if state == 'ready' and not self._hardware_ready() else state
         text, led = STATE_FX.get(display_state, STATE_FX['boot'])
-        self._pending_text = self._oled_ascii(self._compose_text(display_state, text))[:192]
-        self._pending_led = CHARGE_LED.get(self._charge_shown or '', led)
+        if self._dock_status in ('staging', 'searching', 'servo', 'blind_creep'):
+            self._pending_text = self._oled_ascii('Docking...')[:192]
+            self._pending_led = 'solid,255,255,255'
+        else:
+            self._pending_text = self._oled_ascii(self._compose_text(display_state, text))[:192]
+            self._pending_led = CHARGE_LED.get(self._charge_shown or '', led)
 
     def _esp_ready(self) -> bool:
         text_subs = self._pub_text.get_subscription_count()

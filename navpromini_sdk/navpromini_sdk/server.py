@@ -91,6 +91,9 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/mapping/finish', mode.FinishMappingHandler, opts),
         # maps
         (rf'{API}/maps', maps.MapsHandler, opts),
+                (rf'{API}/maps/current/info', maps.CurrentMapInfoHandler, opts),
+        (rf'{API}/maps/current/raw', maps.CurrentMapRawHandler, opts),
+        (rf'{API}/maps/current/image', maps.CurrentMapImageHandler, opts),
         (rf'{API}/maps/current', maps.CurrentMapHandler, opts),
         (rf'{API}/maps/([^/]+)/activate', maps.ActivateMapHandler, opts),
         (rf'{API}/maps/([^/]+)', maps.MapHandler, opts),
@@ -102,6 +105,7 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/navigation/status', navigation.StatusHandler, opts),
         (rf'{API}/navigation/goal', navigation.CancelHandler, opts),
         (rf'{API}/navigation/localize', navigation.LocalizeHandler, opts),
+        (rf'{API}/navigation/relocalize/global', navigation.GlobalRelocalizeHandler, opts),
         (rf'{API}/navigation/path', navigation.PathHandler, opts),
         # docking
         (rf'{API}/dock', docking.DockHandler, opts),

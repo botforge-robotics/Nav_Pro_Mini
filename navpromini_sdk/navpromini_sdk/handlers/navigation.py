@@ -10,7 +10,7 @@ from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 
 from .base import ApiError, BaseHandler
-from .roscall import ros_future, send_goal
+from .roscall import call_service, ros_future, send_goal
 
 
 class _GoalTracker:
@@ -183,14 +183,35 @@ class StatusHandler(BaseHandler):
         self.send(snap)
 
 
+async def cancel_active_goal(bridge, reason: str = 'canceled') -> bool:
+    if TRACKER.state != 'active' or TRACKER.handle is None:
+        return False
+    try:
+        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+    except Exception:
+        pass
+    TRACKER.finish('canceled', reason)
+    bridge.emit_event('navigation.cancelled', {'reason': reason})
+    return True
+
+
 class CancelHandler(BaseHandler):
     async def delete(self) -> None:
-        if TRACKER.state != 'active' or TRACKER.handle is None:
+        canceled = await cancel_active_goal(self.bridge, 'Canceled by API request')
+        if not canceled:
             self.send({'canceled': False, 'reason': 'no active goal'})
             return
-        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
-        TRACKER.finish('canceled', 'Canceled by API request')
         self.send({'canceled': True})
+
+
+class GlobalRelocalizeHandler(BaseHandler):
+    """Disperse AMCL particles across the map for global relocalization."""
+
+    async def post(self) -> None:
+        from std_srvs.srv import Empty
+        req = Empty.Request()
+        await call_service(self.bridge.cli_global_loc, req, 'reinitialize_global_localization', timeout=5.0)
+        self.send({'status': 'ok', 'message': 'AMCL particles dispersed across map'})
 
 
 class LocalizeHandler(BaseHandler):

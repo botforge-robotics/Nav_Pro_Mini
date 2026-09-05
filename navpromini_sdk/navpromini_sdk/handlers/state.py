@@ -122,7 +122,8 @@ class RobotStateHandler(BaseHandler):
             # ros_bridge.py's module docstring on null vs. an invented value).
             'navigation': {'status': nav_tracker.state, 'goal_id': None},
             'mission': {'status': mission_runner.state,
-                       'mission_id': mission_runner.mission_id},
+                       'mission_id': mission_runner.mission_id,
+                       'pause_reason': mission_runner.pause_reason},
             'dock': {'configured': bridge.get('dock_pose') is not None,
                     'status': bridge.get('dock_status'),
                     'operation': dock_tracker.state},

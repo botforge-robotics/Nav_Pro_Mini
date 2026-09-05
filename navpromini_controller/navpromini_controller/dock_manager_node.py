@@ -1,73 +1,21 @@
 #!/usr/bin/env python3
-"""Single robot-side contract point for docking/undocking/navigation.
-
-Every client (this Flutter app today, a future web API later) should call
-these two actions instead of touching docking_server / bt_navigator directly,
-so cross-cutting behavior lives in exactly one place on the robot:
-
-  dock     (nav2_msgs/action/DockRobot)
-      Navigates to a staging pose in front of the dock with the robot's rear
-      facing it, then hands the final approach to tag_dock_node's `tag_dock`
-      action, which servos the dock's AprilTag to the centre of the rear
-      camera and reverses straight in until the battery reports charging.
-
-      Replaces earlier IR-beacon and lidar back ends, both now removed.
-      Measured on this robot the tag gives 100% detection repeating to 0.3px,
-      where the IR zone flapped several times a second and the lidar dock fit
-      was unusable beyond ~45cm.
-
-  undock   (nav2_msgs/action/NavigateToPose)
-      The entry point any client should use to send a nav goal on this
-      robot. If currently docked, undocks first (awaited) before relaying to
-      bt_navigator's `navigate_to_pose` with the given goal pose — implements
-      "any new goal undocks first" for every client uniformly, not just one
-      app. If not currently docked, it's just a normal navigate-to-pose.
-
-Dock pose persistence — so a web API client or a bare `ros2 action
-send_goal`/`ros2 topic pub` from a terminal can dock without needing to
-already know the dock's pose (today only the Flutter app's bookmark does):
-
-  - Any client can publish geometry_msgs/PoseStamped on `dock_pose`
-    (reliable + transient_local — a late subscriber gets the last value
-    automatically, no polling needed) to set/update the saved dock pose.
-    Persisted to DOCK_POSE_FILE so it survives a node/robot restart.
-  - `dock` action goals with `use_dock_id: true` use this saved pose
-    instead of requiring the caller to supply one.
-  - `dock` action goals with `use_dock_id: false` (an explicit dock_pose
-    given) still work as before, and also refresh the saved pose — so
-    Flutter's existing per-call pose sending keeps the robot's stored copy
-    in sync automatically, no separate publish required from it either.
-
-Publishes:
-  /dock_status (std_msgs/String) — one of:
-      undocked | staging | detecting | docking | waiting_for_charge |
-      charging | full | undocking | error
-  /dock_pose (geometry_msgs/PoseStamped, transient_local) — the currently
-      saved dock pose, if any.
-"""
 
 from __future__ import annotations
 
 import json
 import math
 import os
-import traceback
+import time
 from typing import Optional
-
-# Node output wasn't reliably reaching journald through the nested
-# ros2-launch chain this node is started from (buffering/capture gap,
-# separate from any real bug) — write crashes straight to a file too so a
-# failing execute callback is never silently invisible.
-CRASH_LOG_FILE = '/tmp/dock_manager_crash.log'
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point, PoseStamped, Quaternion
-from nav2_msgs.action import BackUp, DockRobot, DriveOnHeading, NavigateToPose
+from geometry_msgs.msg import Point, PoseStamped, Quaternion, Twist
+from nav2_msgs.action import DockRobot, NavigateToPose
+from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from rclpy.task import Future
 from rclpy.node import Node
 from rclpy.qos import (
     QoSDurabilityPolicy,
@@ -75,272 +23,883 @@ from rclpy.qos import (
     QoSProfile,
     QoSReliabilityPolicy,
 )
+from rclpy.task import Future
 from sensor_msgs.msg import BatteryState
-from std_msgs.msg import String
+from std_msgs.msg import Float32MultiArray, String
 from std_srvs.srv import SetBool
 
 DOCK_POSE_FILE = os.path.expanduser('~/.navpromini_dock_pose.json')
+_TICK = 0.1
 
-# Publish side: transient_local so a client that (re)subscribes after the
-# pose was set still gets it without polling (same pattern as /map).
-_DOCK_POSE_PUB_QOS = QoSProfile(
+_LATCHED_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.RELIABLE,
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
     history=QoSHistoryPolicy.KEEP_LAST,
     depth=1,
 )
-# Subscribe side: plain volatile. DDS QoS compatibility requires a
-# transient_local *subscriber* to only match a transient_local publisher —
-# rosbridge-side publishers (Flutter, or `ros2 topic pub` from a terminal)
-# are ordinary volatile publishers, so staying volatile here is what
-# actually lets their updates reach us. The two ends don't need matching
-# QoS on the same topic name.
-_DOCK_POSE_SUB_QOS = QoSProfile(
+_SENSOR_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.BEST_EFFORT,
+    durability=QoSDurabilityPolicy.VOLATILE,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=10,
+)
+_VOLATILE_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.RELIABLE,
     durability=QoSDurabilityPolicy.VOLATILE,
     history=QoSHistoryPolicy.KEEP_LAST,
     depth=1,
 )
 
-# nav2_msgs/action/DockRobot Feedback.state values
-_DOCK_STATE_TO_STATUS = {
-    DockRobot.Feedback.NONE: 'staging',
-    DockRobot.Feedback.NAV_TO_STAGING_POSE: 'staging',
-    DockRobot.Feedback.INITIAL_PERCEPTION: 'detecting',
-    DockRobot.Feedback.CONTROLLING: 'docking',
-    DockRobot.Feedback.WAIT_FOR_CHARGE: 'waiting_for_charge',
-    DockRobot.Feedback.RETRY: 'docking',
-}
-
-# Final ~1cm nudge backward to seat firmly against the dock connector, once
-# docking_server itself reports success. Sign convention (target.x negative =
-# backward with positive speed) matches nav2_behaviors::BackUp — bench-test
-# on the real robot before trusting the direction unattended.
-_SEAT_BACKUP_TARGET = Point(x=-0.01, y=0.0, z=0.0)
-_SEAT_BACKUP_SPEED = 0.02
-_SEAT_BACKUP_TIMEOUT_SEC = 5.0
-
-# Odometry-only fallback for the final approach, used when docking_server's
-# own lidar-detection-driven controller aborts after we'd already gotten
-# close (reached CONTROLLING/RETRY/WAIT_FOR_CHARGE — past initial
-# perception). Confirmed live: that controller can abort unpredictably even
-# once aligned and approaching, with no usable error surfaced. Plain
-# odometry drift over this short a distance is small enough to trust
-# directly rather than keep depending on a lidar re-detection loop that's
-# proven flaky. Slow speed per explicit request — this is a blind backup
-# into a fixed object, err on the side of "too slow to hurt anything".
-#
-# 0.30 undershot in the first live test — compared /dock_pose against
-# /amcl_pose right after a failed attempt and the robot was still ~0.385m
-# from the dock's bookmark pose, meaning the controller handed off to this
-# fallback from farther out than assumed. Bumped with margin; now that
-# _confirm_charging actually verifies contact instead of assuming success,
-# overshoot just means pressing gently against the dock rather than a false
-# "docked" report, so erring longer here is the safer direction.
-# Where navigation parks before handing the final approach to the tag
-# controller. 60cm from the dock face, measured to the robot's rear.
-#
-# Was 75cm, chosen back when the IR beacon drove the approach and a
-# differential base needed maximum "arc room" to fix lateral error before
-# closing in. The AprilTag controller does not have that constraint: it steers
-# continuously while reversing, so it corrects on the way in rather than
-# needing the error gone before it starts. Closer staging means a shorter,
-# straighter, faster approach with less accumulated odometry drift.
-#
-# Was 0.60, tightened to 0.40 by request on the reasoning that a
-# continuously-steering controller doesn't need the extra "arc room" a
-# discrete IR approach did. Put back to 0.60: that reasoning assumed the
-# controller was actually converging reliably on the way in, which —
-# confirmed live, repeatedly — it wasn't; a real approach could stall
-# crooked, drift, or plain not correct in time within the tighter 40cm
-# run-in. The gain-tuning bug behind that is fixed separately (see
-# tag_dock_node's k_beta), but the extra distance is real, independent
-# margin on top of that fix, not a substitute for it — more room for the
-# same controller to actually finish converging before it has to seat.
-# The ~0.5m floor this comment used to warn about was reasoned from pixel
-# size alone (tag subtends more px, not fewer, as this shrinks — 60cm
-# gives ~90px, 40cm gives ~135px, both comfortably above the ~40px
-# marginal-decoding point) — closer was never a size problem, so there's
-# no detection-side cost to backing this off again either.
-#
-# 0.60 -> 0.75 (back to the original IR-era value): a live run at k_beta=
-# 0.68 still failed outright — every approach sub-attempt looked *good*
-# early (dx converged to +18px at side=280px on one) then blew up right
-# in the close-in stretch (dx back up to +107, +151px by side=441-588px)
-# before ever reaching CONTACT. That is this same pixel-sensitivity effect
-# the file already documents elsewhere: a fixed real-world residual error
-# reads as far more px once the tag fills more of the frame, so whatever
-# small drift is still left over when the controller enters that zone gets
-# amplified right when there is the least room left to react. More standoff
-# is exactly the lever this comment already reasoned about for the k_beta
-# fix — same logic applies again: more distance for the controller to
-# actually finish converging BEFORE it enters the high-sensitivity zone,
-# not a replacement for a further k_beta/close_slow_side_px look if this
-# alone isn't enough.
-_STAGING_STANDOFF_M = 0.75
-
-# Undocking is just "drive forward far enough to break the pogo-pin contact".
-# 40cm clears the connector and the funnel with margin.
-#
-# Done with nav2_behaviors' DriveOnHeading rather than opennav_docking's
-# UndockRobot, deliberately. docking_server never docked this robot — the
-# AprilTag controller did — so its internal state says "not docked" and its
-# undock did the bare minimum then reported failure: observed as the robot
-# moving ~2cm until the electrodes parted, then "undock unsuccessful". Worse,
-# `undock` is the entry point for every navigation goal, so a failed undock
-# could poison ordinary driving.
-_UNDOCK_DISTANCE_M = 0.40
-_UNDOCK_SPEED = 0.05
-_UNDOCK_TIMEOUT_SEC = 25.0
-
-_ODOM_FALLBACK_DISTANCE_M = 0.45
-_ODOM_FALLBACK_SPEED = 0.03
-# 0.45m / 0.03m/s = 15s nominal — timeout gives real margin on top of that.
-_ODOM_FALLBACK_TIMEOUT_SEC = 25.0
-
 
 class DockManagerNode(Node):
     def __init__(self) -> None:
         super().__init__('navpromini_dock_manager')
 
-        self.declare_parameter('dock_type', 'simple_charging_dock')
-        self._dock_type = str(self.get_parameter('dock_type').value)
+        p = self.declare_parameter
+        p('angular_rate', 0.035)
+        p('wheel_separation_m', 0.225)
+        p('wheel_breakaway_mps', 0.02)
+        p('wheel_floor_max_scale', 1.8)
+        p('linear_rate', 0.045)
+        p('turn_radians', 0.3491)
+        p('min_turn_period', 0.18)
+        p('sign', -1)
+        p('k_lat', 1.0)
+        p('k_yaw', 0.40)
+        p('k_rho', 0.015)
+        p('max_linear_speed', 0.0125)
+        p('min_servo_speed', 0.008)
+        p('max_omega', 0.08)
+        p('omega_slew', 1.0)
+        p('servo_filter_weight', 0.65)
+        p('blind_min_r', 0.28)
+        p('blind_fallback_r', 0.55)
+        p('blind_creep_m', 0.25)
+        p('blind_creep_speed', 0.018)
+        p('blind_push_max_scale', 3.5)
+        p('stall_speed_mps', 0.003)
+        p('stall_confirm_sec', 1.2)
+        p('stall_charge_wait_sec', 10.0)
+        p('stall_min_travel_m', 0.06)
+        p('straight_kp', 1.5)
+        p('straight_max_omega', 0.1)
+        p('retreat_on_fail_m', 0.25)
+        p('undock_distance', 0.20)
+        p('undock_speed', 0.05)
+        p('dock_origin_offset_m', 0.13)
+        p('standoff_m', 0.90)
+        p('staging_timeout_sec', 300.0)
+        p('marker_wait_timeout', 0.4)
+        p('max_run_timeout', 600.0)
+        p('settle_sec', 0.4)
 
-        self.declare_parameter('use_tag_docking', True)
-        self._use_tag_docking = bool(self.get_parameter('use_tag_docking').value)
-        # Mapping is started with the robot DOCKED, so slam_toolbox's origin
-        # is the docked pose and the dock's location in map frame is known
-        # without anyone placing a bookmark. That is what makes the dock pose
-        # survive a re-map: re-mapping produces a new origin, but if the origin
-        # is always the dock, the dock pose is always the same numbers.
-        #
-        # Used only as a FALLBACK — an explicitly saved/placed dock pose always
-        # wins, because a robot that was not docked when mapping started would
-        # otherwise silently drive at the map origin.
-        self.declare_parameter('assume_dock_at_map_origin', True)
-        self._assume_origin = bool(
-            self.get_parameter('assume_dock_at_map_origin').value)
-        # base_link to the dock face when docked: the robot's rear surface,
-        # i.e. its radius (260mm diameter). The dock sits behind the robot,
-        # hence negative x, and its outward normal points the way the robot
-        # faces when docked, hence yaw 0.
-        self.declare_parameter('dock_origin_offset_m', 0.13)
-        self._dock_origin_offset = float(
-            self.get_parameter('dock_origin_offset_m').value)
-
-        self.declare_parameter('staging_standoff_m', _STAGING_STANDOFF_M)
-        self._standoff = float(self.get_parameter('staging_standoff_m').value)
-        # The saved dock pose's yaw points OUTWARD from the dock face, so a
-        # robot sitting at the staging pose with that same yaw has its rear
-        # toward the dock — which is the orientation it docks in. Confirmed
-        # live against the previous opennav_docking staging behaviour (a
-        # positive staging_x_offset moved the robot away from the dock, and
-        # the robot ended up back-to-dock). Flip this to pi if a future dock
-        # pose convention stores the inward direction instead.
-        self.declare_parameter('staging_yaw_offset_rad', 0.0)
-        self._staging_yaw_offset = float(
-            self.get_parameter('staging_yaw_offset_rad').value)
+        g = lambda n: self.get_parameter(n).value  # noqa: E731
+        self._w_rate = float(g('angular_rate'))
+        self._wheel_sep = float(g('wheel_separation_m'))
+        self._wheel_break_mps = float(g('wheel_breakaway_mps'))
+        self._wheel_floor_max_scale = float(g('wheel_floor_max_scale'))
+        self._v_rate = float(g('linear_rate'))
+        self._turn_radians = float(g('turn_radians'))
+        self._min_turn_period = float(g('min_turn_period'))
+        self._sign = 1.0 if int(g('sign')) >= 0 else -1.0
+        self._k_lat = float(g('k_lat'))
+        self._k_yaw = float(g('k_yaw'))
+        self._k_rho = float(g('k_rho'))
+        self._max_linear_speed = float(g('max_linear_speed'))
+        self._min_servo_speed = float(g('min_servo_speed'))
+        self._max_omega = float(g('max_omega'))
+        self._omega_slew = float(g('omega_slew'))
+        self._servo_filter_weight = float(g('servo_filter_weight'))
+        self._blind_min_r = float(g('blind_min_r'))
+        self._blind_fallback_r = float(g('blind_fallback_r'))
+        self._blind_creep_m = float(g('blind_creep_m'))
+        self._blind_creep_speed = float(g('blind_creep_speed'))
+        self._blind_push_max_scale = float(g('blind_push_max_scale'))
+        self._stall_speed = float(g('stall_speed_mps'))
+        self._stall_confirm = float(g('stall_confirm_sec'))
+        self._stall_charge_wait = float(g('stall_charge_wait_sec'))
+        self._stall_min_travel = float(g('stall_min_travel_m'))
+        self._straight_kp = float(g('straight_kp'))
+        self._straight_max_omega = float(g('straight_max_omega'))
+        self._retreat_on_fail = float(g('retreat_on_fail_m'))
+        self._undock_distance = float(g('undock_distance'))
+        self._undock_speed = float(g('undock_speed'))
+        self._dock_origin_offset = float(g('dock_origin_offset_m'))
+        self._standoff = float(g('standoff_m'))
+        self._staging_timeout = float(g('staging_timeout_sec'))
+        self._marker_timeout = float(g('marker_wait_timeout'))
+        self._max_run = float(g('max_run_timeout'))
+        self._settle = float(g('settle_sec'))
 
         cb = ReentrantCallbackGroup()
+        self._busy = False
+        self._docked = False
+        self._docked_state_known = False
+        self._status = 'undocked'
+        self._tag: Optional[list] = None
+        self._tag_stamp = 0.0
+        self._power: Optional[int] = None
+        self._odom: Optional[Odometry] = None
 
-        # Downstream clients (docking_server / behavior_server / bt_navigator).
-        self._dock_client = ActionClient(self, DockRobot, 'dock_robot', callback_group=cb)
-        self._undock_client = ActionClient(self, DriveOnHeading, 'drive_on_heading', callback_group=cb)
-        self._backup_client = ActionClient(self, BackUp, 'backup', callback_group=cb)
-        self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose', callback_group=cb)
-        self._tag_dock_client = ActionClient(self, DockRobot, 'tag_dock', callback_group=cb)
-        # Rear camera + AprilTag detector — only needed for the tag_dock
-        # portion of a dock attempt below (_execute_dock_tag), so they sit
-        # inactive (no USB capture open, no detection CPU) the rest of a
-        # robot's life: idle, navigating, undocking, already docked.
-        self._camera_active_client = self.create_client(
-            SetBool, 'camera/set_active', callback_group=cb)
-        self._tag_active_client = self.create_client(
-            SetBool, 'dock_tag/set_active', callback_group=cb)
-
-        # Our own action servers — the only two things any client should call.
-        self._dock_server = ActionServer(
-            self, DockRobot, 'dock',
-            execute_callback=self._execute_dock,
-            goal_callback=self._accept_goal,
-            cancel_callback=self._accept_cancel,
-            callback_group=cb,
-        )
-        self._undock_server = ActionServer(
-            self, NavigateToPose, 'undock',
-            execute_callback=self._execute_undock_then_navigate,
-            goal_callback=self._accept_goal,
-            cancel_callback=self._accept_cancel,
-            callback_group=cb,
-        )
-
+        self._cmd = self.create_publisher(Twist, 'cmd_vel_dock', 10)
         self._status_pub = self.create_publisher(String, 'dock_status', 10)
-        # Tells dock_detector_node roughly where to look — published once per
-        # dock attempt, not a continuous stream.
-        self._expected_pose_pub = self.create_publisher(PoseStamped, 'dock_expected_pose', 10)
-        self.create_subscription(BatteryState, 'battery/state', self._on_battery, 10)
+        self._dock_pose_pub = self.create_publisher(
+            PoseStamped, 'dock_pose', _LATCHED_QOS)
+        self.create_subscription(PoseStamped, 'dock_pose',
+                                 self._on_dock_pose_set, _VOLATILE_QOS,
+                                 callback_group=cb)
+        self.create_subscription(Float32MultiArray, 'dock_tag',
+                                 self._on_tag, 10, callback_group=cb)
+        self.create_subscription(BatteryState, 'battery/state',
+                                 self._on_batt, 10, callback_group=cb)
+        self.create_subscription(Odometry, 'odom',
+                                 self._on_odom, _SENSOR_QOS, callback_group=cb)
 
-        # Saved dock pose — see module docstring. Publisher is transient_local
-        # so a client that connects after the pose was set still gets it.
-        self._dock_pose_pub = self.create_publisher(PoseStamped, 'dock_pose', _DOCK_POSE_PUB_QOS)
-        self.create_subscription(PoseStamped, 'dock_pose', self._on_dock_pose_set, _DOCK_POSE_SUB_QOS)
+        self._camera_client = self.create_client(
+            SetBool, 'camera/set_active', callback_group=cb)
+        self._nav_client = ActionClient(
+            self, NavigateToPose, 'navigate_to_pose', callback_group=cb)
+
         self._dock_pose: Optional[PoseStamped] = self._load_dock_pose()
-        if self._dock_pose is None and self._assume_origin:
+        if self._dock_pose is None:
             self._dock_pose = self._dock_pose_at_map_origin()
             self.get_logger().info(
-                'No saved dock pose — assuming the dock is at the map origin '
-                f'({-self._dock_origin_offset:+.2f}m x, yaw 0), which holds when '
-                'mapping was started with the robot docked. Publish on '
-                '`dock_pose` or place a dock bookmark to override.')
+                f'No saved dock pose — assuming dock at map origin ({-self._dock_origin_offset:+.2f}m x, yaw 0)')
         if self._dock_pose is not None:
             self._dock_pose_pub.publish(self._dock_pose)
 
-        self._docked = False
-        # True once _on_battery has looked at a real reading and either
-        # inferred _docked from it or explicitly decided not to — see
-        # _on_battery. A fresh process always starts _docked=False above
-        # regardless of where the robot actually is; this is what lets the
-        # very first battery reading override that default exactly once.
-        self._docked_state_known = False
-        self._status = 'undocked'
-        self._last_power_supply_status: Optional[int] = None
-        # Tracks whichever child goal (dock_robot / drive_on_heading /
-        # navigate_to_pose) is currently in flight, so _accept_cancel can
-        # propagate a cancel on our own goal without polling — see
-        # _await_with_cancel.
-        self._active_child_handle = None
+        ActionServer(self, DockRobot, 'dock',
+                     execute_callback=self._execute_dock,
+                     goal_callback=self._on_goal,
+                     cancel_callback=lambda _g: CancelResponse.ACCEPT,
+                     callback_group=cb)
+        ActionServer(self, NavigateToPose, 'undock',
+                     execute_callback=self._execute_undock,
+                     goal_callback=self._on_goal,
+                     cancel_callback=lambda _g: CancelResponse.ACCEPT,
+                     callback_group=cb)
 
-        self.create_timer(1.0, self._publish_status)
-        backend = 'AprilTag' if self._use_tag_docking else 'lidar/opennav_docking'
-        self.get_logger().info(
-            f'dock_manager ready: dock_type={self._dock_type!r}, '
-            f'approach={backend} — actions dock / undock'
-        )
+        self._tick_waiters: list = []
+        self.create_timer(_TICK, self._on_tick, callback_group=cb)
+        self.create_timer(1.0, self._publish_status, callback_group=cb)
+        self.get_logger().info('dock_manager ready — actions dock / undock')
 
-    # -- goal/cancel bookkeeping -------------------------------------------------
-
-    def _accept_goal(self, _goal_request) -> GoalResponse:
+    def _on_goal(self, _request) -> GoalResponse:
         return GoalResponse.ACCEPT
 
-    def _accept_cancel(self, _goal_handle) -> CancelResponse:
-        child = self._active_child_handle
-        if child is not None:
-            # Fire-and-forget — this callback is synchronous (not a
-            # coroutine), so we can't await the cancel confirmation here.
-            # The child's own result future (awaited in _await_with_cancel)
-            # completes with CANCELED once the cancel actually goes through,
-            # which is what unblocks the execute callback.
-            child.cancel_goal_async()
-        return CancelResponse.ACCEPT
+    def _on_tick(self) -> None:
+        waiters, self._tick_waiters = self._tick_waiters, []
+        for f in waiters:
+            if not f.done():
+                f.set_result(None)
+
+    async def _tick(self) -> None:
+        fut = Future()
+        self._tick_waiters.append(fut)
+        await fut
+
+    async def _sleep(self, sec: float) -> None:
+        end = time.monotonic() + sec
+        while time.monotonic() < end:
+            await self._tick()
+
+    def _on_tag(self, msg: Float32MultiArray) -> None:
+        if len(msg.data) >= 8 and msg.data[0] > 0.5:
+            self._tag = list(msg.data)
+            self._tag_stamp = time.monotonic()
+
+    def _on_batt(self, msg: BatteryState) -> None:
+        self._power = msg.power_supply_status
+        if self._charging() and self._busy:
+            # Immediate wheel stop the millisecond electrodes touch charger
+            self._stop()
+
+        is_charging = self._charging()
+        if is_charging:
+            if not self._docked:
+                self._docked = True
+                self.get_logger().info(
+                    'Battery charging detected — inferring robot is parked at dock.')
+                if self._dock_pose is not None:
+                    self._dock_pose_pub.publish(self._dock_pose)
+            self._set_status(
+                'full' if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_FULL
+                else 'charging')
+        elif self._docked and not self._busy:
+            if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_DISCHARGING:
+                self._docked = False
+                self._set_status('undocked')
+                self.get_logger().info('Battery discharging — robot removed from dock.')
+        self._docked_state_known = True
+
+    def _on_odom(self, msg: Odometry) -> None:
+        self._odom = msg
+
+    def _charging(self) -> bool:
+        return self._power in (BatteryState.POWER_SUPPLY_STATUS_CHARGING,
+                               BatteryState.POWER_SUPPLY_STATUS_FULL)
+
+    def _in_view(self) -> bool:
+        return (self._tag is not None
+                and time.monotonic() - self._tag_stamp < self._marker_timeout)
+
+    def _fid2pos(self):
+        x = float(self._tag[2])
+        z = float(self._tag[4])
+        yaw = float(self._tag[7])
+        theta = math.atan2(x, z)
+        r = math.hypot(x, z)
+        beta = theta + yaw
+        return theta, beta, r
 
     def _set_status(self, status: str) -> None:
+        if self._status != status:
+            self.get_logger().info(f'dock state -> {status}')
         self._status = status
         self._publish_status()
 
     def _publish_status(self) -> None:
         self._status_pub.publish(String(data=self._status))
 
-    # -- saved dock pose (persisted robot-side; see module docstring) ----------
+    def _drive(self, lin: float, ang: float, effort_boost: float = 1.0) -> None:
+        lin = float(lin)
+        ang = float(ang)
+        if lin or ang:
+            half = self._wheel_sep / 2.0
+            slower = min(abs(lin - ang * half), abs(lin + ang * half))
+            if 0.0 < slower < self._wheel_break_mps:
+                max_scale = self._wheel_floor_max_scale * max(1.0, effort_boost)
+                scale = min(max_scale, (self._wheel_break_mps / slower) * effort_boost)
+                lin *= scale
+                ang *= scale
+            elif effort_boost > 1.0:
+                lin *= effort_boost
+                ang *= effort_boost
+        t = Twist()
+        t.linear.x = lin
+        t.angular.z = ang
+        self._cmd.publish(t)
+
+    def _stop(self) -> None:
+        for _ in range(3):
+            self._cmd.publish(Twist())
+
+    async def _turn(self, radians: float, stop_when=None) -> bool:
+        """Closed-loop encoder angle turn: uses odometry to rotate precisely
+        by the requested angle with P-control. Stops immediately if stop_when() is True."""
+        start_yaw = self._odom_yaw()
+        if start_yaw is None:
+            # Fallback to timed if odometry is unavailable
+            period = max(abs(radians) / self._w_rate, self._min_turn_period)
+            rate = -self._w_rate if radians > 0 else self._w_rate
+            end = time.monotonic() + period
+            while time.monotonic() < end:
+                if stop_when is not None and stop_when():
+                    break
+                self._drive(0.0, rate)
+                await self._tick()
+            self._stop()
+            await self._sleep(self._settle)
+            return True
+
+        # In robot frame: turning left/CCW is positive radians, turning right/CW is negative radians
+        target_yaw = (start_yaw + radians + math.pi) % (2.0 * math.pi) - math.pi
+        deadline = time.monotonic() + max(3.0, (abs(radians) / max(0.05, self._w_rate)) * 2.5)
+
+        while time.monotonic() < deadline:
+            if stop_when is not None and stop_when():
+                self._stop()
+                await self._sleep(self._settle)
+                return False
+
+            current_yaw = self._odom_yaw()
+            if current_yaw is None:
+                break
+
+            err = (target_yaw - current_yaw + math.pi) % (2.0 * math.pi) - math.pi
+            if abs(err) < 0.025:  # ~1.4 degrees deadband
+                break
+
+            # Closed-loop P-controller on heading error
+            kp = 1.0
+            omega = max(-self._max_omega, min(self._max_omega, kp * err))
+            if abs(omega) < 0.04:
+                omega = 0.04 if err > 0 else -0.04
+
+            self._drive(0.0, omega)
+            await self._tick()
+
+        self._stop()
+        await self._sleep(self._settle)
+        return True
+
+    async def _settle_and_check_charging(self) -> bool:
+        """Give the battery controller's charging status time to catch up
+        with real physical contact before reporting failure — contact can
+        precede the status update by several seconds."""
+        end = time.monotonic() + self._settle + self._stall_charge_wait
+        while time.monotonic() < end:
+            if self._charging():
+                return True
+            await self._tick()
+        return self._charging()
+
+    async def _jog(self, distance: float, speed: Optional[float] = None,
+                    angular: float = 0.0, push_effort: bool = False) -> bool:
+        rate = speed if speed is not None else self._v_rate
+        period = abs(distance) / rate
+        lin = -rate if distance > 0 else rate
+        # When pushing against friction in a narrow funnel, allow extra time margin
+        end = time.monotonic() + period * (1.8 if push_effort else 1.0)
+        origin = None
+        if self._odom is not None:
+            p = self._odom.pose.pose.position
+            origin = (p.x, p.y)
+        stalled_since = None
+        effort_boost = 1.0
+        while time.monotonic() < end:
+            if self._charging():
+                self._stop()
+                return True
+            if self._odom is not None and origin is not None:
+                p = self._odom.pose.pose.position
+                travelled = math.hypot(p.x - origin[0], p.y - origin[1])
+                speed_now = abs(self._odom.twist.twist.linear.x)
+
+                if push_effort:
+                    # If sidewall friction in the narrow funnel slows down the robot,
+                    # incrementally increase effort/torque without raising nominal target speed
+                    if speed_now < rate * 0.75:
+                        effort_boost = min(self._blind_push_max_scale, effort_boost + 0.1)
+                    elif speed_now >= rate * 0.95:
+                        effort_boost = max(1.0, effort_boost - 0.05)
+
+                if travelled > self._stall_min_travel and speed_now < self._stall_speed:
+                    now = time.monotonic()
+                    stalled_since = stalled_since or now
+                    if now - stalled_since > self._stall_confirm:
+                        self._stop()
+                        self.get_logger().info(
+                            'jog: stalled (odom speed near zero) — '
+                            'stopping instead of pushing further')
+                        return await self._settle_and_check_charging()
+                else:
+                    stalled_since = None
+            self._drive(lin, angular, effort_boost=effort_boost if push_effort else 1.0)
+            await self._tick()
+        self._stop()
+        return await self._settle_and_check_charging()
+
+    def _odom_yaw(self) -> Optional[float]:
+        if self._odom is None:
+            return None
+        q = self._odom.pose.pose.orientation
+        return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    async def _drive_straight(self, distance: float,
+                              speed: Optional[float] = None) -> bool:
+        """Closed-loop straight line: distance comes from odometry (not a
+        timer) and heading is actively held to the starting yaw, so drift
+        is corrected as it happens. Positive distance drives forward.
+        Returns False only on a genuine physical stall."""
+        rate = speed if speed is not None else self._v_rate
+        lin = rate if distance > 0 else -rate
+        target = abs(distance)
+        start_yaw = self._odom_yaw()
+        origin = None
+        if self._odom is not None:
+            p = self._odom.pose.pose.position
+            origin = (p.x, p.y)
+        if origin is None or start_yaw is None:
+            self.get_logger().warn(
+                'straight drive: no odometry — falling back to timed jog')
+            return await self._jog_plain(distance, speed=speed)
+        deadline = time.monotonic() + (target / rate) * 3.0 + 5.0
+        stalled_since = None
+        while time.monotonic() < deadline:
+            p = self._odom.pose.pose.position
+            travelled = math.hypot(p.x - origin[0], p.y - origin[1])
+            if travelled >= target:
+                break
+            speed_now = abs(self._odom.twist.twist.linear.x)
+            if travelled > self._stall_min_travel and speed_now < self._stall_speed:
+                now = time.monotonic()
+                stalled_since = stalled_since or now
+                if now - stalled_since > self._stall_confirm:
+                    self._stop()
+                    self.get_logger().info(
+                        'straight drive: stalled (odom speed near zero) — stopping')
+                    await self._sleep(self._settle)
+                    return False
+            else:
+                stalled_since = None
+            err = (self._odom_yaw() - start_yaw + math.pi) % (2.0 * math.pi) - math.pi
+            omega = max(-self._straight_max_omega,
+                        min(self._straight_max_omega, -self._straight_kp * err))
+            self._drive(lin, omega)
+            await self._tick()
+        self._stop()
+        await self._sleep(self._settle)
+        return True
+
+    async def _clear_dock(self) -> None:
+        """Drive forward off the dock before reporting failure. The dock is
+        behind the robot (rear camera), so forward is away from it — this
+        keeps the next attempt's staging rotation from grinding against the
+        dock while the robot is still pressed into it."""
+        if self._retreat_on_fail <= 0.0:
+            return
+        self.get_logger().info(
+            f'clearing dock: driving forward {self._retreat_on_fail:.2f}m '
+            'before reporting failure')
+        await self._drive_straight(self._retreat_on_fail, speed=self._undock_speed)
+
+    async def _jog_plain(self, distance: float, speed: Optional[float] = None) -> bool:
+        """Drive straight for  (positive = forward). Returns False
+        only on a genuine physical stall (odometry shows no real motion) —
+        no charging check, used outside the dock-approach context."""
+        rate = speed if speed is not None else self._v_rate
+        period = abs(distance) / rate
+        lin = rate if distance > 0 else -rate
+        end = time.monotonic() + period
+        origin = None
+        if self._odom is not None:
+            p = self._odom.pose.pose.position
+            origin = (p.x, p.y)
+        stalled_since = None
+        while time.monotonic() < end:
+            if self._odom is not None and origin is not None:
+                p = self._odom.pose.pose.position
+                travelled = math.hypot(p.x - origin[0], p.y - origin[1])
+                speed_now = abs(self._odom.twist.twist.linear.x)
+                if travelled > self._stall_min_travel and speed_now < self._stall_speed:
+                    now = time.monotonic()
+                    stalled_since = stalled_since or now
+                    if now - stalled_since > self._stall_confirm:
+                        self._stop()
+                        self.get_logger().info(
+                            'undock jog: stalled (odom speed near zero) — stopping')
+                        await self._sleep(self._settle)
+                        return False
+                else:
+                    stalled_since = None
+            self._drive(lin, 0.0)
+            await self._tick()
+        self._stop()
+        await self._sleep(self._settle)
+        return True
+
+    async def _set_camera(self, active: bool) -> None:
+        if not self._camera_client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().warn('camera/set_active unavailable')
+            return
+        req = SetBool.Request()
+        req.data = active
+        try:
+            await self._camera_client.call_async(req)
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'camera/set_active({active}) failed: {exc}')
+
+    def _dock_pose_at_map_origin(self) -> PoseStamped:
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position = Point(x=-self._dock_origin_offset, y=0.0, z=0.0)
+        pose.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+        return pose
+
+    def _staging_pose_for(self, dock_pose: PoseStamped) -> PoseStamped:
+        q = dock_pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        staging = PoseStamped()
+        staging.header.frame_id = dock_pose.header.frame_id or 'map'
+        staging.pose.position = Point(
+            x=dock_pose.pose.position.x + math.cos(yaw) * self._standoff,
+            y=dock_pose.pose.position.y + math.sin(yaw) * self._standoff,
+            z=0.0,
+        )
+        staging.pose.orientation = Quaternion(
+            x=0.0, y=0.0, z=math.sin(yaw / 2.0), w=math.cos(yaw / 2.0))
+        return staging
+
+    async def _navigate_to_staging(self, dock_pose: PoseStamped) -> bool:
+        if not self._nav_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error('navigate_to_pose action server not available')
+            return False
+        staging = self._staging_pose_for(dock_pose)
+        self.get_logger().info(
+            f'navigating to staging pose ({staging.pose.position.x:.2f}, '
+            f'{staging.pose.position.y:.2f}) — {self._standoff:.2f}m from dock')
+        deadline = time.monotonic() + self._staging_timeout
+        goal_handle = None
+        while time.monotonic() < deadline:
+            staging.header.stamp = self.get_clock().now().to_msg()
+            nav_goal = NavigateToPose.Goal()
+            nav_goal.pose = staging
+            send_fut = self._nav_client.send_goal_async(nav_goal)
+            while not send_fut.done():
+                if time.monotonic() > deadline:
+                    return False
+                await self._tick()
+            candidate = send_fut.result()
+            if candidate.accepted:
+                goal_handle = candidate
+                break
+            self.get_logger().warn(
+                'navigate_to_pose rejected the staging goal (server not '
+                'active yet?) — retrying')
+            await self._sleep(1.0)
+        if goal_handle is None:
+            return False
+        result_fut = goal_handle.get_result_async()
+        while not result_fut.done():
+            if time.monotonic() > deadline:
+                self.get_logger().warn('staging navigation exceeded staging_timeout — canceling')
+                await goal_handle.cancel_goal_async()
+                return False
+            if self._in_view():
+                self.get_logger().info('dock tag spotted in camera during staging approach — canceling Nav2 early to begin visual servoing')
+                await goal_handle.cancel_goal_async()
+                return True
+            await self._tick()
+        res = result_fut.result()
+        return res.status == GoalStatus.STATUS_SUCCEEDED
+
+    async def _execute_dock(self, goal_handle):
+        self._busy = True
+        try:
+            goal: DockRobot.Goal = goal_handle.request
+            if not goal.use_dock_id:
+                self._on_dock_pose_set(goal.dock_pose)
+            dock_pose = self._dock_pose
+
+            # Only undock if the robot is physically on the charger
+            if self._charging():
+                self.get_logger().info('dock: currently charging on dock — undocking gently before redocking')
+                self._set_status('undocking')
+                await self._drive_straight(self._undock_distance, speed=self._undock_speed)
+                self._docked = False
+                self._set_status('undocked')
+            else:
+                self._docked = False
+
+            # Navigate to the staging standoff pose in front of the dock via Nav2
+            if dock_pose is not None:
+                self._set_status('staging')
+                if not await self._navigate_to_staging(dock_pose):
+                    self.get_logger().error('failed to reach staging pose via Nav2')
+                    self._stop()
+                    self._set_status('docking_failed')
+                    goal_handle.abort()
+                    return DockRobot.Result(
+                        success=False, error_msg='failed to reach staging pose')
+            else:
+                self.get_logger().warn(
+                    'no dock pose configured — attempting visual servoing directly')
+
+            deadline = time.monotonic() + self._max_run
+            await self._set_camera(True)
+
+            # Check if tag is already visible in rear camera (e.g. manually placed or after undock)
+            # If so, proceed directly to servo without any in-place spin!
+            for _ in range(15):
+                if self._in_view():
+                    break
+                await self._sleep(0.1)
+
+            if self._in_view():
+                self.get_logger().info('dock: tag already in camera view — skipping search sweep, starting visual servoing')
+                self._set_status('servo')
+            else:
+                self.get_logger().info('dock: tag not yet in view — entering search sweep')
+                self._set_status('searching')
+            omega_cmd = 0.0
+            blind_yaw = 0.0
+            approach = 1
+            last_log = 0.0
+            last_seen_tag_x: Optional[float] = None
+            last_seen_z: Optional[float] = None
+            filt_alpha = filt_beta = filt_r = None
+
+            while True:
+                if goal_handle.is_cancel_requested:
+                    self._stop()
+                    goal_handle.canceled()
+                    self._set_status('undocked')
+                    return DockRobot.Result(success=False, error_msg='cancelled')
+                if self._charging():
+                    self._stop()
+                    self._docked = True
+                    self._set_status(
+                        'full' if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL
+                        else 'charging')
+                    goal_handle.succeed()
+                    return DockRobot.Result(success=True)
+                if time.monotonic() > deadline:
+                    self._stop()
+                    await self._clear_dock()
+                    self._set_status('docking_failed')
+                    goal_handle.abort()
+                    return DockRobot.Result(
+                        success=False,
+                        error_msg=f'docking timed out after {approach} '
+                                  f'approach(es)')
+
+                if self._status == 'searching':
+                    if self._in_view():
+                        self._stop()
+                        omega_cmd = 0.0
+                        filt_alpha = filt_beta = filt_r = None
+                        self._set_status('servo')
+                    else:
+                        # Close to dock: never execute in-place rotational sweep; creep straight into funnel
+                        if last_seen_z is not None and last_seen_z < self._blind_fallback_r:
+                            self._stop()
+                            self.get_logger().info(
+                                f'searching: close to dock (z={last_seen_z*100:.1f}cm < {self._blind_fallback_r*100:.0f}cm) — creeping straight without sweeping')
+                            self._set_status('blind_creep')
+                            continue
+                        turn_angle = -self._turn_radians if (last_seen_tag_x is None or last_seen_tag_x < 0) else self._turn_radians
+                        await self._turn(turn_angle, stop_when=self._in_view)
+                    continue
+
+                if self._status == 'servo':
+                    if not self._in_view():
+                        # If we were already close to the dock / entering the funnel,
+                        # do NOT rotate in place (sweep)! Creep straight back instead.
+                        if filt_r is not None and filt_r < self._blind_fallback_r:
+                            self._stop()
+                            blind_yaw = filt_beta - filt_alpha
+                            self.get_logger().info(
+                                f'servo: tag lost at close range (r={filt_r:.3f}m < {self._blind_fallback_r:.2f}m) '
+                                'inside funnel — creeping blind directly without in-place sweep')
+                            self._set_status('blind_creep')
+                            continue
+                        self._stop()
+                        self._set_status('searching')
+                        continue
+
+                    raw_alpha, raw_beta, raw_r = self._fid2pos()
+                    if filt_alpha is None:
+                        filt_alpha, filt_beta, filt_r = raw_alpha, raw_beta, raw_r
+                    else:
+                        w = self._servo_filter_weight
+                        filt_alpha += w * (raw_alpha - filt_alpha)
+                        filt_beta += w * (raw_beta - filt_beta)
+                        filt_r += w * (raw_r - filt_r)
+                    alpha, beta, r = filt_alpha, filt_beta, filt_r
+
+                    tag_x = float(self._tag[2])
+                    tag_z = float(self._tag[4])
+                    tag_yaw = float(self._tag[7])
+                    last_seen_tag_x = tag_x
+                    last_seen_z = tag_z
+
+                    # Continuously visual servo as long as tag is visible in frame!
+                    # Only transition to blind_creep if the tag exceeds the frame boundaries and is lost.
+
+                    # Pure Bearing Centering with Close-Range Rate Tapering (> 28cm distance):
+                    # Bearing theta = atan2(x, z) points directly at the dock tag center
+                    theta = math.atan2(tag_x, tag_z)
+
+                    # Tight deadband of 0.008 rad (~0.45 deg, ~3mm at 40cm) ensures continuous centering
+                    if abs(theta) > 0.008:
+                        # Taper max turn rate close to dock to prevent edge-trimming and blur:
+                        # Far (>45cm): up to max_omega (0.08 rad/s = 4.6 deg/s) for quick capture
+                        # Near (<=45cm): capped at 0.035 rad/s (2.0 deg/s) for ultra-gentle micro-alignment
+                        if tag_z > 0.45:
+                            max_ang = self._max_omega
+                        elif tag_z > 0.25:
+                            max_ang = 0.035
+                        else:
+                            max_ang = 0.020
+                        cmd = -0.65 * theta
+                        target = max(-max_ang, min(max_ang, cmd))
+                    else:
+                        target = 0.0
+
+                    step = self._omega_slew * _TICK
+                    omega_cmd += max(-step, min(step, target - omega_cmd))
+
+                    # Staged Approach Velocity:
+                    # Far (>0.60m): 0.040 m/s
+                    # Medium (0.35m - 0.60m): 0.022 m/s
+                    # Close (0.20m - 0.35m): 0.012 m/s
+                    # Final (<=0.20m): 0.008 m/s (slow micro-approach to contacts)
+                    if tag_z > 0.60:
+                        v_stage = 0.040
+                    elif tag_z > 0.35:
+                        v_stage = 0.022
+                    elif tag_z > 0.20:
+                        v_stage = 0.012
+                    else:
+                        v_stage = 0.008
+
+                    # Slow down to gentle crawl during active angular turns to avoid compound motion blur
+                    turn_fraction = abs(target) / max(1e-3, self._max_omega)
+                    v = v_stage * max(0.25, 1.0 - 0.75 * turn_fraction)
+
+                    now_log = time.monotonic()
+                    if now_log - last_log > 1.0:
+                        last_log = now_log
+                        self.get_logger().info(
+                            f'servo: x={tag_x * 100:+.1f}cm '
+                            f'z={tag_z * 100:.1f}cm '
+                            f'yaw={math.degrees(tag_yaw):+.1f}deg '
+                            f'v={v:+.3f} omega={omega_cmd:+.3f}')
+
+                    self._drive(-v, omega_cmd)
+                    await self._tick()
+                    continue
+
+                if self._status == 'blind_creep':
+                    if self._charging():
+                        self._stop()
+                        continue
+                    # Remaining distance to contacts: tag was lost at dock mouth (e.g. 8-10cm),
+                    # so remaining travel to contacts is only ~4-7cm, NOT 25cm!
+                    creep_dist = min(0.08, max(0.03, (last_seen_z - 0.02) if last_seen_z is not None else 0.05))
+                    self.get_logger().info(
+                        f'blind_creep: last seen at {last_seen_z*100 if last_seen_z else 6:.1f}cm '
+                        f'— creeping {creep_dist*100:.1f}cm gently at 10mm/s into contacts')
+                    if await self._jog(creep_dist,
+                                       speed=0.010,
+                                       angular=0.0,
+                                       push_effort=False):
+                        continue
+                    self._stop()
+                    approach += 1
+                    self.get_logger().info(
+                        f'contact without charge — backing off for '
+                        f'approach {approach}')
+                    await self._clear_dock()
+                    self._set_status('searching')
+                    continue
+
+                await self._tick()
+        finally:
+            self._stop()
+            await self._set_camera(False)
+            self._busy = False
+
+    @staticmethod
+    def _has_nav_goal(goal: NavigateToPose.Goal) -> bool:
+        """Does this request actually ask to go somewhere?
+         is NavigateToPose so one action can mean both 'undock' and
+        'undock, then drive there'. But the UI's Undock button sends no pose at all,
+        and an unset pose is (0,0) with a zero quaternion. Real goal carries a frame_id
+        and a unit quaternion.
+        """
+        if not goal.pose.header.frame_id:
+            return False
+        q = goal.pose.pose.orientation
+        return (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) > 0.5
+
+    async def _execute_undock(self, goal_handle):
+        self._busy = True
+        try:
+            goal: NavigateToPose.Goal = goal_handle.request
+            # Always drive forward off the dock when undock action is called
+            if True:
+                self._set_status('undocking')
+                ok = False
+                for attempt in range(3):
+                    ok = await self._drive_straight(self._undock_distance, speed=self._undock_speed)
+                    if ok:
+                        break
+                    self.get_logger().info(
+                        f'undock: stalled on attempt {attempt + 1} — pushing '
+                        'forward again (no in-place rotation)')
+                if not ok:
+                    self._set_status('undock_failed')
+                    goal_handle.abort()
+                    return NavigateToPose.Result()
+                self._docked = False
+                self._set_status('undocked')
+
+            # If no destination pose was provided (pure 'Undock' button press), finish here
+            if not self._has_nav_goal(goal):
+                self.get_logger().info('undock: no navigation goal supplied — staying put')
+                goal_handle.succeed()
+                return NavigateToPose.Result()
+
+            # Otherwise, forward the destination pose to Nav2 bt_navigator's navigate_to_pose action
+            self._set_status('navigating')
+            # Wait up to 90s for bt_navigator to be ACTIVE (not just present).
+            # On boot, Nav2 lifecycle startup takes ~60-90s after AMCL publishes
+            # the initial pose — goals sent before that are rejected with ACTION_SERVER_INACTIVE.
+            nav_activate_deadline = time.monotonic() + 90.0
+            if not self._nav_client.wait_for_server(timeout_sec=5.0):
+                self.get_logger().error('navigate_to_pose action server not available')
+                goal_handle.abort()
+                self._set_status('error')
+                return NavigateToPose.Result()
+
+            self.get_logger().info(
+                f'forwarding nav goal ({goal.pose.pose.position.x:.2f}, '
+                f'{goal.pose.pose.position.y:.2f}) to Nav2 navigate_to_pose '
+                f'(will retry up to 90s if bt_navigator still inactive)')
+
+            def on_feedback(fb_msg):
+                goal_handle.publish_feedback(fb_msg.feedback)
+
+            child_goal_handle = None
+            while time.monotonic() < nav_activate_deadline:
+                if goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                    self._set_status('undocked')
+                    return NavigateToPose.Result()
+                child_nav_fut = self._nav_client.send_goal_async(goal, feedback_callback=on_feedback)
+                while not child_nav_fut.done():
+                    if goal_handle.is_cancel_requested:
+                        goal_handle.canceled()
+                        self._set_status('undocked')
+                        return NavigateToPose.Result()
+                    await self._tick()
+                candidate = child_nav_fut.result()
+                if candidate.accepted:
+                    child_goal_handle = candidate
+                    break
+                remaining = nav_activate_deadline - time.monotonic()
+                self.get_logger().warn(
+                    f'bt_navigator rejected goal (still inactive?) — retrying in 3s '
+                    f'({remaining:.0f}s remaining)')
+                await self._sleep(3.0)
+
+            if child_goal_handle is None:
+                self.get_logger().error('bt_navigator remained inactive — aborting nav goal')
+                goal_handle.abort()
+                self._set_status('undocked')
+                return NavigateToPose.Result()
+
+            result_fut = child_goal_handle.get_result_async()
+            while not result_fut.done():
+                if goal_handle.is_cancel_requested:
+                    await child_goal_handle.cancel_goal_async()
+                    goal_handle.canceled()
+                    self._set_status('undocked')
+                    return NavigateToPose.Result()
+                await self._tick()
+
+            nav_result = result_fut.result()
+            if nav_result.status == GoalStatus.STATUS_SUCCEEDED:
+                self._set_status('undocked')
+                goal_handle.succeed()
+                return nav_result.result
+            elif nav_result.status == GoalStatus.STATUS_CANCELED:
+                self._set_status('undocked')
+                goal_handle.canceled()
+                return nav_result.result
+            else:
+                self._set_status('undocked')
+                goal_handle.abort()
+                return nav_result.result
+
+        finally:
+            self._stop()
+            self._busy = False
 
     def _load_dock_pose(self) -> Optional[PoseStamped]:
         if not os.path.exists(DOCK_POSE_FILE):
@@ -351,31 +910,13 @@ class DockManagerNode(Node):
             pose = PoseStamped()
             pose.header.frame_id = d['frame_id']
             pose.pose.position = Point(x=d['x'], y=d['y'], z=d['z'])
-            pose.pose.orientation = Quaternion(x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
+            pose.pose.orientation = Quaternion(
+                x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
             self.get_logger().info(f'Loaded saved dock pose from {DOCK_POSE_FILE}')
             return pose
         except (OSError, ValueError, KeyError) as exc:
             self.get_logger().warn(f'Failed to load {DOCK_POSE_FILE}: {exc}')
             return None
-
-    def _dock_pose_at_map_origin(self) -> PoseStamped:
-        """The dock's pose assuming the map origin is the docked pose.
-
-        With the robot docked at the origin it faces away from the dock
-        (identity orientation), so the dock face lies `dock_origin_offset_m`
-        behind it along -x, and the face's outward normal points along +x —
-        i.e. yaw 0, matching the convention _staging_pose_for expects.
-
-        Deliberately NOT persisted: it is a derived default, and writing it to
-        disk would make it indistinguishable from a pose someone actually
-        placed, so a later correction could not tell them apart.
-        """
-        pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.header.stamp = self.get_clock().now().to_msg()
-        pose.pose.position = Point(x=-self._dock_origin_offset, y=0.0, z=0.0)
-        pose.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-        return pose
 
     def _persist_dock_pose(self, pose: PoseStamped) -> None:
         d = {
@@ -394,604 +935,18 @@ class DockManagerNode(Node):
                 json.dump(d, f)
             os.replace(tmp_path, DOCK_POSE_FILE)
         except OSError as exc:
-            self.get_logger().warn(f'Failed to persist dock pose to {DOCK_POSE_FILE}: {exc}')
-
-    def _set_dock_pose(self, pose: PoseStamped, *, republish: bool) -> None:
-        self._dock_pose = pose
-        self._persist_dock_pose(pose)
-        if republish:
-            self._dock_pose_pub.publish(pose)
+            self.get_logger().warn(
+                f'Failed to persist dock pose to {DOCK_POSE_FILE}: {exc}')
 
     def _on_dock_pose_set(self, msg: PoseStamped) -> None:
-        # A client (Flutter bookmark edit, web API, terminal) told us the
-        # dock's pose — no need to republish, we're just relaying our own
-        # topic's transient_local cache back to whoever set it.
-        self._set_dock_pose(msg, republish=False)
+        self._dock_pose = msg
+        self._persist_dock_pose(msg)
 
-    def _on_battery(self, msg: BatteryState) -> None:
-        self._last_power_supply_status = msg.power_supply_status
-        if not self._docked_state_known:
-            self._docked_state_known = True
-            # This process just started, so _docked defaults to False no
-            # matter where the robot actually is — but the dock is
-            # wall-mounted, and a freshly (re)started process very often
-            # finds the robot exactly where it was left: parked flush
-            # against it. If the very first battery reading already shows
-            # CHARGING/FULL, that's as good a signal as we're going to
-            # get that we're still on the dock — trust it, so the next
-            # dock/undock/nav request backs the robot off the wall first
-            # (see _undock_gently) instead of undock() silently no-opping and Nav2
-            # rejecting every goal with "Start occupied", because the
-            # global costmap (correctly) sees the wall the robot is still
-            # sitting against. Only ever runs once — an explicit dock()/
-            # undock() afterwards sets _docked directly and this doesn't
-            # second-guess it.
-            if msg.power_supply_status in (
-                    BatteryState.POWER_SUPPLY_STATUS_CHARGING,
-                    BatteryState.POWER_SUPPLY_STATUS_FULL):
-                self._docked = True
-                self.get_logger().info(
-                    'First battery reading shows charging — inferring the '
-                    'robot is still parked at the dock from before this '
-                    'process started.')
-        if not self._docked:
-            return
-        if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_FULL:
-            self._set_status('full')
-        elif msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
-            self._set_status('charging')
-        # DISCHARGING/NOT_CHARGING/UNKNOWN while docked: leave last dock-phase
-        # status alone (still connecting) rather than guessing.
 
-    async def _await_with_cancel(self, _goal_handle, child_goal_handle, result_future):
-        """Await result_future; propagate a cancel on our own goal to the
-        child goal via _accept_cancel (which fires independently through
-        self._active_child_handle — see there).
-
-        Returns the child's wrapped result once it settles, including the
-        CANCELED case (never returns None; a cancel just makes result_future
-        resolve with status=CANCELED like any other terminal state).
-
-        Previously polled with `while not result_future.done(): ...
-        asyncio.sleep(0.1)`, which crashed instantly with "no running event
-        loop" — rclpy's MultiThreadedExecutor drives coroutines with its own
-        mechanism, not a real asyncio loop, so raw asyncio.sleep() doesn't
-        work here even though awaiting an rclpy Future directly (as done
-        below) does. Confirmed live via dock_manager's own crash log: this
-        was silently aborting every dock/undock goal right after
-        successfully forwarding it, while the forwarded goal kept running to
-        completion on its own — explains "robot works, UI says failed".
-        """
-        self._active_child_handle = child_goal_handle
-        try:
-            return await result_future
-        finally:
-            self._active_child_handle = None
-
-    # -- dock -------------------------------------------------
-
-    def _log_crash(self, where: str, exc: Exception) -> None:
-        tb = traceback.format_exc()
-        self.get_logger().error(f'{where} raised {exc!r}\n{tb}')
-        try:
-            with open(CRASH_LOG_FILE, 'a') as f:
-                f.write(f'--- {where} ---\n{tb}\n')
-        except OSError:
-            pass
-
-    async def _execute_dock(self, goal_handle):
-        try:
-            return await self._execute_dock_inner(goal_handle)
-        except Exception as e:  # noqa: BLE001 — see _log_crash: make failures visible
-            self._log_crash('_execute_dock', e)
-            self._set_status('error')
-            try:
-                goal_handle.abort()
-            except Exception:
-                pass
-            return DockRobot.Result(success=False, error_msg=f'{type(e).__name__}: {e}')
-
-    async def _execute_dock_inner(self, goal_handle):
-        goal: DockRobot.Goal = goal_handle.request
-
-        # A dock() request arriving while already docked (a retry, a
-        # scheduled/app-triggered redock, anything) must back off first —
-        # see _undock_gently's own doc for what skipping this actually did.
-        if not await self._undock_gently(goal_handle):
-            return DockRobot.Result(
-                success=False, error_msg='failed to undock before redocking')
-
-        self._set_status(_DOCK_STATE_TO_STATUS[DockRobot.Feedback.NAV_TO_STAGING_POSE])
-
-        # use_dock_id repurposed as "use the pose we've saved" — any client
-        # (web API, terminal) can dock without knowing the pose, as long as
-        # someone (typically the Flutter dock bookmark) set it at some point.
-        # An explicit dock_pose (use_dock_id: false) still works as before,
-        # and also refreshes the saved copy so it stays current.
-        if goal.use_dock_id:
-            if self._dock_pose is None:
-                goal_handle.abort()
-                self._set_status('error')
-                return DockRobot.Result(
-                    success=False,
-                    error_msg='use_dock_id requested but no dock pose has been saved yet '
-                              '(publish one on the dock_pose topic first)',
-                )
-            goal.use_dock_id = False
-            goal.dock_pose = self._dock_pose
-        else:
-            self._set_dock_pose(goal.dock_pose, republish=True)
-
-        self._expected_pose_pub.publish(goal.dock_pose)
-
-        if self._use_tag_docking:
-            return await self._execute_dock_tag(goal_handle, goal)
-
-        if not self._dock_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('dock_robot action server not available')
-            goal_handle.abort()
-            self._set_status('error')
-            return DockRobot.Result(success=False, error_msg='dock_robot server unavailable')
-
-        # Tracks whether we ever got past initial perception into the actual
-        # approach (CONTROLLING/RETRY/WAIT_FOR_CHARGE) — gates the odometry
-        # fallback below: only trust a blind backup once we know we were
-        # actually aligned and closing in, not from a cold/unknown position.
-        reached_controlling = False
-
-        def on_feedback(fb_msg) -> None:
-            nonlocal reached_controlling
-            fb: DockRobot.Feedback = fb_msg.feedback
-            if fb.state in (
-                DockRobot.Feedback.CONTROLLING,
-                DockRobot.Feedback.WAIT_FOR_CHARGE,
-                DockRobot.Feedback.RETRY,
-            ):
-                reached_controlling = True
-            goal_handle.publish_feedback(fb)
-            self._set_status(_DOCK_STATE_TO_STATUS.get(fb.state, 'docking'))
-
-        child_goal_handle = await self._dock_client.send_goal_async(goal, feedback_callback=on_feedback)
-        if not child_goal_handle.accepted:
-            goal_handle.abort()
-            self._set_status('error')
-            return DockRobot.Result(success=False, error_msg='dock_robot goal rejected')
-
-        wrapped = await self._await_with_cancel(goal_handle, child_goal_handle, child_goal_handle.get_result_async())
-        if wrapped is None:
-            self._set_status('error')
-            return DockRobot.Result(success=False, error_msg='cancelled')
-
-        dock_result = wrapped.result
-        if not dock_result.success:
-            if reached_controlling:
-                self.get_logger().warn(
-                    'dock_robot aborted after reaching the approach phase — '
-                    'trying an odometry-only fallback for the final stretch '
-                    'instead of giving up (see _ODOM_FALLBACK_* in config)'
-                )
-                if await self._odometry_finish_dock():
-                    return await self._finish_successful_dock(
-                        goal_handle, DockRobot.Result(success=True))
-                self.get_logger().warn('Odometry fallback also failed/timed out')
-            goal_handle.abort()
-            self._set_status('error')
-            return dock_result
-
-        return await self._finish_successful_dock(goal_handle, dock_result)
-
-    # -- IR docking path ------------------------------------------------------
-
-    def _staging_pose_for(self, dock_pose: PoseStamped) -> PoseStamped:
-        """Staging pose: robot rear `staging_standoff_m` from the dock face.
-
-        The dock pose's yaw points away from the dock face, so stepping
-        `staging_standoff_m` along it lands in front of the dock, and keeping the
-        same yaw leaves the robot's rear — where the charging contacts and the
-        IR receivers are — pointing at the dock. See staging_yaw_offset_rad.
-        """
-        q = dock_pose.pose.orientation
-        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        staging_yaw = yaw + self._staging_yaw_offset
-
-        staging = PoseStamped()
-        staging.header.frame_id = dock_pose.header.frame_id or 'map'
-        staging.header.stamp = self.get_clock().now().to_msg()
-        # standoff is measured from the robot's REAR to the dock face, which
-        # is what "stop 60cm before the dock" means physically — so the pose
-        # for base_link sits one rear-offset further out again. Without this
-        # the robot stopped a robot-radius closer than asked.
-        reach = self._standoff + self._dock_origin_offset
-        staging.pose.position = Point(
-            x=dock_pose.pose.position.x + math.cos(yaw) * reach,
-            y=dock_pose.pose.position.y + math.sin(yaw) * reach,
-            z=0.0,
-        )
-        staging.pose.orientation = Quaternion(
-            x=0.0, y=0.0,
-            z=math.sin(staging_yaw / 2.0),
-            w=math.cos(staging_yaw / 2.0),
-        )
-        return staging
-
-    async def _set_tag_sensing(self, active: bool) -> bool:
-        """Turns the rear camera and AprilTag detector on/off — see the
-        comment by the two SetBool clients above. Best-effort but honest
-        about failure: if activation genuinely fails, the caller aborts
-        rather than sweeping for a tag that structurally cannot be seen.
-        Deactivation failures are only logged — leaving the camera on a
-        little longer than needed is harmless, unlike proceeding blind.
-        """
-        ok = True
-        for client, name in ((self._camera_active_client, 'camera'),
-                             (self._tag_active_client, 'dock_tag')):
-            if not client.wait_for_service(timeout_sec=3.0):
-                self.get_logger().warn(
-                    f'{name}/set_active unavailable — is {name}_node running?')
-                ok = False
-                continue
-            req = SetBool.Request()
-            req.data = active
-            try:
-                resp = await client.call_async(req)
-                if not resp.success:
-                    self.get_logger().warn(
-                        f'{name}/set_active({active}) reported failure: {resp.message}')
-                    ok = False
-            except Exception as exc:  # noqa: BLE001
-                self.get_logger().warn(f'{name}/set_active({active}) call failed: {exc}')
-                ok = False
-        return ok or not active
-
-    async def _execute_dock_tag(self, goal_handle, goal: DockRobot.Goal):
-        """Nav to the standoff, then hand the last 75cm to the IR beacon.
-
-        Split deliberately: getting to the staging pose is ordinary
-        navigation and AMCL is good enough for it, while the final approach
-        needs centimetre accuracy that map-frame localisation cannot give —
-        which is exactly the accuracy the beacon measures directly, in the
-        robot's own frame, with no dependence on how precisely the dock
-        bookmark was placed.
-        """
-        if not self._tag_dock_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('tag_dock action server not available')
-            goal_handle.abort()
-            self._set_status('error')
-            return DockRobot.Result(
-                success=False,
-                error_msg='tag_dock server unavailable (is tag_dock_node running?)',
-            )
-
-        if goal.navigate_to_staging_pose:
-            staging = self._staging_pose_for(goal.dock_pose)
-            self.get_logger().info(
-                f'Tag dock: navigating to staging pose '
-                f'({staging.pose.position.x:.2f}, {staging.pose.position.y:.2f}) '
-                f'— rear {self._standoff:.2f}m from the dock face'
-            )
-            self._set_status('staging')
-            if not await self._navigate_to(goal_handle, staging):
-                goal_handle.abort()
-                self._set_status('error')
-                return DockRobot.Result(
-                    success=False,
-                    error_msg='failed to reach the docking staging pose',
-                )
-
-        self._set_status('detecting')
-
-        def on_feedback(fb_msg) -> None:
-            fb: DockRobot.Feedback = fb_msg.feedback
-            goal_handle.publish_feedback(fb)
-            self._set_status(_DOCK_STATE_TO_STATUS.get(fb.state, 'docking'))
-
-        ir_goal = DockRobot.Goal()
-        ir_goal.dock_pose = goal.dock_pose
-        ir_goal.dock_type = self._dock_type
-        ir_goal.navigate_to_staging_pose = False
-
-        if not await self._set_tag_sensing(True):
-            goal_handle.abort()
-            self._set_status('error')
-            return DockRobot.Result(
-                success=False,
-                error_msg='could not activate the dock camera/tag detector '
-                          '(is camera_node/dock_tag_node running?)',
-            )
-        try:
-            child = await self._tag_dock_client.send_goal_async(
-                ir_goal, feedback_callback=on_feedback)
-            if not child.accepted:
-                goal_handle.abort()
-                self._set_status('error')
-                return DockRobot.Result(success=False, error_msg='tag_dock goal rejected')
-
-            wrapped = await self._await_with_cancel(
-                goal_handle, child, child.get_result_async())
-            if wrapped is None:
-                self._set_status('error')
-                return DockRobot.Result(success=False, error_msg='cancelled')
-
-            result = wrapped.result
-            if not result.success:
-                goal_handle.abort()
-                self._set_status('error')
-                return result
-        finally:
-            # Always, regardless of which path above returned — success,
-            # rejection, cancellation, or failure all end the tag_dock
-            # portion and should turn the camera back off.
-            await self._set_tag_sensing(False)
-
-        # tag_dock_node already drove in until it stalled against the connector
-        # and confirmed charging itself, so no seat nudge here — a BackUp at
-        # this point would just push harder against a dock we are already
-        # seated in. _confirm_charging still runs as the single success gate.
-        return await self._finish_successful_dock(goal_handle, result, seat=False)
-
-    async def _navigate_to(self, goal_handle, pose: PoseStamped) -> bool:
-        if not self._nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('navigate_to_pose action server not available')
-            return False
-        nav_goal = NavigateToPose.Goal()
-        nav_goal.pose = pose
-        child = await self._nav_client.send_goal_async(nav_goal)
-        if not child.accepted:
-            return False
-        wrapped = await self._await_with_cancel(
-            goal_handle, child, child.get_result_async())
-        return wrapped is not None and wrapped.status == GoalStatus.STATUS_SUCCEEDED
-
-    async def _sleep(self, seconds: float) -> None:
-        """rclpy-compatible sleep. Plain asyncio.sleep() does NOT work here
-        — confirmed via crash log: MultiThreadedExecutor drives these
-        coroutines with its own mechanism, not a real running asyncio
-        event loop, so asyncio.sleep() raises "no running event loop"
-        (same root cause as the earlier _await_with_cancel crash). A
-        one-shot rclpy Timer resolving an rclpy.task.Future is awaitable
-        the same way action-client futures already are here."""
-        future = Future()
-        timer = self.create_timer(seconds, lambda: future.set_result(None))
-        try:
-            await future
-        finally:
-            timer.cancel()
-            timer.destroy()
-
-    async def _confirm_charging(self, *, timeout_sec: float = 5.0,
-                                 poll_interval_sec: float = 0.5) -> bool:
-        """Poll actual /battery/state.power_supply_status for up to
-        timeout_sec, True once it reports CHARGING or FULL.
-
-        This is the one place that decides "are we actually docked" —
-        both the normal docking_server-success path and the odometry
-        fallback path go through it, so neither can declare success (and
-        flip the LED to the charging pattern) without a real battery-state
-        confirmation. Confirmed live: the odometry fallback previously
-        declared success (and changed the LED) purely because its blind
-        backup movement completed, with no check that contact was
-        actually made — battery never started charging, robot ended up
-        sitting ~30cm short. docking_server's own use_battery_status
-        already gates its reported success on this internally, so this is
-        mostly a no-op double-check on that path; it's essential on the
-        fallback path.
-        """
-        elapsed = 0.0
-        while elapsed < timeout_sec:
-            if self._last_power_supply_status in (
-                BatteryState.POWER_SUPPLY_STATUS_CHARGING,
-                BatteryState.POWER_SUPPLY_STATUS_FULL,
-            ):
-                return True
-            await self._sleep(poll_interval_sec)
-            elapsed += poll_interval_sec
-        return False
-
-    async def _finish_successful_dock(self, goal_handle, dock_result, *, seat: bool = True):
-        # Seat firmly first (small backward nudge), then the one real
-        # confirmation gate — see _confirm_charging's docstring for why
-        # this can't just be assumed from either path completing.
-        if seat:
-            seat_ok = await self._seat_backup()
-            if not seat_ok:
-                self.get_logger().warn('Seat backup after docking failed/timed out — checking charging anyway')
-
-        if not await self._confirm_charging():
-            self.get_logger().warn(
-                'Approach completed but battery never started charging — '
-                'not actually docked, reporting failure instead of a false success'
-            )
-            self._docked = False
-            goal_handle.abort()
-            self._set_status('error')
-            return DockRobot.Result(
-                success=False,
-                error_msg='approach completed but battery never started charging (not seated)',
-            )
-
-        self._docked = True
-        if self._last_power_supply_status == BatteryState.POWER_SUPPLY_STATUS_FULL:
-            self._set_status('full')
-        else:
-            self._set_status('charging')
-
-        goal_handle.succeed()
-        return dock_result
-
-    async def _odometry_finish_dock(self) -> bool:
-        """Blind, odometry-only backup covering the final approach when
-        docking_server's own controller aborted after we were already
-        aligned and closing in. See _ODOM_FALLBACK_* constants."""
-        if not self._backup_client.wait_for_server(timeout_sec=3.0):
-            self.get_logger().warn(
-                'backup action server not available — cannot run odometry docking fallback'
-            )
-            return False
-        goal = BackUp.Goal()
-        goal.target = Point(x=-_ODOM_FALLBACK_DISTANCE_M, y=0.0, z=0.0)
-        goal.speed = _ODOM_FALLBACK_SPEED
-        sec = int(_ODOM_FALLBACK_TIMEOUT_SEC)
-        goal.time_allowance.sec = sec
-        goal.time_allowance.nanosec = int((_ODOM_FALLBACK_TIMEOUT_SEC - sec) * 1e9)
-
-        child_goal_handle = await self._backup_client.send_goal_async(goal)
-        if not child_goal_handle.accepted:
-            return False
-        result = await child_goal_handle.get_result_async()
-        return result.status == GoalStatus.STATUS_SUCCEEDED
-
-    async def _seat_backup(self) -> bool:
-        if not self._backup_client.wait_for_server(timeout_sec=3.0):
-            self.get_logger().warn('backup action server not available — skipping seat nudge')
-            return False
-        goal = BackUp.Goal()
-        goal.target = _SEAT_BACKUP_TARGET
-        goal.speed = _SEAT_BACKUP_SPEED
-        sec = int(_SEAT_BACKUP_TIMEOUT_SEC)
-        goal.time_allowance.sec = sec
-        goal.time_allowance.nanosec = int((_SEAT_BACKUP_TIMEOUT_SEC - sec) * 1e9)
-
-        child_goal_handle = await self._backup_client.send_goal_async(goal)
-        if not child_goal_handle.accepted:
-            return False
-        result = await child_goal_handle.get_result_async()
-        return result.status == GoalStatus.STATUS_SUCCEEDED
-
-    # -- undock (always the entry point for "go to this pose" too) -------------
-
-    async def _execute_undock_then_navigate(self, goal_handle):
-        try:
-            return await self._execute_undock_then_navigate_inner(goal_handle)
-        except Exception as e:  # noqa: BLE001 — see _log_crash: make failures visible
-            self._log_crash('_execute_undock_then_navigate', e)
-            self._set_status('error')
-            try:
-                goal_handle.abort()
-            except Exception:
-                pass
-            return NavigateToPose.Result()
-
-    @staticmethod
-    def _has_nav_goal(goal: NavigateToPose.Goal) -> bool:
-        """Does this request actually ask to go somewhere?
-
-        `undock` is deliberately NavigateToPose so one action can mean both
-        "undock" and "undock, then drive there". But the UI's Undock button
-        sends no pose at all, and an unset pose is (0,0) with a zero
-        quaternion — which, now that the map origin is the docked pose, is the
-        DOCK. The robot therefore drove out and then circled trying to reach
-        the very dock it had just left.
-
-        A real goal always carries a frame_id and a unit quaternion, so
-        either being absent means "undock only".
-        """
-        if not goal.pose.header.frame_id:
-            return False
-        q = goal.pose.pose.orientation
-        return (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) > 0.5
-
-    async def _undock_gently(self, goal_handle) -> bool:
-        """Back off via a controlled DriveOnHeading if currently docked.
-
-        Shared by _execute_dock_inner and _execute_undock_then_navigate_inner
-        — a dock() request that arrives while still physically docked used
-        to skip this entirely (only the dedicated undock/navigate action
-        checked `_docked`) and drop straight into ordinary nav2
-        NavigateToPose toward the staging pose: normal cruising speed and
-        accel, not a controlled backup, yanking the robot off the connector.
-        Live-observed: docked and charging, a fresh dock() request minutes
-        later (app showed "still docking and reattempting") separated it
-        abruptly with no gentle disengage at all.
-
-        Returns True if it's fine to proceed (wasn't docked, or the undock
-        succeeded); False if the caller should return its own failure/empty
-        Result — goal_handle.abort()/_set_status('error') are already
-        called here on a real failure, and left alone on a genuine cancel
-        (matching _await_with_cancel's own contract), so the caller doesn't
-        need to know which.
-        """
-        if not self._docked:
-            return True
-
-        self.get_logger().info('undock: currently docked — undocking before navigating')
-        if not self._undock_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('drive_on_heading action server not available')
-            goal_handle.abort()
-            self._set_status('error')
-            return False
-
-        self._set_status('undocking')
-        undock_goal = DriveOnHeading.Goal()
-        undock_goal.target = Point(x=_UNDOCK_DISTANCE_M, y=0.0, z=0.0)
-        undock_goal.speed = _UNDOCK_SPEED
-        sec = int(_UNDOCK_TIMEOUT_SEC)
-        undock_goal.time_allowance.sec = sec
-        undock_goal.time_allowance.nanosec = int(
-            (_UNDOCK_TIMEOUT_SEC - sec) * 1e9)
-        child_undock_handle = await self._undock_client.send_goal_async(undock_goal)
-        if not child_undock_handle.accepted:
-            goal_handle.abort()
-            self._set_status('error')
-            return False
-
-        wrapped = await self._await_with_cancel(
-            goal_handle, child_undock_handle, child_undock_handle.get_result_async()
-        )
-        if wrapped is None:
-            return False
-        if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().error('drive_on_heading failed while undocking')
-            goal_handle.abort()
-            self._set_status('error')
-            return False
-
-        self._docked = False
-        self._set_status('undocked')
-        return True
-
-    async def _execute_undock_then_navigate_inner(self, goal_handle):
-        goal: NavigateToPose.Goal = goal_handle.request
-
-        if not await self._undock_gently(goal_handle):
-            return NavigateToPose.Result()
-
-        if not self._has_nav_goal(goal):
-            self.get_logger().info(
-                'undock: no navigation goal supplied — undock complete, staying put')
-            goal_handle.succeed()
-            return NavigateToPose.Result()
-
-        if not self._nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('navigate_to_pose action server not available')
-            goal_handle.abort()
-            return NavigateToPose.Result()
-
-        def on_feedback(fb_msg) -> None:
-            goal_handle.publish_feedback(fb_msg.feedback)
-
-        child_nav_handle = await self._nav_client.send_goal_async(goal, feedback_callback=on_feedback)
-        if not child_nav_handle.accepted:
-            goal_handle.abort()
-            return NavigateToPose.Result()
-
-        wrapped = await self._await_with_cancel(
-            goal_handle, child_nav_handle, child_nav_handle.get_result_async()
-        )
-        if wrapped is None:
-            return NavigateToPose.Result()
-
-        if wrapped.status == GoalStatus.STATUS_SUCCEEDED:
-            goal_handle.succeed()
-        else:
-            goal_handle.abort()
-        return wrapped.result
-
-
-def main(args: Optional[list[str]] = None) -> None:
+def main(args: Optional[list] = None) -> None:
     rclpy.init(args=args)
     node = DockManagerNode()
-    executor = MultiThreadedExecutor(num_threads=8)
+    executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
