@@ -1,0 +1,22 @@
+[Unit]
+Description=NavPro Mini Model Context Protocol (MCP) Server (:8091)
+After=network-online.target navpro-sdk.service
+Wants=network-online.target navpro-sdk.service
+
+[Service]
+Type=simple
+User=REPLACE_USER
+Environment=NAVPRO_USER=REPLACE_USER
+Environment=NAVPRO_WS=REPLACE_WS
+Environment=NAVPRO_ROBOT_HOST=127.0.0.1
+Environment=NAVPRO_ROBOT_PORT=8090
+Environment=MCP_SSE_HOST=0.0.0.0
+Environment=MCP_SSE_PORT=8091
+ExecStart=/bin/bash /opt/navpro/scripts/start_mcp.sh
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
