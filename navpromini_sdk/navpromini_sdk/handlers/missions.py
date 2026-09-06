@@ -45,6 +45,7 @@ from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.utilities import get_action, get_service
 
 import os
+import requests
 from .base import ApiError, BaseHandler
 from .docking import dock_robot, undock_robot
 from .navigation import cancel_active_goal, navigate_to
@@ -53,7 +54,7 @@ from .roscall import call_service, ros_future, send_goal
 LOW_BATTERY_DOCK_PERCENT = float(os.environ.get('NAVPRO_LOW_BATT_DOCK_PCT', 5.0))
 RESUME_BATTERY_PERCENT = float(os.environ.get('NAVPRO_RESUME_BATT_PCT', 95.0))
 
-VALID_STEP_TYPES = ('navigate', 'wait', 'dock', 'undock', 'call_service', 'call_action')
+VALID_STEP_TYPES = ('navigate', 'wait', 'dock', 'undock', 'call_service', 'call_action', 'call_api')
 
 
 def _validate_steps(steps: Any) -> list[dict]:
@@ -96,6 +97,34 @@ def _validate_steps(steps: Any) -> list[dict]:
                 raise ApiError(400, 'invalid_step',
                                f'step {i}: unknown action_type {step["action_type"]!r} '
                                f'({exc})', {'index': i})
+        if stype == 'call_api':
+            if 'url' not in step or not isinstance(step['url'], str) or not step['url'].strip():
+                raise ApiError(400, 'invalid_step',
+                               f'step {i}: call_api needs non-empty string "url"',
+                               {'index': i})
+            url = step['url'].strip()
+            if not (url.startswith('http://') or url.startswith('https://')):
+                raise ApiError(400, 'invalid_step',
+                               f'step {i}: call_api "url" must start with http:// or https://',
+                               {'index': i})
+            method = step.get('method', 'POST')
+            if not isinstance(method, str) or method.upper() not in ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'):
+                raise ApiError(400, 'invalid_step',
+                               f'step {i}: call_api invalid method {method!r}',
+                               {'index': i})
+            if 'headers' in step and step['headers'] is not None and not isinstance(step['headers'], dict):
+                raise ApiError(400, 'invalid_step',
+                               f'step {i}: call_api "headers" must be a dict',
+                               {'index': i})
+            timeout = step.get('timeout', step.get('timeout_sec'))
+            if timeout is not None:
+                try:
+                    if float(timeout) <= 0:
+                        raise ValueError()
+                except (TypeError, ValueError):
+                    raise ApiError(400, 'invalid_step',
+                                   f'step {i}: call_api "timeout" must be positive number',
+                                   {'index': i})
     return steps
 
 
@@ -223,6 +252,46 @@ async def _run_step(bridge, store, step: dict) -> tuple[bool, str]:
             return False, f'action ended with status {status}'
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
+    if stype == 'call_api':
+        url = str(step['url']).strip()
+        method = str(step.get('method', 'POST')).upper()
+        headers = dict(step.get('headers') or {})
+        payload = step.get('payload')
+        if payload is None:
+            payload = step.get('body')
+        if payload is None:
+            payload = step.get('json')
+        timeout = float(step.get('timeout', step.get('timeout_sec', 15.0)))
+        ignore_error = bool(step.get('ignore_error', False))
+
+        def _do_request():
+            req_kwargs = {'headers': headers, 'timeout': timeout}
+            if payload is not None:
+                if isinstance(payload, (dict, list)):
+                    req_kwargs['json'] = payload
+                elif isinstance(payload, str):
+                    req_kwargs['data'] = payload
+                else:
+                    req_kwargs['json'] = payload
+            resp = requests.request(method, url, **req_kwargs)
+            return resp.status_code, resp.text[:500]
+
+        try:
+            status_code, resp_text = await asyncio.to_thread(_do_request)
+            ok = (200 <= status_code < 300)
+            msg = f"HTTP {status_code}: {resp_text}"
+            if not ok:
+                bridge.get_logger().warn(f"call_api step returned {status_code}: {resp_text}")
+                if ignore_error:
+                    return True, msg
+                return False, msg
+            bridge.get_logger().info(f"call_api step succeeded: {msg}")
+            return True, msg
+        except Exception as exc:
+            bridge.get_logger().error(f"call_api step failed with error: {exc}")
+            if ignore_error:
+                return True, str(exc)
+            return False, f"HTTP request failed: {exc}"
     return False, f'Unknown step type {stype!r}'  # unreachable — validated on save
 
 
