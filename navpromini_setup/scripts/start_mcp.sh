@@ -11,5 +11,16 @@ export NAVPRO_ROBOT_HOST="${NAVPRO_ROBOT_HOST:-127.0.0.1}"
 export NAVPRO_ROBOT_PORT="${NAVPRO_ROBOT_PORT:-8090}"
 export MCP_SSE_HOST="${MCP_SSE_HOST:-0.0.0.0}"
 export MCP_SSE_PORT="${MCP_SSE_PORT:-8091}"
+if [[ ! -x /opt/navpro/mcp_venv/bin/navpromini-mcp ]]; then
+  echo "Error: /opt/navpro/mcp_venv/bin/navpromini-mcp not found or not executable." >&2
+  echo "Run 'sudo bash /opt/navpro/scripts/install_navpro.sh' to set up the MCP environment." >&2
+  exit 1
+fi
 
-exec /opt/navpro/mcp_venv/bin/navpromini-mcp   --host "${NAVPRO_ROBOT_HOST}"   --port "${NAVPRO_ROBOT_PORT}"   --transport sse   --sse-host "${MCP_SSE_HOST}"   --sse-port "${MCP_SSE_PORT}"   "${@}"
+exec /opt/navpro/mcp_venv/bin/navpromini-mcp \
+  --host "${NAVPRO_ROBOT_HOST}" \
+  --port "${NAVPRO_ROBOT_PORT}" \
+  --transport sse \
+  --sse-host "${MCP_SSE_HOST}" \
+  --sse-port "${MCP_SSE_PORT}" \
+  "${@}"

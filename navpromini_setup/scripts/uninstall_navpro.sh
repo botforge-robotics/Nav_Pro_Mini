@@ -9,7 +9,7 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 echo "==> Stopping NavPro services"
-for u in navpro-fleet.service navpro-provision.service navpro-robot.service navpro-display.service; do
+for u in navpro-fleet.service navpro-provision.service navpro-robot.service navpro-display.service navpro-mission-planner.service navpro-sdk.service navpro-mcp.service; do
   systemctl disable --now "${u}" 2>/dev/null || true
   rm -f "/etc/systemd/system/${u}"
   rm -f "/etc/systemd/system/multi-user.target.wants/${u}"

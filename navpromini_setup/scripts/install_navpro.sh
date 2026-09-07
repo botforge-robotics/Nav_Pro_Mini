@@ -28,7 +28,7 @@ echo "==> NavPro install (user=${USER_NAME}  workspace=${WS})"
 
 # --- packages ---
 apt-get update -y
-apt-get install -y network-manager python3-yaml curl || true
+apt-get install -y network-manager python3-yaml python3-pip python3-venv python3-tornado git curl || true
 
 # --- UART for ESP32 micro-ROS ---
 systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
@@ -47,8 +47,8 @@ usermod -aG dialout "${USER_NAME}" || true
 
 # --- dirs ---
 install -d -m 0755 /opt/navpro/scripts /etc/navpro /etc/ros /var/lib/navpro/maps
-if [[ -f "/config/fastdds_udp.xml" ]]; then
-  install -m 0644 "/config/fastdds_udp.xml" /etc/ros/fastdds_udp.xml
+if [[ -f "${PKG_ROOT}/config/fastdds_udp.xml" ]]; then
+  install -m 0644 "${PKG_ROOT}/config/fastdds_udp.xml" /etc/ros/fastdds_udp.xml
 fi
 
 # --- USB udev ---
@@ -88,6 +88,32 @@ for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission
 done
 # Keep this installer available under /opt/navpro for re-runs
 install -m 0755 "${PKG_ROOT}/scripts/install_navpro.sh" /opt/navpro/scripts/install_navpro.sh
+
+# --- MCP Python venv & packages ---
+echo "==> Setting up MCP Python virtual environment at /opt/navpro/mcp_venv"
+install -d -m 0755 /opt/navpro
+
+# Clone SDK repo if missing
+if [[ ! -d "${USER_HOME}/navpromini_sdk" ]]; then
+  echo "==> Cloning navpromini_sdk into ${USER_HOME}/navpromini_sdk"
+  git clone https://github.com/botforge-robotics/navpromini_sdk.git "${USER_HOME}/navpromini_sdk" || true
+  if [[ -d "${USER_HOME}/navpromini_sdk" ]]; then
+    chown -R "${USER_NAME}:${USER_NAME}" "${USER_HOME}/navpromini_sdk"
+  fi
+fi
+
+if [[ ! -d "/opt/navpro/mcp_venv" ]] || [[ ! -x "/opt/navpro/mcp_venv/bin/navpromini-mcp" ]]; then
+  python3 -m venv /opt/navpro/mcp_venv
+  /opt/navpro/mcp_venv/bin/pip install --upgrade pip
+  if [[ -d "${USER_HOME}/navpromini_sdk/clients/python" ]] && [[ -d "${USER_HOME}/navpromini_sdk/clients/mcp" ]]; then
+    /opt/navpro/mcp_venv/bin/pip install -e "${USER_HOME}/navpromini_sdk/clients/python"
+    /opt/navpro/mcp_venv/bin/pip install -e "${USER_HOME}/navpromini_sdk/clients/mcp"
+  else
+    /opt/navpro/mcp_venv/bin/pip install "git+https://github.com/botforge-robotics/navpromini_sdk.git#subdirectory=clients/python"
+    /opt/navpro/mcp_venv/bin/pip install "git+https://github.com/botforge-robotics/navpromini_sdk.git#subdirectory=clients/mcp"
+  fi
+fi
+chmod -R a+rX /opt/navpro/mcp_venv
 
 # --- remove obsolete units quietly (if any) ---
 for obsolete in navpro-fleet.service; do
@@ -145,6 +171,6 @@ echo "      SSID  NavPro-Setup-<last6 of MAC>"
 echo "      Pass  navprosetup"
 echo "      Open  http://10.42.0.1/  → set Wi‑Fi + robot name"
 echo ""
-echo "    Check:  systemctl status navpro-display navpro-robot navpro-provision navpro-mission-planner"
+echo "    Check:  systemctl status navpro-display navpro-robot navpro-provision navpro-mission-planner navpro-sdk navpro-mcp"
 echo "    Reboot recommended once after first install."
 echo "    Web UI (PC): docker compose up in nav2_mission_planner react-web → http://localhost:8080"
