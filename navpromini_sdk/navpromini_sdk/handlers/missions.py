@@ -66,12 +66,12 @@ def _validate_steps(steps: Any) -> list[dict]:
                            f'step {i} must have "type" in {list(VALID_STEP_TYPES)}',
                            {'index': i})
         stype = step['type']
-        if stype == 'navigate' and 'target' not in step and not ('x' in step and 'y' in step):
+        if stype == 'navigate' and 'target' not in step and 'waypoint' not in step and not ('x' in step and 'y' in step):
             raise ApiError(400, 'invalid_step',
-                           f'step {i}: navigate needs "target" (a waypoint name) '
+                           f'step {i}: navigate needs "waypoint" / "target" (a waypoint name) '
                            'or "x"/"y"', {'index': i})
-        if stype == 'wait' and 'duration' not in step:
-            raise ApiError(400, 'invalid_step', f'step {i}: wait needs "duration"',
+        if stype == 'wait' and 'duration' not in step and 'duration_sec' not in step:
+            raise ApiError(400, 'invalid_step', f'step {i}: wait needs "duration" or "duration_sec"',
                            {'index': i})
         if stype == 'call_service':
             if 'service' not in step or 'service_type' not in step:
@@ -87,9 +87,9 @@ def _validate_steps(steps: Any) -> list[dict]:
                                f'step {i}: unknown service_type {step["service_type"]!r} '
                                f'({exc})', {'index': i})
         if stype == 'call_action':
-            if 'action' not in step or 'action_type' not in step:
+            if ('action' not in step and 'action_name' not in step) or 'action_type' not in step:
                 raise ApiError(400, 'invalid_step',
-                               f'step {i}: call_action needs "action" and "action_type"',
+                               f'step {i}: call_action needs "action" (or "action_name") and "action_type"',
                                {'index': i})
             try:
                 get_action(step['action_type'])
@@ -190,6 +190,7 @@ class _MissionRunner:
         return {
             'mission_id': self.mission_id,
             'state': self.state,
+            'status': self.state,
             'step_index': self.step_index,
             'loop_index': self.loop_index,
             'loop_total': self.loop_total,
@@ -206,7 +207,7 @@ RUNNER = _MissionRunner()
 async def _run_step(bridge, store, step: dict) -> tuple[bool, str]:
     stype = step['type']
     if stype == 'navigate':
-        target = step.get('target')
+        target = step.get('waypoint') or step.get('target')
         if isinstance(target, str):
             wp = store.get_waypoint(target)
             if wp is None:
@@ -219,7 +220,8 @@ async def _run_step(bridge, store, step: dict) -> tuple[bool, str]:
         result = await navigate_to(bridge, target_dict)
         return result['ok'], result['message']
     if stype == 'wait':
-        await asyncio.sleep(float(step.get('duration', 0.0)))
+        dur = float(step.get('duration', step.get('duration_sec', 0.0)))
+        await asyncio.sleep(dur)
         return True, ''
     if stype == 'dock':
         result = await dock_robot(bridge, bool(step.get('navigate_to_staging', True)))
@@ -228,29 +230,43 @@ async def _run_step(bridge, store, step: dict) -> tuple[bool, str]:
         result = await undock_robot(bridge)
         return result['ok'], result['message']
     if stype == 'call_service':
+        ignore_error = bool(step.get('ignore_error', False))
+        timeout = float(step.get('timeout', step.get('timeout_sec', 15.0)))
         try:
             client, srv_cls = _get_service_client(bridge, step['service_type'], step['service'])
             request = srv_cls.Request()
-            set_message_fields(request, step.get('request') or {})
-            response = await call_service(client, request, step['service'],
-                                          timeout=float(step.get('timeout', 15.0)))
+            req_data = step.get('request') or step.get('args') or step.get('payload') or {}
+            set_message_fields(request, req_data)
+            response = await call_service(client, request, step['service'], timeout=timeout)
             return True, json.dumps(message_to_ordereddict(response))[:500]
         except Exception as exc:  # noqa: BLE001
+            bridge.get_logger().error(f"call_service step failed: {exc}")
+            if ignore_error:
+                return True, str(exc)
             return False, str(exc)
     if stype == 'call_action':
+        ignore_error = bool(step.get('ignore_error', False))
+        timeout = float(step.get('timeout', step.get('timeout_sec', 300.0)))
         try:
-            client, action_cls = _get_action_client(bridge, step['action_type'], step['action'])
+            action_name = step.get('action') or step.get('action_name')
+            client, action_cls = _get_action_client(bridge, step['action_type'], action_name)
             goal = action_cls.Goal()
-            set_message_fields(goal, step.get('goal') or {})
-            handle = await send_goal(action_client=client, goal=goal, name=step['action'])
-            wrapped = await ros_future(handle.get_result_async(),
-                                       timeout=float(step.get('timeout', 300.0)))
+            goal_data = step.get('goal') or step.get('args') or step.get('payload') or {}
+            set_message_fields(goal, goal_data)
+            handle = await send_goal(action_client=client, goal=goal, name=action_name)
+            wrapped = await ros_future(handle.get_result_async(), timeout=timeout)
             status = getattr(wrapped, 'status', None)
             if status == 4:  # GoalStatus.STATUS_SUCCEEDED
                 result_dict = message_to_ordereddict(getattr(wrapped, 'result', None))
                 return True, json.dumps(result_dict)[:500]
-            return False, f'action ended with status {status}'
+            msg = f'action ended with status {status}'
+            if ignore_error:
+                return True, msg
+            return False, msg
         except Exception as exc:  # noqa: BLE001
+            bridge.get_logger().error(f"call_action step failed: {exc}")
+            if ignore_error:
+                return True, str(exc)
             return False, str(exc)
     if stype == 'call_api':
         url = str(step['url']).strip()

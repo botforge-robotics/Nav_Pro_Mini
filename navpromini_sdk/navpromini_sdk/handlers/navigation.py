@@ -56,25 +56,24 @@ TRACKER = _GoalTracker()
 
 def resolve_target(store, data: dict) -> dict:
     """Waypoint name or raw x/y/theta -> a target dict. Shared by GotoHandler
-    and the mission runner's `navigate` step (missions.py)."""
-    if 'waypoint' in data:
-        wp = store.get_waypoint(str(data['waypoint']))
+    and the mission runner's navigate step (missions.py). Accepts 'waypoint' or 'target'."""
+    wp_name = data.get('waypoint') or data.get('target')
+    if wp_name is not None and isinstance(wp_name, str):
+        wp = store.get_waypoint(str(wp_name))
         if wp is None:
             raise ApiError(404, 'waypoint_not_found',
-                           f"No waypoint named {data['waypoint']!r}",
-                           {'waypoint': data['waypoint']})
+                           f"No waypoint named {wp_name!r}",
+                           {'waypoint': wp_name})
         x, y, theta = wp['x'], wp['y'], wp.get('theta', 0.0)
         return {'waypoint': wp['name'], 'x': x, 'y': y, 'theta': theta}
     missing = [f for f in ('x', 'y') if f not in data]
     if missing:
         raise ApiError(400, 'missing_field',
-                       'Provide either "waypoint" or both "x" and "y"',
+                       'Provide either "waypoint" / "target" or both "x" and "y"',
                        {'missing': missing})
     x, y = float(data['x']), float(data['y'])
     theta = float(data.get('theta', 0.0))
     return {'x': x, 'y': y, 'theta': theta}
-
-
 async def send_navigate_goal(bridge, target: dict):
     """Build and send the nav goal, returning the accepted handle.
 
