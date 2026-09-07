@@ -410,10 +410,18 @@ class UpdateCheckHandler(BaseHandler):
                                capture_output=True, text=True, timeout=3)
             if r.returncode == 0 and r.stdout.strip():
                 branch = r.stdout.strip()
+            fetch_cmd = ['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'fetch', 'origin', branch]
+            try:
+                import pwd
+                owner = pwd.getpwuid(src_dir.stat().st_uid).pw_name
+                if os.geteuid() == 0 and owner != 'root':
+                    fetch_cmd = ['sudo', '-u', owner] + fetch_cmd
+            except Exception:
+                pass
+
             await tornado.ioloop.IOLoop.current().run_in_executor(
                 None,
-                lambda: subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'fetch', 'origin', branch],
-                                       capture_output=True, text=True, timeout=30)
+                lambda: subprocess.run(fetch_cmd, capture_output=True, text=True, timeout=30)
             )
         except Exception as exc:
             raise ApiError(500, 'fetch_failed', f'git fetch failed: {exc}')

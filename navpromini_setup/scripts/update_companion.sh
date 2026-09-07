@@ -96,9 +96,13 @@ trap rollback EXIT
 # Phase: Pulling
 echo "==> Fetching and updating source on branch ${BRANCH}..."
 write_status "pulling" 30 "Pulling latest code from origin/${BRANCH}..." "${PREV_COMMIT}"
-git -C "${SRC_DIR}" fetch origin "${BRANCH}"
-git -C "${SRC_DIR}" reset --hard "origin/${BRANCH}"
-NEW_COMMIT="$(git -C "${SRC_DIR}" rev-parse HEAD)"
+if [[ "$(id -u)" -eq 0 && -n "${ROBOT_USER}" && "${ROBOT_USER}" != "root" ]]; then
+  sudo -u "${ROBOT_USER}" git -c safe.directory=* -C "${SRC_DIR}" fetch origin "${BRANCH}"
+else
+  git -c safe.directory=* -C "${SRC_DIR}" fetch origin "${BRANCH}"
+fi
+git -c safe.directory=* -C "${SRC_DIR}" reset --hard "origin/${BRANCH}"
+NEW_COMMIT="$(git -c safe.directory=* -C "${SRC_DIR}" rev-parse HEAD)"
 
 # Also update navpromini_sdk repo if present at USER_HOME/navpromini_sdk
 if [[ -d "${USER_HOME}/navpromini_sdk/.git" ]]; then
