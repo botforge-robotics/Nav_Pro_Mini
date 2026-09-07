@@ -166,6 +166,21 @@ def check_schedules(bridge, opts: dict[str, Any]) -> None:
             })
             continue
 
+        current_map = store.current_map()
+        mission_map = mission.get('map')
+        if mission_map and mission_map != current_map:
+            bridge.emit_event('schedule.skipped', {
+                'schedule_id': schedule['id'],
+                'reason': 'map_mismatch',
+                'required_map': mission_map,
+                'active_map': current_map,
+            })
+            bridge.get_logger().warn(
+                f"Schedule {schedule['id']!r} skipped: mission requires map {mission_map!r}, "
+                f"active map is {current_map!r}"
+            )
+            continue
+
         if repeat == 'once':
             # Auto-consumed, like a phone one-time alarm switching itself
             # off after it rings — a "once" schedule left enabled would

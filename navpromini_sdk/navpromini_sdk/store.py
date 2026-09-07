@@ -161,10 +161,13 @@ class Store:
 
     # -- missions ------------------------------------------------------------
 
-    def list_missions(self) -> list[dict]:
+    def list_missions(self, map_name: Optional[str] = None) -> list[dict]:
         with self._lock:
             rows = self._conn.execute('SELECT data FROM missions ORDER BY id').fetchall()
-        return [json.loads(r[0]) for r in rows]
+        missions = [json.loads(r[0]) for r in rows]
+        if map_name:
+            return [m for m in missions if m.get('map') == map_name]
+        return missions
 
     def get_mission(self, mission_id: str) -> Optional[dict]:
         with self._lock:

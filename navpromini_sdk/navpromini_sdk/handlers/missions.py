@@ -422,6 +422,20 @@ async def _handle_low_battery_dock_and_resume(bridge, opts, mission: dict) -> No
 
 async def _run_mission(bridge, opts, mission: dict) -> None:
     store = opts['store']
+    current_map = store.current_map()
+    mission_map = mission.get('map')
+    if mission_map and mission_map != current_map:
+        RUNNER.mission_id = mission['id']
+        RUNNER.state = 'failed'
+        RUNNER.message = (f'Map mismatch: mission requires {mission_map!r}, '
+                          f'active map is {current_map!r}')
+        bridge.emit_event('mission.failed', {
+            'mission_id': mission['id'],
+            'step_index': 0,
+            'message': RUNNER.message,
+        })
+        return
+
     steps = mission['steps']
     loop_forever = bool(mission.get('loop_forever', False))
     loop_count = max(1, int(mission.get('loop_count', 1)))
@@ -539,7 +553,8 @@ async def _run_mission(bridge, opts, mission: dict) -> None:
 
 class MissionsHandler(BaseHandler):
     def get(self) -> None:
-        self.send({'missions': self.opts['store'].list_missions()})
+        map_name = self.get_argument('map', None)
+        self.send({'missions': self.opts['store'].list_missions(map_name)})
 
     def post(self) -> None:
         """Create or replace a mission definition. Does not start it — see
@@ -550,8 +565,20 @@ class MissionsHandler(BaseHandler):
             raise ApiError(400, 'invalid_field', 'id must not be empty')
         steps = _validate_steps(data['steps'])
         loop_forever, loop_count = _validate_loop(data)
-        mission = {'id': mission_id, 'name': str(data.get('name') or mission_id),
-                   'steps': steps, 'loop_forever': loop_forever, 'loop_count': loop_count}
+        map_name = data.get('map')
+        if map_name is not None:
+            map_name = str(map_name).strip() or None
+        if not map_name:
+            map_name = self.opts['store'].current_map()
+
+        mission = {
+            'id': mission_id,
+            'name': str(data.get('name') or mission_id),
+            'map': map_name,
+            'steps': steps,
+            'loop_forever': loop_forever,
+            'loop_count': loop_count,
+        }
         self.opts['store'].put_mission(mission)
         self.send({'mission': mission}, status=201)
 
@@ -588,6 +615,15 @@ class MissionControlHandler(BaseHandler):
             mission = self.opts['store'].get_mission(mission_id)
             if mission is None:
                 raise ApiError(404, 'mission_not_found', f'No mission named {mission_id!r}')
+
+            current_map = self.opts['store'].current_map()
+            mission_map = mission.get('map')
+            if mission_map and mission_map != current_map:
+                raise ApiError(409, 'map_mismatch',
+                               f'Mission {mission_id!r} requires map {mission_map!r}, '
+                               f'but active map is {current_map!r}. Switch map before starting.',
+                               {'required_map': mission_map, 'active_map': current_map})
+
             self.opts['spawn'](_run_mission(self.bridge, self.opts, mission))
             self.send({'accepted': True, 'mission_id': mission_id}, status=202)
             return
