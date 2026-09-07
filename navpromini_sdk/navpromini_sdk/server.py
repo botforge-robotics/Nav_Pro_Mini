@@ -78,6 +78,10 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/system/info', system.InfoHandler, opts),
         (rf'{API}/system/health', system.HealthHandler, opts),
         (rf'{API}/system/lifecycle', system.LifecycleHandler, opts),
+        (rf'{API}/system/updates', system.UpdatesHandler, opts),
+        (rf'{API}/system/updates/check', system.UpdateCheckHandler, opts),
+        (rf'{API}/system/updates/apply', system.UpdateApplyHandler, opts),
+        (rf'{API}/system/updates/status', system.UpdateStatusHandler, opts),
         # state
         (rf'{API}/state', state.RobotStateHandler, opts),
         (rf'{API}/state/pose', state.PoseHandler, opts),

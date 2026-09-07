@@ -46,7 +46,7 @@ fi
 usermod -aG dialout "${USER_NAME}" || true
 
 # --- dirs ---
-install -d -m 0755 /opt/navpro/scripts /etc/navpro /etc/ros /var/lib/navpro/maps
+install -d -m 0755 /opt/navpro/scripts /etc/navpro /etc/ros /var/lib/navpro/maps /var/log/navpro
 if [[ -f "${PKG_ROOT}/config/fastdds_udp.xml" ]]; then
   install -m 0644 "${PKG_ROOT}/config/fastdds_udp.xml" /etc/ros/fastdds_udp.xml
 fi
@@ -81,7 +81,7 @@ fi
 nmcli device set wlan0 managed yes 2>/dev/null || true
 
 # --- helper scripts for systemd ---
-for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission_planner.sh start_sdk.sh start_mcp.sh; do
+for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission_planner.sh start_sdk.sh start_mcp.sh update_companion.sh; do
   if [[ -f "${PKG_ROOT}/scripts/${f}" ]]; then
     install -m 0755 "${PKG_ROOT}/scripts/${f}" "/opt/navpro/scripts/${f}"
   fi

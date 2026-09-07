@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import shutil
 import socket
 import subprocess
 import time
 
-from .base import BaseHandler
+import tornado.ioloop
+
+from .base import ApiError, BaseHandler
 
 SDK_VERSION = '1.0.0'
 API_VERSION = 'v1'
@@ -253,3 +257,257 @@ class HealthHandler(BaseHandler):
             'cpu_temperature_c': self.bridge.get('cpu_temperature'),
             'disk': disk,
         })
+
+
+UPDATE_STATUS_FILE = Path('/var/lib/navpro/update_status.json')
+UPDATE_LOG_FILE = Path('/var/log/navpro/update.log')
+DEFAULT_WS = Path('/home/navpromini/NavProMini_ws')
+
+
+def _get_ws_path() -> Path:
+    ws_env = os.environ.get('NAVPRO_WS')
+    if ws_env:
+        return Path(ws_env)
+    user_home = Path.home()
+    if (user_home / 'NavProMini_ws').is_dir():
+        return user_home / 'NavProMini_ws'
+    return DEFAULT_WS
+
+
+def _get_git_info(src_dir: Path) -> dict:
+    info = {
+        'current_commit': 'unknown',
+        'current_commit_short': 'unknown',
+        'current_commit_message': '',
+        'current_commit_date': '',
+        'branch': 'nav2',
+        'remote_branch': 'origin/nav2',
+        'latest_commit': None,
+        'commits_behind': 0,
+        'changelog': [],
+    }
+    if not (src_dir / '.git').is_dir():
+        return info
+
+    try:
+        r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'rev-parse', '--abbrev-ref', 'HEAD'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            info['branch'] = r.stdout.strip()
+            info['remote_branch'] = f"origin/{info['branch']}"
+
+        r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'log', '-1', '--format=%H%n%h%n%s%n%ci'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            lines = r.stdout.strip().splitlines()
+            if len(lines) >= 4:
+                info['current_commit'] = lines[0]
+                info['current_commit_short'] = lines[1]
+                info['current_commit_message'] = lines[2]
+                info['current_commit_date'] = lines[3]
+
+        r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'rev-list', '--count', f"HEAD..{info['remote_branch']}"],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip().isdigit():
+            info['commits_behind'] = int(r.stdout.strip())
+
+        if info['commits_behind'] > 0:
+            r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'log', '-n', '20', '--format=%h %s', f"HEAD..{info['remote_branch']}"],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                info['changelog'] = r.stdout.strip().splitlines()
+
+            r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'rev-parse', info['remote_branch']],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                info['latest_commit'] = r.stdout.strip()
+        else:
+            info['latest_commit'] = info['current_commit']
+    except Exception:  # noqa: BLE001
+        pass
+    return info
+
+
+def _evaluate_update_safety(bridge, opts: dict) -> tuple[bool, list[str]]:
+    blockers = []
+    # 1. Motion check
+    odom = bridge.get('pose_odom')
+    if odom and isinstance(odom, dict):
+        twist = odom.get('twist', {}).get('twist', {})
+        vx = twist.get('linear', {}).get('x', 0.0)
+        wz = twist.get('angular', {}).get('z', 0.0)
+        if abs(vx) > 0.05 or abs(wz) > 0.05:
+            blockers.append(f'Robot is moving (linear: {vx:.2f} m/s, angular: {wz:.2f} rad/s)')
+
+    # 2. Mode check
+    mode_state = opts.get('mode_state')
+    if mode_state and getattr(mode_state, 'current_mode', None) == 'mapping':
+        blockers.append('Mapping mode is active — finish or cancel mapping first')
+
+    # 3. Mission runner check
+    mission_runner = opts.get('mission_runner')
+    if mission_runner and getattr(mission_runner, 'is_active', False):
+        blockers.append('A mission is currently in progress')
+
+    # 4. Battery check
+    battery = bridge.get('battery')
+    if battery and isinstance(battery, dict):
+        percentage = battery.get('percentage')
+        charging = battery.get('charging', False) or battery.get('power_supply_status') == 1
+        if percentage is not None and percentage < 30 and not charging:
+            blockers.append(f'Battery is low ({percentage:.0f}%), connect charger or dock before updating')
+
+    # 5. Disk space check
+    try:
+        usage = shutil.disk_usage('/')
+        if usage.free < 1.2e9:
+            blockers.append(f'Insufficient disk space: {usage.free / 1e9:.1f} GB free (require >= 1.2 GB)')
+    except OSError:
+        pass
+
+    return (len(blockers) == 0, blockers)
+
+
+class UpdatesHandler(BaseHandler):
+    def get(self) -> None:
+        ws = _get_ws_path()
+        git_info = _get_git_info(ws / 'src')
+        can_update, blockers = _evaluate_update_safety(self.bridge, self.opts)
+
+        last_status = None
+        if UPDATE_STATUS_FILE.is_file():
+            try:
+                last_status = json.loads(UPDATE_STATUS_FILE.read_text())
+            except Exception:
+                pass
+
+        self.send({
+            'update_available': git_info['commits_behind'] > 0,
+            'current_commit': git_info['current_commit'],
+            'current_commit_short': git_info['current_commit_short'],
+            'current_commit_message': git_info['current_commit_message'],
+            'current_commit_date': git_info['current_commit_date'],
+            'branch': git_info['branch'],
+            'remote_branch': git_info['remote_branch'],
+            'latest_commit': git_info['latest_commit'],
+            'commits_behind': git_info['commits_behind'],
+            'changelog': git_info['changelog'],
+            'safety': {
+                'can_update': can_update,
+                'blockers': blockers,
+            },
+            'last_update': last_status,
+        })
+
+
+class UpdateCheckHandler(BaseHandler):
+    async def post(self) -> None:
+        ws = _get_ws_path()
+        src_dir = ws / 'src'
+        branch = 'nav2'
+        try:
+            r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'rev-parse', '--abbrev-ref', 'HEAD'],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                branch = r.stdout.strip()
+            await tornado.ioloop.IOLoop.current().run_in_executor(
+                None,
+                lambda: subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(src_dir), 'fetch', 'origin', branch],
+                                       capture_output=True, text=True, timeout=30)
+            )
+        except Exception as exc:
+            raise ApiError(500, 'fetch_failed', f'git fetch failed: {exc}')
+
+        git_info = _get_git_info(src_dir)
+        can_update, blockers = _evaluate_update_safety(self.bridge, self.opts)
+        self.send({
+            'checked': True,
+            'update_available': git_info['commits_behind'] > 0,
+            'commits_behind': git_info['commits_behind'],
+            'current_commit': git_info['current_commit'],
+            'latest_commit': git_info['latest_commit'],
+            'changelog': git_info['changelog'],
+            'safety': {
+                'can_update': can_update,
+                'blockers': blockers,
+            },
+        })
+
+
+class UpdateApplyHandler(BaseHandler):
+    def post(self) -> None:
+        can_update, blockers = _evaluate_update_safety(self.bridge, self.opts)
+        if not can_update:
+            raise ApiError(409, 'safety_check_failed',
+                           f"Cannot apply update: {'; '.join(blockers)}",
+                           {'blockers': blockers})
+
+        # Check if already running
+        if UPDATE_STATUS_FILE.is_file():
+            try:
+                cur = json.loads(UPDATE_STATUS_FILE.read_text())
+                if cur.get('phase') in ('in_progress', 'pulling', 'building', 'restarting'):
+                    ts = cur.get('timestamp', 0)
+                    if time.time() - ts < 600:  # 10 minutes
+                        raise ApiError(409, 'update_already_in_progress',
+                                       'An update is already in progress',
+                                       {'phase': cur.get('phase'), 'progress': cur.get('progress')})
+            except (ApiError, tornado.web.HTTPError):
+                raise
+            except Exception:
+                pass
+
+        # Script location
+        script_path = Path('/opt/navpro/scripts/update_companion.sh')
+        if not script_path.is_file():
+            ws = _get_ws_path()
+            src_script = ws / 'src' / 'navpromini_setup' / 'scripts' / 'update_companion.sh'
+            if src_script.is_file():
+                script_path = src_script
+            else:
+                raise ApiError(500, 'updater_not_found', 'update_companion.sh not found on system')
+
+        try:
+            # Popen detached session so it survives SDK process restarts
+            subprocess.Popen(['/bin/bash', str(script_path)],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            raise ApiError(500, 'spawn_failed', f'Failed to launch updater: {exc}')
+
+        self.send({
+            'status': 'started',
+            'message': 'Companion software update process initiated in background',
+        })
+
+
+class UpdateStatusHandler(BaseHandler):
+    def get(self) -> None:
+        status = {
+            'phase': 'idle',
+            'progress': 0,
+            'message': 'No update in progress',
+            'commit': None,
+            'error': None,
+            'timestamp': None,
+        }
+        if UPDATE_STATUS_FILE.is_file():
+            try:
+                status = json.loads(UPDATE_STATUS_FILE.read_text())
+            except Exception:
+                pass
+
+        log_tail = []
+        if UPDATE_LOG_FILE.is_file():
+            try:
+                lines = UPDATE_LOG_FILE.read_text().splitlines()
+                log_tail = lines[-60:]
+            except Exception:
+                pass
+
+        self.send({
+            'status': status,
+            'log_tail': log_tail,
+        })
+

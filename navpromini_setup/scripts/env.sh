@@ -19,6 +19,15 @@ if [[ -f "${USER_HOME}/uros_ws/install/setup.bash" ]]; then
   # shellcheck disable=SC1091
   source "${USER_HOME}/uros_ws/install/setup.bash"
 fi
+
+# Power-loss recovery: if install/setup.bash was damaged during an interrupted update,
+# automatically restore from the atomic snapshot install.prev to ensure boot reliability.
+if [[ ! -f "${WS}/install/setup.bash" ]] && [[ -d "${WS}/install.prev" ]]; then
+  echo "WARN: ${WS}/install corrupted or incomplete. Restoring from ${WS}/install.prev..." >&2
+  rm -rf "${WS}/install"
+  cp -al "${WS}/install.prev" "${WS}/install" 2>/dev/null || cp -r "${WS}/install.prev" "${WS}/install"
+fi
+
 # shellcheck disable=SC1091
 source "${WS}/install/setup.bash"
 set -u
