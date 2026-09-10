@@ -83,7 +83,8 @@ def _validate_schedule(data: dict, store) -> dict:
 
 class SchedulesHandler(BaseHandler):
     def get(self) -> None:
-        self.send({'schedules': self.opts['store'].list_schedules()})
+        map_name = self.get_argument('map', None)
+        self.send({'schedules': self.opts['store'].list_schedules(map_name)})
 
     def post(self) -> None:
         """Create or replace a schedule — same create-or-replace-by-id shape

@@ -189,10 +189,18 @@ class Store:
 
     # -- schedules -------------------------------------------------------------
 
-    def list_schedules(self) -> list[dict]:
+    def list_schedules(self, map_name: Optional[str] = None) -> list[dict]:
         with self._lock:
             rows = self._conn.execute('SELECT data FROM schedules ORDER BY id').fetchall()
-        return [json.loads(r[0]) for r in rows]
+        schedules = [json.loads(r[0]) for r in rows]
+        if map_name:
+            filtered = []
+            for s in schedules:
+                mission = self.get_mission(s.get('mission_id', ''))
+                if mission and mission.get('map') == map_name:
+                    filtered.append(s)
+            return filtered
+        return schedules
 
     def get_schedule(self, schedule_id: str) -> Optional[dict]:
         with self._lock:

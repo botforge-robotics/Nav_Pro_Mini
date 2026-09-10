@@ -95,7 +95,7 @@ class RobotStateHandler(BaseHandler):
         if pose is None:
             pose, _age = bridge.get_with_age('pose_odom')
 
-        map_name = mode_state.map_name or store.current_map()
+        map_name = mode_state.map_name if mode_state.mode == 'navigation' else None
 
         self.send({
             'robot': system.robot_identity(),
@@ -110,7 +110,7 @@ class RobotStateHandler(BaseHandler):
                         for label, s in health.items()},
             'battery': {'percentage': battery.get('percentage'),
                        'charging': bool(battery.get('charging'))},
-            'map': {'id': map_name, 'name': map_name},
+            'map': {'id': map_name, 'name': map_name} if map_name else None,
             'localization': {
                 'status': 'LOCALIZED' if localized else 'UNKNOWN',
                 'x': pose.get('x') if pose else None,

@@ -111,7 +111,7 @@ class LaunchManager(Node):
                     return response
 
             # Check if this is a map saving operation by launch file name
-            is_map_saver = request.launch_file == 'save_map.launch.py'
+            is_map_saver = request.launch_file in ('save_map.launch.py', 'map_saver.launch.py')
 
             # For map saving, run synchronously
             if is_map_saver:
@@ -138,6 +138,8 @@ class LaunchManager(Node):
                         # otherwise prefix with the launch package name.
                         val = args_dict[map_dir_key]
                         verification_path = val if '/' in val else f"{request.package}/{val}"
+                    else:
+                        verification_path = f"{request.package}/maps"
                 except Exception:
                     pass
 

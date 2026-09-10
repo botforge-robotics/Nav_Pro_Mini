@@ -32,9 +32,9 @@ async def save_map(bridge, store, name: str, overwrite: bool) -> dict:
                        'name must be a simple file name without "/"')
 
     req = LaunchWithArgs.Request()
-    req.package = 'nav2_mission_planner'
-    req.launch_file = 'save_map.launch.py'
-    req.arguments = f'map_name:={name} map_path:={MAP_PATH}'
+    req.package = MAP_PACKAGE
+    req.launch_file = 'map_saver.launch.py'
+    req.arguments = f'map_name:={name}'
     resp = await call_service(bridge.cli_launch, req, 'save_map', timeout=120.0)
 
     already = 'already exist' in (resp.message or '').lower()
@@ -98,6 +98,16 @@ class ActivateMapHandler(BaseHandler):
     """Switch navigation to a different map (restarts the navigation stack)."""
 
     async def post(self, name: str) -> None:
+        # Verify map exists on disk before trying to activate
+        req = GetMapList.Request()
+        req.path = MAP_PATH
+        resp = await call_service(self.bridge.cli_maplist, req, 'get_map_list')
+        available = list(resp.maplist) if resp.success else []
+        if name not in available:
+            raise ApiError(404, 'map_not_found',
+                           f"No saved map named '{name}'. "
+                           f"Available maps: {available}",
+                           {'available': available})
         from .mode import switch_mode
         result = await switch_mode(self.opts, self.bridge, 'navigation', name)
         self.send(result, status=202)

@@ -33,9 +33,19 @@ class WaypointsHandler(BaseHandler):
                            f'type must be one of: {", ".join(VALID_TYPES)}',
                            {'valid': list(VALID_TYPES)})
 
-        if 'x' in data and 'y' in data:
-            x, y = float(data['x']), float(data['y'])
-            theta = float(data.get('theta', 0.0))
+        has_x = 'x' in data
+        has_y = 'y' in data
+        if has_x != has_y:
+            raise ApiError(400, 'invalid_field',
+                           'both x and y must be provided together')
+
+        if has_x and has_y:
+            try:
+                x, y = float(data['x']), float(data['y'])
+                theta = float(data.get('theta', 0.0))
+            except (ValueError, TypeError) as e:
+                raise ApiError(400, 'invalid_field',
+                               f'x, y, and theta must be numeric: {e}')
             source = 'given'
         else:
             pose = self.bridge.get('pose_map')
