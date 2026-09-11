@@ -111,6 +111,69 @@ NODE_CATALOG = {
         ],
         "params_schema": {},
     },
+    "end": {
+        "type": "end",
+        "category": "flow",
+        "title": "Mission End",
+        "description": "Explicitly terminates the mission with status, summary, and optional auto-dock.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [],  # Terminal node (no outgoing ports)
+        "params_schema": {
+            "status": {"type": "string", "enum": ["success", "failed", "aborted"], "default": "success"},
+            "message": {"type": "string", "default": "Mission completed successfully."},
+            "dock_on_end": {"type": "boolean", "default": False, "description": "Auto-dock robot after finishing"},
+            "sound": {"type": "string", "default": "success_chime"},
+        },
+    },
+    "loop": {
+        "type": "loop",
+        "category": "flow",
+        "title": "Loop / Repeat",
+        "description": "Repeats execution of the loop body for N iterations or while condition holds.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "loop_body", "label": "Loop Body", "color": "#2196F3"},
+            {"id": "completed", "label": "Completed", "color": "#4CAF50"},
+        ],
+        "params_schema": {
+            "count": {"type": "integer", "default": 3, "description": "Number of loop iterations"},
+            "variable_name": {"type": "string", "default": "loop_index", "description": "Context variable storing current index (0..N-1)"},
+            "condition": {"type": "string", "description": "Optional boolean condition evaluated before each iteration"},
+            "max_iterations": {"type": "integer", "default": 50, "description": "Safety cap against runaway loops"},
+        },
+    },
+    "patrol_loop": {
+        "type": "patrol_loop",
+        "category": "navigation",
+        "title": "Patrol Loop",
+        "description": "Sequentially patrols through an ordered list of waypoints for N laps.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "completed", "label": "Completed", "color": "#4CAF50"},
+            {"id": "failed", "label": "Failed", "color": "#F44336"},
+            {"id": "interrupted", "label": "Interrupted", "color": "#FF9800"},
+        ],
+        "params_schema": {
+            "waypoints": {"type": "array", "required": True, "description": "Ordered list of waypoint names"},
+            "laps": {"type": "integer", "default": 1, "description": "Number of laps (0 for infinite until cancelled)"},
+            "dwell_sec": {"type": "number", "default": 2.0, "description": "Wait time at each waypoint in seconds"},
+        },
+    },
+    "battery_guard": {
+        "type": "battery_guard",
+        "category": "logic",
+        "title": "Battery Guard",
+        "description": "Checks robot battery level before proceeding.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "ok", "label": "Battery OK", "color": "#4CAF50"},
+            {"id": "low_battery", "label": "Low Battery", "color": "#F44336"},
+        ],
+        "params_schema": {
+            "min_battery_pct": {"type": "number", "default": 20.0, "description": "Minimum required battery percentage"},
+            "require_charging": {"type": "boolean", "default": False, "description": "Require robot to be on charger"},
+        },
+    },
     "ui_interaction": {
         "type": "ui_interaction",
         "category": "hri",
@@ -123,6 +186,12 @@ NODE_CATALOG = {
             {"id": "timeout", "label": "Timeout", "color": "#FF9800"},
         ],
         "params_schema": {
+            "target": {
+                "type": "string",
+                "enum": ["robot_screen", "operator_app", "both"],
+                "default": "robot_screen",
+                "description": "Where to display: robot onboard touchscreen, remote operator app, or both",
+            },
             "subtype": {
                 "type": "string",
                 "enum": ["dynamic_form", "choice", "text_input", "media_display", "speech", "kiosk"],
@@ -152,6 +221,40 @@ NODE_CATALOG = {
             },
             "media_url": {"type": "string", "description": "Image/video URL (for media_display subtype)"},
             "speech_text": {"type": "string", "description": "Text-to-speech announcement text (for speech subtype)"},
+        },
+    },
+    "ui_media": {
+        "type": "ui_media",
+        "category": "hri",
+        "title": "Multimedia Player",
+        "description": "Displays image, video, or web dashboard on the robot screen.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "completed", "label": "Completed", "color": "#4CAF50"},
+            {"id": "skipped", "label": "Skipped", "color": "#9E9E9E"},
+            {"id": "timeout", "label": "Timeout", "color": "#FF9800"},
+        ],
+        "params_schema": {
+            "media_type": {"type": "string", "enum": ["image", "video", "web_url"], "default": "image"},
+            "url": {"type": "string", "required": True, "description": "URL to image, video or web page"},
+            "duration_sec": {"type": "number", "default": 15.0, "description": "Auto-dismiss time in seconds"},
+            "show_skip": {"type": "boolean", "default": True, "description": "Allow user to tap Skip button"},
+            "target": {"type": "string", "enum": ["robot_screen", "operator_app", "both"], "default": "robot_screen"},
+        },
+    },
+    "ui_speech": {
+        "type": "ui_speech",
+        "category": "hri",
+        "title": "Voice Announcement (TTS)",
+        "description": "Speaks an audible voice message through the robot speakers.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "done", "label": "Done", "color": "#4CAF50"},
+        ],
+        "params_schema": {
+            "text": {"type": "string", "required": True, "description": "Text to speak (supports {{context.xxx}})"},
+            "voice": {"type": "string", "default": "default"},
+            "wait_completion": {"type": "boolean", "default": True, "description": "Wait until speech is finished"},
         },
     },
     "condition": {

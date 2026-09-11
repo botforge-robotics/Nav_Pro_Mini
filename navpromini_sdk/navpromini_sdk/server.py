@@ -13,6 +13,7 @@ Start with:
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import threading
 from typing import Any
@@ -140,6 +141,23 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/zones.*', NotImplementedHandler, opts),
         (rf'{API}/routes.*', NotImplementedHandler, opts),
     ]
+
+    ui_dir = os.environ.get('NAVPRO_ROBOT_UI_DIR', '/home/chaitu/Projects/navpromini_robot_ui')
+    flutter_dir = os.path.join(ui_dir, 'build', 'web')
+
+    if os.path.isdir(flutter_dir):
+        routes.extend([
+            (r'/flutter/?', tornado.web.RedirectHandler, {'url': '/flutter/index.html'}),
+            (r'/flutter/(.*)', tornado.web.StaticFileHandler, {'path': flutter_dir, 'default_filename': 'index.html'}),
+        ])
+
+    if os.path.isdir(ui_dir):
+        routes.extend([
+            (r'/', tornado.web.RedirectHandler, {'url': '/ui/'}),
+            (r'/ui/?', tornado.web.RedirectHandler, {'url': '/ui/index.html'}),
+            (r'/ui/(.*)', tornado.web.StaticFileHandler, {'path': ui_dir, 'default_filename': 'index.html'}),
+        ])
+
     return tornado.web.Application(routes, default_handler_class=NotFoundHandler,
                                    default_handler_args=opts)
 

@@ -476,6 +476,90 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         await asyncio.sleep(dur)
         return True, 'next', f"Waited {dur}s"
 
+    if ntype in ('end', 'mission_end'):
+        status = str(params.get('status', 'success')).lower()
+        msg = resolve_template_value(params.get('message', 'Mission completed'), context)
+        dock_on_end = bool(params.get('dock_on_end', False))
+        sound = params.get('sound')
+        if sound:
+            try:
+                bridge.publish_led_command("blink,0,255,0")
+            except Exception:
+                pass
+        try:
+            bridge.publish_cmd_vel(0.0, 0.0)
+        except Exception:
+            pass
+        if dock_on_end:
+            bridge.get_logger().info(f"Mission end node {node.get('id')}: auto-docking robot...")
+            try:
+                await dock_robot(bridge, True)
+            except Exception as e:
+                bridge.get_logger().warn(f"Auto-dock on mission end failed: {e}")
+        return True, 'completed', msg
+
+    if ntype in ('loop', 'loop_counter'):
+        count = int(params.get('count', 3))
+        var_name = str(params.get('variable_name', 'loop_index')).strip() or 'loop_index'
+        cond = params.get('condition')
+        max_iter = int(params.get('max_iterations', 50))
+        loop_state = context.setdefault('loop_state', {})
+        curr_iter = loop_state.get(node['id'], 0)
+
+        cond_ok = True
+        if cond and str(cond).strip():
+            try:
+                cond_ok = evaluate_condition_safely(cond, context)
+            except Exception as e:
+                bridge.get_logger().error(f"Loop condition error in {node.get('id')}: {e}")
+                cond_ok = False
+
+        if curr_iter < count and curr_iter < max_iter and cond_ok:
+            loop_state[node['id']] = curr_iter + 1
+            context['variables'][var_name] = curr_iter
+            return True, 'loop_body', f"Loop iteration {curr_iter + 1}/{count}"
+        else:
+            loop_state[node['id']] = 0
+            return True, 'completed', f"Loop completed ({count} iterations)"
+
+    if ntype == 'patrol_loop':
+        waypoints_list = params.get('waypoints') or []
+        laps = int(params.get('laps', 1))
+        dwell_sec = float(params.get('dwell_sec', 2.0))
+        store = opts['store']
+
+        if not waypoints_list:
+            return False, 'failed', "No waypoints provided for patrol loop"
+
+        lap = 0
+        while laps == 0 or lap < laps:
+            lap += 1
+            for wp_name in waypoints_list:
+                if RUNNER.cancel_requested:
+                    return False, 'interrupted', "Patrol cancelled by operator"
+                wp = store.get_waypoint(wp_name)
+                if not wp:
+                    return False, 'failed', f"Patrol waypoint {wp_name!r} not found"
+                target_dict = {'waypoint': wp['name'], 'x': wp['x'], 'y': wp['y'], 'theta': wp.get('theta', 0.0)}
+                res = await navigate_to(bridge, target_dict)
+                if not res.get('ok'):
+                    return False, 'failed', f"Failed navigation to {wp_name}: {res.get('message')}"
+                if dwell_sec > 0:
+                    await asyncio.sleep(dwell_sec)
+        return True, 'completed', f"Completed {lap} patrol laps"
+
+    if ntype == 'battery_guard':
+        min_pct = float(params.get('min_battery_pct', 20.0))
+        require_charging = bool(params.get('require_charging', False))
+        batt = bridge.get('battery') or {}
+        pct = float(batt.get('percentage', 100.0))
+        charging = bool(batt.get('charging')) or batt.get('status') in ('charging', 'full')
+
+        if pct >= min_pct and (not require_charging or charging):
+            return True, 'ok', f"Battery OK: {pct:.1f}% >= {min_pct}%"
+        else:
+            return True, 'low_battery', f"Low battery: {pct:.1f}% < {min_pct}% (charging: {charging})"
+
     if ntype == 'dock':
         res = await dock_robot(bridge, bool(params.get('navigate_to_staging', True)))
         return (True, 'docked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
@@ -579,12 +663,16 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         timeout_sec = float(params.get('timeout_sec', 60.0))
         default_option = str(params.get('default_option', 'timeout')).lower()
         subtype = params.get('subtype', 'dynamic_form')
+        target = str(params.get('target', 'robot_screen')).lower()
+        if target not in ('robot_screen', 'operator_app', 'both'):
+            target = 'robot_screen'
 
         interaction_data = {
             'interaction_id': interaction_id,
             'mission_id': RUNNER.mission_id,
             'node_id': node['id'],
             'subtype': subtype,
+            'target': target,
             'title': resolve_template_value(params.get('title', 'Operator Input'), context),
             'message': resolve_template_value(params.get('message', ''), context),
             'fields': resolve_template_value(params.get('fields', []), context),
@@ -636,6 +724,73 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
             if RUNNER.state == 'waiting_for_user':
                 RUNNER.state = 'running'
             bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
+
+    if ntype == 'ui_media':
+        url = resolve_template_value(params.get('url', ''), context)
+        media_type = params.get('media_type', 'image')
+        duration_sec = float(params.get('duration_sec', 15.0))
+        target = str(params.get('target', 'robot_screen')).lower()
+        if target not in ('robot_screen', 'operator_app', 'both'):
+            target = 'robot_screen'
+        show_skip = bool(params.get('show_skip', True))
+
+        interaction_id = f"media_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+        interaction_data = {
+            'interaction_id': interaction_id,
+            'mission_id': RUNNER.mission_id,
+            'node_id': node['id'],
+            'subtype': 'media_display',
+            'target': target,
+            'title': resolve_template_value(params.get('title', 'Media Display'), context),
+            'media_url': url,
+            'media_type': media_type,
+            'duration_sec': duration_sec,
+            'show_skip': show_skip,
+            'options': ['Skip'] if show_skip else [],
+            'timeout_sec': duration_sec if duration_sec > 0 else 3600.0,
+            'default_option': 'completed',
+            'started_at': time.time(),
+        }
+
+        RUNNER.active_interaction = interaction_data
+        RUNNER.state = 'waiting_for_user'
+        bridge.emit_event('mission.ui_interaction', interaction_data)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        RUNNER.interaction_future = future
+
+        try:
+            if duration_sec > 0:
+                resp_data = await asyncio.wait_for(future, timeout=duration_sec)
+                action = resp_data.get('action', 'skip')
+                port = 'skipped' if action in ('skip', 'cancel') else 'completed'
+            else:
+                resp_data = await future
+                port = 'completed'
+            return True, port, f"Media display: {port}"
+        except asyncio.TimeoutError:
+            return True, 'completed', "Media display completed"
+        finally:
+            RUNNER.active_interaction = None
+            RUNNER.interaction_future = None
+            if RUNNER.state == 'waiting_for_user':
+                RUNNER.state = 'running'
+            bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
+
+    if ntype == 'ui_speech':
+        text = resolve_template_value(params.get('text', ''), context)
+        if text:
+            try:
+                bridge.publish_display_text(text[:32])
+            except Exception:
+                pass
+            bridge.get_logger().info(f"[TTS Announcement]: {text}")
+            bridge.emit_event('mission.speech', {'text': text, 'node_id': node['id']})
+            if bool(params.get('wait_completion', True)):
+                speech_dur = min(15.0, max(1.5, len(text) / 12.0 + 0.8))
+                await asyncio.sleep(speech_dur)
+        return True, 'done', 'Speech completed'
 
     if ntype == 'notify':
         oled = params.get('oled_text')
@@ -771,6 +926,18 @@ async def _run_graph_mission(bridge, opts, mission: dict) -> None:
                 RUNNER.state = 'failed'
                 RUNNER.message = message
                 bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': current_node_id})
+                return
+
+            if node.get('type') in ('end', 'mission_end'):
+                status = str(node.get('params', {}).get('status', 'success')).lower()
+                if status in ('failed', 'aborted'):
+                    RUNNER.state = 'failed'
+                    RUNNER.message = message
+                    bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': current_node_id})
+                else:
+                    RUNNER.state = 'completed'
+                    RUNNER.message = message
+                    bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'message': message})
                 return
 
             matching_edges = [
