@@ -145,6 +145,8 @@ class RosBridge(Node):
         self._pub_cmd_vel = self.create_publisher(Twist, 'cmd_vel_teleop', 10)
         self._pub_initial = self.create_publisher(
             PoseWithCovarianceStamped, 'initialpose', 10)
+        self._pub_display = self.create_publisher(String, 'display_text', 10)
+        self._pub_led = self.create_publisher(String, 'led_command', 10)
 
         # --- service clients (launch_manager) ------------------------------
         self.cli_launch = self.create_client(LaunchWithArgs, 'launch_with_args',
@@ -384,6 +386,16 @@ class RosBridge(Node):
         t.linear.x = float(linear)
         t.angular.z = float(angular)
         self._pub_cmd_vel.publish(t)
+
+    def publish_display_text(self, text: str) -> None:
+        msg = String()
+        msg.data = str(text)
+        self._pub_display.publish(msg)
+
+    def publish_led_command(self, cmd: str) -> None:
+        msg = String()
+        msg.data = str(cmd)
+        self._pub_led.publish(msg)
 
     def reinitialize_global_localization(self, timeout_sec: float = 2.0) -> bool:
         """Call AMCL's /reinitialize_global_localization service to disperse particles."""

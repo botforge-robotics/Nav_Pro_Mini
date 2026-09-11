@@ -45,9 +45,16 @@ from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.utilities import get_action, get_service
 
 import os
+import uuid
 import requests
 from .base import ApiError, BaseHandler
 from .docking import dock_robot, undock_robot
+from .mission_graph import (
+    NODE_CATALOG,
+    evaluate_condition_safely,
+    resolve_template_value,
+    validate_graph_mission,
+)
 from .navigation import cancel_active_goal, navigate_to
 from .roscall import call_service, ros_future, send_goal
 
@@ -172,8 +179,13 @@ class _MissionRunner:
 
     def __init__(self) -> None:
         self.mission_id: str | None = None
-        self.state = 'idle'   # idle | running | paused | completed | failed | canceled
+        self.state = 'idle'   # idle | running | paused | completed | failed | canceled | waiting_for_user
         self.step_index = -1
+        self.active_node_id: str | None = None
+        self.active_node_type: str | None = None
+        self.active_interaction: dict | None = None
+        self.interaction_future: asyncio.Future | None = None
+        self.context: dict = {}
         # loop_total is None for a loop_forever mission (there is no total to
         # report), and 1 for a plain, non-repeating mission — so a client can
         # tell "not looping" from "looping forever" from "lap 2 of 5" without
@@ -192,10 +204,14 @@ class _MissionRunner:
             'state': self.state,
             'status': self.state,
             'step_index': self.step_index,
+            'active_node_id': self.active_node_id,
+            'active_node_type': self.active_node_type,
+            'active_interaction': self.active_interaction,
             'loop_index': self.loop_index,
             'loop_total': self.loop_total,
             'message': self.message,
             'pause_reason': self.pause_reason,
+            'context': self.context,
             'elapsed_sec': (round(time.time() - self.started_at, 1)
                             if self.started_at else None),
         }
@@ -420,6 +436,378 @@ async def _handle_low_battery_dock_and_resume(bridge, opts, mission: dict) -> No
     bridge.get_logger().info(f"Mission {mission['id']}: resumed successfully at step {RUNNER.step_index}.")
 
 
+async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[bool, str, str]:
+    """Execute a single graph node."""
+    store = opts['store']
+    ntype = node.get('type')
+    params = node.get('params', {})
+
+    if ntype == 'start':
+        return True, 'next', 'Started'
+
+    if ntype in ('navigate', 'navigate_waypoint'):
+        target = params.get('waypoint') or params.get('target')
+        if isinstance(target, str):
+            target = resolve_template_value(target, context)
+            wp = store.get_waypoint(target)
+            if wp is None:
+                return False, 'failed', f"Waypoint {target!r} not found"
+            target_dict = {'waypoint': wp['name'], 'x': wp['x'], 'y': wp['y'], 'theta': wp.get('theta', 0.0)}
+        else:
+            target_dict = {
+                'x': float(params.get('x', 0.0)),
+                'y': float(params.get('y', 0.0)),
+                'theta': float(params.get('theta', 0.0)),
+            }
+        res = await navigate_to(bridge, target_dict)
+        return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+
+    if ntype == 'navigate_coordinates':
+        target_dict = {
+            'x': float(params.get('x', 0.0)),
+            'y': float(params.get('y', 0.0)),
+            'theta': float(params.get('theta', 0.0)),
+        }
+        res = await navigate_to(bridge, target_dict)
+        return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+
+    if ntype in ('wait', 'wait_timer'):
+        dur = float(params.get('duration_sec', params.get('duration', 5.0)))
+        await asyncio.sleep(dur)
+        return True, 'next', f"Waited {dur}s"
+
+    if ntype == 'dock':
+        res = await dock_robot(bridge, bool(params.get('navigate_to_staging', True)))
+        return (True, 'docked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+
+    if ntype == 'undock':
+        res = await undock_robot(bridge)
+        return (True, 'undocked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+
+    if ntype == 'condition':
+        expr = params.get('expression', 'True')
+        try:
+            eval_result = evaluate_condition_safely(expr, context)
+            port = 'true' if eval_result else 'false'
+            return True, port, f"Condition evaluated to {eval_result}"
+        except Exception as e:
+            bridge.get_logger().error(f"Condition evaluation error in {node.get('id')}: {e}")
+            return False, 'false', str(e)
+
+    if ntype == 'set_variable':
+        key = params.get('key')
+        val = params.get('value')
+        if key:
+            val = resolve_template_value(val, context)
+            context['variables'][key] = val
+        return True, 'next', f"Set {key}"
+
+    if ntype == 'call_api':
+        raw_url = params.get('url', '')
+        url = resolve_template_value(raw_url, context)
+        method = str(params.get('method', 'POST')).upper()
+        headers = resolve_template_value(params.get('headers') or {}, context)
+        payload = resolve_template_value(params.get('payload') or params.get('body'), context)
+        timeout = float(params.get('timeout_sec', params.get('timeout', 15.0)))
+        ignore_error = bool(params.get('ignore_error', False))
+
+        def _do_request():
+            req_kwargs = {'headers': headers, 'timeout': timeout}
+            if payload is not None:
+                if isinstance(payload, (dict, list)):
+                    req_kwargs['json'] = payload
+                else:
+                    req_kwargs['data'] = str(payload)
+            resp = requests.request(method, url, **req_kwargs)
+            return resp.status_code, resp.text[:1000]
+
+        try:
+            status_code, resp_text = await asyncio.to_thread(_do_request)
+            ok = (200 <= status_code < 300)
+            try:
+                parsed_json = json.loads(resp_text)
+                context['api_responses'][node['id']] = parsed_json
+            except Exception:
+                context['api_responses'][node['id']] = {'raw': resp_text, 'status_code': status_code}
+
+            if ok or ignore_error:
+                return True, 'success', f"HTTP {status_code}"
+            return False, 'failure', f"HTTP {status_code}: {resp_text[:100]}"
+        except Exception as e:
+            bridge.get_logger().error(f"API call failed: {e}")
+            if ignore_error:
+                return True, 'success', str(e)
+            return False, 'failure', str(e)
+
+    if ntype == 'call_service':
+        ignore_error = bool(params.get('ignore_error', False))
+        timeout = float(params.get('timeout_sec', params.get('timeout', 15.0)))
+        try:
+            client, srv_cls = _get_service_client(bridge, params['service_type'], params['service'])
+            request = srv_cls.Request()
+            req_data = resolve_template_value(params.get('request') or params.get('args') or {}, context)
+            set_message_fields(request, req_data)
+            response = await call_service(client, request, params['service'], timeout=timeout)
+            return True, 'success', json.dumps(message_to_ordereddict(response))[:500]
+        except Exception as exc:
+            bridge.get_logger().error(f"call_service node failed: {exc}")
+            if ignore_error:
+                return True, 'success', str(exc)
+            return False, 'failure', str(exc)
+
+    if ntype == 'call_action':
+        ignore_error = bool(params.get('ignore_error', False))
+        timeout = float(params.get('timeout_sec', params.get('timeout', 300.0)))
+        try:
+            act_name = params.get('action') or params.get('action_name')
+            client, act_cls = _get_action_client(bridge, params['action_type'], act_name)
+            goal = act_cls.Goal()
+            goal_data = resolve_template_value(params.get('goal') or {}, context)
+            set_message_fields(goal, goal_data)
+            ok, result = await send_goal(client, goal, act_name, timeout=timeout)
+            if ok or ignore_error:
+                return True, 'succeeded', json.dumps(message_to_ordereddict(result))[:500]
+            return False, 'failed', str(result)
+        except Exception as exc:
+            bridge.get_logger().error(f"call_action node failed: {exc}")
+            if ignore_error:
+                return True, 'succeeded', str(exc)
+            return False, 'failed', str(exc)
+
+    if ntype == 'ui_interaction':
+        interaction_id = f"ui_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+        timeout_sec = float(params.get('timeout_sec', 60.0))
+        default_option = str(params.get('default_option', 'timeout')).lower()
+        subtype = params.get('subtype', 'dynamic_form')
+
+        interaction_data = {
+            'interaction_id': interaction_id,
+            'mission_id': RUNNER.mission_id,
+            'node_id': node['id'],
+            'subtype': subtype,
+            'title': resolve_template_value(params.get('title', 'Operator Input'), context),
+            'message': resolve_template_value(params.get('message', ''), context),
+            'fields': resolve_template_value(params.get('fields', []), context),
+            'options': params.get('options', ['Yes', 'No']),
+            'media_url': resolve_template_value(params.get('media_url'), context),
+            'speech_text': resolve_template_value(params.get('speech_text'), context),
+            'timeout_sec': timeout_sec,
+            'default_option': default_option,
+            'started_at': time.time(),
+        }
+
+        RUNNER.active_interaction = interaction_data
+        RUNNER.state = 'waiting_for_user'
+        bridge.emit_event('mission.ui_interaction', interaction_data)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        RUNNER.interaction_future = future
+
+        try:
+            resp_data = await asyncio.wait_for(future, timeout=timeout_sec)
+            action = resp_data.get('action', 'submit')
+            selected = str(resp_data.get('selected', '')).strip().lower()
+            form_data = resp_data.get('form_data') or resp_data.get('data') or {}
+
+            context['forms'][node['id']] = form_data
+            context['form'] = form_data
+            context['form_data'].update(form_data)
+
+            if subtype == 'choice' and selected:
+                output_port = selected
+            elif action == 'cancel':
+                output_port = 'cancelled'
+            elif subtype == 'kiosk':
+                chosen_dest = resp_data.get('destination') or form_data.get('destination')
+                if chosen_dest:
+                    context['variables']['selected_destination'] = chosen_dest
+                output_port = 'selected'
+            else:
+                output_port = 'submitted'
+
+            return True, output_port, f"User response: {output_port}"
+        except asyncio.TimeoutError:
+            bridge.get_logger().info(f"UI interaction {interaction_id} timed out after {timeout_sec}s.")
+            return True, default_option, "Timed out waiting for operator"
+        finally:
+            RUNNER.active_interaction = None
+            RUNNER.interaction_future = None
+            if RUNNER.state == 'waiting_for_user':
+                RUNNER.state = 'running'
+            bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
+
+    if ntype == 'notify':
+        oled = params.get('oled_text')
+        led = params.get('led_cmd')
+        if oled:
+            bridge.publish_display_text(resolve_template_value(oled, context))
+        if led:
+            bridge.publish_led_command(led)
+        return True, 'next', 'Notification sent'
+
+    return False, 'abort', f"Unknown node type: {ntype!r}"
+
+
+async def _run_graph_mission(bridge, opts, mission: dict) -> None:
+    """Execute a visual graph-based mission with branches and UI interactions."""
+    nodes = mission['nodes']
+    edges = mission.get('edges', [])
+    entrypoint = mission.get('entrypoint') or (nodes[0]['id'] if nodes else None)
+
+    nodes_by_id = {n['id']: n for n in nodes}
+    if not entrypoint or entrypoint not in nodes_by_id:
+        entrypoint = nodes[0]['id']
+
+    RUNNER.mission_id = mission['id']
+    RUNNER.state = 'running'
+    RUNNER.started_at = time.time()
+    RUNNER.context = {
+        'variables': {},
+        'form': {},
+        'forms': {},
+        'form_data': {},
+        'api_responses': {},
+        'system': {},
+        'history': [],
+    }
+    RUNNER.active_interaction = None
+    RUNNER.interaction_future = None
+    RUNNER.cancel_requested = False
+    RUNNER.pause_requested = False
+    RUNNER.pause_reason = None
+
+    bridge.emit_event('mission.started', {
+        'mission_id': mission['id'],
+        'type': 'graph',
+        'entrypoint': entrypoint,
+    })
+
+    current_node_id = entrypoint
+    visited_count = 0
+    max_transitions = int(mission.get('settings', {}).get('max_transitions', 500))
+
+    stop_battery_monitor = asyncio.Event()
+
+    async def _battery_watcher():
+        while not stop_battery_monitor.is_set():
+            batt = bridge.get('battery') or {}
+            pct = batt.get('percentage')
+            is_charging = bool(batt.get('charging')) or batt.get('status') in ('charging', 'full')
+            if pct is not None and pct <= LOW_BATTERY_DOCK_PERCENT and not is_charging:
+                if RUNNER.state in ('running', 'waiting_for_user') and not RUNNER.pause_requested:
+                    bridge.get_logger().warn(
+                        f"Mission {RUNNER.mission_id}: battery low ({pct:.1f}% <= {LOW_BATTERY_DOCK_PERCENT}%)! "
+                        "Pausing mission for auto-dock & recharge."
+                    )
+                    RUNNER.pause_requested = True
+                    RUNNER.pause_reason = 'low_battery'
+                    try:
+                        await cancel_active_goal(bridge, reason='low_battery')
+                    except Exception as e:
+                        bridge.get_logger().error(f"Error canceling active goal on low battery: {e}")
+            await asyncio.sleep(1.0)
+
+    monitor_task = asyncio.create_task(_battery_watcher())
+
+    try:
+        while current_node_id and visited_count < max_transitions:
+            visited_count += 1
+            node = nodes_by_id.get(current_node_id)
+            if not node:
+                RUNNER.state = 'failed'
+                RUNNER.message = f"Node {current_node_id!r} not found in graph"
+                bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
+                return
+
+            RUNNER.active_node_id = current_node_id
+            RUNNER.active_node_type = node.get('type')
+            RUNNER.context['history'].append(current_node_id)
+
+            batt = bridge.get('battery') or {}
+            RUNNER.context['system']['battery_pct'] = batt.get('percentage', 0.0)
+            RUNNER.context['system']['is_charging'] = bool(batt.get('charging'))
+
+            if RUNNER.cancel_requested:
+                RUNNER.state = 'canceled'
+                bridge.emit_event('mission.canceled', {'mission_id': mission['id'], 'node_id': current_node_id})
+                return
+
+            if RUNNER.pause_requested:
+                if RUNNER.pause_reason == 'low_battery':
+                    await _handle_low_battery_dock_and_resume(bridge, opts, mission)
+                    if RUNNER.cancel_requested:
+                        RUNNER.state = 'canceled'
+                        return
+                else:
+                    RUNNER.state = 'paused'
+                    bridge.emit_event('mission.paused', {'mission_id': mission['id'], 'node_id': current_node_id})
+                    while RUNNER.pause_requested and not RUNNER.cancel_requested:
+                        await asyncio.sleep(0.2)
+                    if RUNNER.cancel_requested:
+                        RUNNER.state = 'canceled'
+                        return
+                    RUNNER.state = 'running'
+                    bridge.emit_event('mission.resumed', {'mission_id': mission['id'], 'node_id': current_node_id})
+
+            bridge.emit_event('mission.node_started', {
+                'mission_id': mission['id'],
+                'node_id': current_node_id,
+                'node_type': node.get('type'),
+                'label': node.get('label') or node.get('title') or current_node_id,
+            })
+
+            ok, output_port, message = await _execute_graph_node(bridge, opts, node, RUNNER.context)
+
+            bridge.emit_event('mission.node_completed', {
+                'mission_id': mission['id'],
+                'node_id': current_node_id,
+                'output_port': output_port,
+                'ok': ok,
+                'message': message,
+            })
+
+            if not ok and output_port == 'abort':
+                RUNNER.state = 'failed'
+                RUNNER.message = message
+                bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': current_node_id})
+                return
+
+            matching_edges = [
+                e for e in edges
+                if e.get('from_node') == current_node_id and str(e.get('from_port', '')).lower() == str(output_port).lower()
+            ]
+            if not matching_edges:
+                matching_edges = [
+                    e for e in edges
+                    if e.get('from_node') == current_node_id and str(e.get('from_port', '')).lower() in ('next', 'out')
+                ]
+
+            if not matching_edges:
+                bridge.get_logger().info(f"Mission {mission['id']}: terminal node reached at {current_node_id} (port: {output_port})")
+                current_node_id = None
+                break
+
+            next_edge = matching_edges[0]
+            current_node_id = next_edge.get('to_node')
+
+        if visited_count >= max_transitions:
+            RUNNER.state = 'failed'
+            RUNNER.message = f"Exceeded maximum node transitions ({max_transitions})"
+            bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
+            return
+
+        RUNNER.state = 'completed'
+        bridge.emit_event('mission.completed', {'mission_id': mission['id']})
+    finally:
+        stop_battery_monitor.set()
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+
 async def _run_mission(bridge, opts, mission: dict) -> None:
     store = opts['store']
     current_map = store.current_map()
@@ -436,7 +824,11 @@ async def _run_mission(bridge, opts, mission: dict) -> None:
         })
         return
 
-    steps = mission['steps']
+    if 'nodes' in mission and mission['nodes']:
+        await _run_graph_mission(bridge, opts, mission)
+        return
+
+    steps = mission.get('steps', [])
     loop_forever = bool(mission.get('loop_forever', False))
     loop_count = max(1, int(mission.get('loop_count', 1)))
 
@@ -559,26 +951,41 @@ class MissionsHandler(BaseHandler):
     def post(self) -> None:
         """Create or replace a mission definition. Does not start it — see
         MissionControlHandler's `start` action."""
-        data = self.body(('id', 'steps'))
+        data = self.body(('id',))
         mission_id = str(data['id']).strip()
         if not mission_id:
             raise ApiError(400, 'invalid_field', 'id must not be empty')
-        steps = _validate_steps(data['steps'])
-        loop_forever, loop_count = _validate_loop(data)
+
         map_name = data.get('map')
         if map_name is not None:
             map_name = str(map_name).strip() or None
         if not map_name:
             map_name = self.opts['store'].current_map()
 
-        mission = {
+        mission: dict[str, Any] = {
             'id': mission_id,
             'name': str(data.get('name') or mission_id),
             'map': map_name,
-            'steps': steps,
-            'loop_forever': loop_forever,
-            'loop_count': loop_count,
         }
+
+        if 'nodes' in data and data['nodes']:
+            nodes, edges, entrypoint = validate_graph_mission(data)
+            mission['nodes'] = nodes
+            mission['edges'] = edges
+            mission['entrypoint'] = entrypoint
+            mission['settings'] = data.get('settings', {})
+            mission['steps'] = data.get('steps', [])
+            mission['type'] = 'graph'
+        elif 'steps' in data:
+            steps = _validate_steps(data['steps'])
+            loop_forever, loop_count = _validate_loop(data)
+            mission['steps'] = steps
+            mission['loop_forever'] = loop_forever
+            mission['loop_count'] = loop_count
+            mission['type'] = 'linear'
+        else:
+            raise ApiError(400, 'invalid_field', 'Mission must contain either "nodes" or "steps"')
+
         self.opts['store'].put_mission(mission)
         self.send({'mission': mission}, status=201)
 
@@ -642,3 +1049,35 @@ class MissionControlHandler(BaseHandler):
         else:
             raise ApiError(404, 'not_found', f'Unknown mission action {action!r}')
         self.send(RUNNER.snapshot())
+
+
+class ActiveUiInteractionHandler(BaseHandler):
+    """GET /api/v1/missions/active_ui_interaction"""
+
+    def get(self) -> None:
+        self.send({'active_interaction': RUNNER.active_interaction})
+
+
+class UiResponseHandler(BaseHandler):
+    """POST /api/v1/missions/ui_response"""
+
+    def post(self) -> None:
+        data = self.body(('interaction_id',))
+        interaction_id = str(data.get('interaction_id', '')).strip()
+        if not RUNNER.active_interaction or RUNNER.active_interaction.get('interaction_id') != interaction_id:
+            raise ApiError(404, 'no_matching_interaction',
+                           f'No active interaction matching id {interaction_id!r}')
+
+        if RUNNER.interaction_future and not RUNNER.interaction_future.done():
+            RUNNER.interaction_future.set_result(data)
+            self.send({'accepted': True, 'interaction_id': interaction_id})
+        else:
+            raise ApiError(409, 'interaction_closed', 'Interaction has already completed or timed out')
+
+
+class NodeTypesHandler(BaseHandler):
+    """GET /api/v1/missions/node_types"""
+
+    def get(self) -> None:
+        self.send({'node_types': NODE_CATALOG})
+

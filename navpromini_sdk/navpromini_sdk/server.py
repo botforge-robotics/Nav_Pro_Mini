@@ -125,6 +125,9 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         # missions
         (rf'{API}/missions', missions.MissionsHandler, opts),
         (rf'{API}/missions/status', missions.MissionStatusHandler, opts),
+        (rf'{API}/missions/active_ui_interaction', missions.ActiveUiInteractionHandler, opts),
+        (rf'{API}/missions/ui_response', missions.UiResponseHandler, opts),
+        (rf'{API}/missions/node_types', missions.NodeTypesHandler, opts),
         (rf'{API}/missions/([^/]+)/(start|pause|resume|cancel)',
          missions.MissionControlHandler, opts),
         (rf'{API}/missions/([^/]+)', missions.MissionHandler, opts),
