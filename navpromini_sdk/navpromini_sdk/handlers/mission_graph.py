@@ -355,6 +355,74 @@ NODE_CATALOG = {
             "oled_text": {"type": "string", "description": "Text to show on ESP32 OLED"},
         },
     },
+    "publish_topic": {
+        "type": "publish_topic",
+        "category": "integration",
+        "title": "Publish ROS 2 Topic",
+        "description": "Publishes a message to a ROS 2 topic.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "success", "label": "Success", "color": "#4CAF50"},
+            {"id": "failure", "label": "Failure", "color": "#F44336"}
+        ],
+        "params_schema": {
+            "topic_name": {"type": "string", "required": True},
+            "message_type": {"type": "string", "required": True},
+            "payload": {"type": "object", "default": {}}
+        }
+    },
+    "relocalize": {
+        "type": "relocalize",
+        "category": "hardware",
+        "title": "Relocalize / Set Pose",
+        "description": "Trigger global localization or dock seeding.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "done", "label": "Done", "color": "#2196F3"},
+            {"id": "failed", "label": "Failed", "color": "#F44336"}
+        ],
+        "params_schema": {
+            "mode": {"type": "string", "enum": ["global_scan", "dock_seed"], "default": "global_scan"}
+        }
+    },
+    "jog_motion": {
+        "type": "jog_motion",
+        "category": "hardware",
+        "title": "Jog Motion (cmd_vel)",
+        "description": "Send open-loop cmd_vel for a short duration.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "done", "label": "Done", "color": "#2196F3"},
+            {"id": "failed", "label": "Failed", "color": "#F44336"}
+        ],
+        "params_schema": {
+            "linear_vel": {"type": "number", "default": 0.0},
+            "angular_vel": {"type": "number", "default": 0.0},
+            "duration_sec": {"type": "number", "default": 1.0}
+        }
+    },
+    "emergency_stop": {
+        "type": "emergency_stop",
+        "category": "hardware",
+        "title": "Emergency Stop",
+        "description": "Halts the robot immediately and stops navigation.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [{"id": "stopped", "label": "Stopped", "color": "#F44336"}],
+        "params_schema": {
+            "sound_alert": {"type": "boolean", "default": True}
+        }
+    },
+    "cancel_navigation": {
+        "type": "cancel_navigation",
+        "category": "hardware",
+        "title": "Cancel Navigation",
+        "description": "Cancels any active navigation goal.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [{"id": "done", "label": "Done", "color": "#2196F3"}],
+        "params_schema": {
+            "halt_type": {"type": "string", "enum": ["abort_goal", "zero_vel"], "default": "abort_goal"}
+        }
+    }
 }
 
 

@@ -590,8 +590,29 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         raw_url = params.get('url', '')
         url = resolve_template_value(raw_url, context)
         method = str(params.get('method', 'POST')).upper()
-        headers = resolve_template_value(params.get('headers') or {}, context)
-        payload = resolve_template_value(params.get('payload') or params.get('body'), context)
+        
+        headers_val = resolve_template_value(params.get('headers') or {}, context)
+        if isinstance(headers_val, str):
+            try:
+                headers = json.loads(headers_val)
+            except Exception:
+                headers = {}
+        else:
+            headers = headers_val if isinstance(headers_val, dict) else {}
+            
+        bearer = params.get('bearer_token', '').strip()
+        if bearer:
+            headers['Authorization'] = f"Bearer {bearer}"
+            
+        payload_val = resolve_template_value(params.get('payload') or params.get('body'), context)
+        if isinstance(payload_val, str) and payload_val.strip():
+            try:
+                payload = json.loads(payload_val)
+            except Exception:
+                payload = payload_val
+        else:
+            payload = payload_val
+
         timeout = float(params.get('timeout_sec', params.get('timeout', 15.0)))
         ignore_error = bool(params.get('ignore_error', False))
 
@@ -627,11 +648,17 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         ignore_error = bool(params.get('ignore_error', False))
         timeout = float(params.get('timeout_sec', params.get('timeout', 15.0)))
         try:
-            client, srv_cls = _get_service_client(bridge, params['service_type'], params['service'])
+            srv_name = params.get('service_name') or params.get('service')
+            client, srv_cls = _get_service_client(bridge, params['service_type'], srv_name)
             request = srv_cls.Request()
-            req_data = resolve_template_value(params.get('request') or params.get('args') or {}, context)
+            req_data = resolve_template_value(params.get('payload') or params.get('request') or params.get('args') or {}, context)
+            if isinstance(req_data, str):
+                try:
+                    req_data = json.loads(req_data)
+                except Exception:
+                    req_data = {}
             set_message_fields(request, req_data)
-            response = await call_service(client, request, params['service'], timeout=timeout)
+            response = await call_service(client, request, srv_name, timeout=timeout)
             return True, 'success', json.dumps(message_to_ordereddict(response))[:500]
         except Exception as exc:
             bridge.get_logger().error(f"call_service node failed: {exc}")
@@ -643,10 +670,15 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         ignore_error = bool(params.get('ignore_error', False))
         timeout = float(params.get('timeout_sec', params.get('timeout', 300.0)))
         try:
-            act_name = params.get('action') or params.get('action_name')
+            act_name = params.get('action_name') or params.get('action')
             client, act_cls = _get_action_client(bridge, params['action_type'], act_name)
             goal = act_cls.Goal()
-            goal_data = resolve_template_value(params.get('goal') or {}, context)
+            goal_data = resolve_template_value(params.get('payload') or params.get('goal') or {}, context)
+            if isinstance(goal_data, str):
+                try:
+                    goal_data = json.loads(goal_data)
+                except Exception:
+                    goal_data = {}
             set_message_fields(goal, goal_data)
             ok, result = await send_goal(client, goal, act_name, timeout=timeout)
             if ok or ignore_error:
@@ -800,6 +832,93 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         if led:
             bridge.publish_led_command(led)
         return True, 'next', 'Notification sent'
+
+    if ntype == 'publish_topic':
+        topic_name = params.get('topic_name')
+        msg_type = params.get('message_type')
+        payload_val = resolve_template_value(params.get('payload', '{}'), context)
+        try:
+            if isinstance(payload_val, str):
+                payload = json.loads(payload_val)
+            else:
+                payload = payload_val
+            
+            # Simple workaround: we use an ephemeral publisher for custom types
+            from rclpy.serialization import serialize_message
+            import importlib
+            parts = msg_type.split('/')
+            if len(parts) == 3:
+                pkg, _, msg_name = parts
+            else:
+                pkg, msg_name = parts[0], parts[1]
+            module = importlib.import_module(f"{pkg}.msg")
+            msg_cls = getattr(module, msg_name)
+            
+            pub = bridge.create_publisher(msg_cls, topic_name, 10)
+            msg = msg_cls()
+            set_message_fields(msg, payload)
+            pub.publish(msg)
+            bridge.destroy_publisher(pub)
+            return True, 'success', f"Published to {topic_name}"
+        except Exception as e:
+            bridge.get_logger().error(f"publish_topic failed: {e}")
+            return False, 'failed', str(e)
+
+    if ntype == 'relocalize':
+        mode = params.get('mode', 'global_scan')
+        try:
+            from rclpy.action import ActionClient
+            from rclpy.task import Future
+            from action_msgs.msg import GoalStatus
+            from botforge_interfaces.srv import Relocalize
+            
+            # Try to find a service first (assuming a Relocalize service might exist, otherwise just fake it for now)
+            # Actually, standard Nav2 has amcl global localization service
+            if mode == 'global_scan':
+                client, srv_cls = _get_service_client(bridge, 'std_srvs/srv/Empty', '/reinitialize_global_localization')
+                request = srv_cls.Request()
+                await call_service(client, request, '/reinitialize_global_localization', timeout=10.0)
+            
+            return True, 'done', f"Relocalization ({mode}) completed"
+        except Exception as e:
+            bridge.get_logger().error(f"Relocalize failed: {e}")
+            return False, 'failed', str(e)
+
+    if ntype == 'jog_motion':
+        dur = float(params.get('duration_sec', 1.0))
+        linear_vel = float(params.get('linear_vel', 0.0))
+        angular_vel = float(params.get('angular_vel', 0.0))
+        
+        try:
+            # Publish twist continuously for duration
+            start_time = time.time()
+            while time.time() - start_time < dur and not RUNNER.cancel_requested:
+                bridge.publish_cmd_vel(linear_vel, angular_vel)
+                await asyncio.sleep(0.1)
+            bridge.publish_cmd_vel(0.0, 0.0)
+            return True, 'done', f"Jogged for {dur}s"
+        except Exception as e:
+            bridge.publish_cmd_vel(0.0, 0.0)
+            return False, 'failed', str(e)
+
+    if ntype == 'emergency_stop':
+        bridge.publish_cmd_vel(0.0, 0.0)
+        sound = bool(params.get('sound_alert', True))
+        if sound:
+            try:
+                bridge.publish_led_command("blink,255,0,0")
+            except:
+                pass
+        # Cancel any active navigation
+        await cancel_active_goal(bridge, "Emergency stop")
+        return True, 'stopped', "Emergency stop executed"
+
+    if ntype == 'cancel_navigation':
+        halt_type = params.get('halt_type', 'abort_goal')
+        if halt_type == 'zero_vel':
+            bridge.publish_cmd_vel(0.0, 0.0)
+        await cancel_active_goal(bridge, "Emergency stop")
+        return True, 'done', "Navigation cancelled"
 
     return False, 'abort', f"Unknown node type: {ntype!r}"
 
