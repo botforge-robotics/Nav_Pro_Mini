@@ -31,7 +31,28 @@ apt-get update -y
 apt-get install -y network-manager python3-yaml python3-pip python3-venv python3-tornado git curl || true
 
 # --- UART for ESP32 micro-ROS ---
-systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
+# Disable, stop, and permanently MASK serial gettys on ttyAMA0 and serial0
+# Masking is essential to prevent systemd-getty-generator from auto-spawning agetty on the serial port
+systemctl stop serial-getty@ttyAMA0.service serial-getty@serial0.service 2>/dev/null || true
+systemctl disable serial-getty@ttyAMA0.service serial-getty@serial0.service 2>/dev/null || true
+systemctl mask serial-getty@ttyAMA0.service serial-getty@serial0.service 2>/dev/null || true
+pkill -9 -f "agetty.*ttyAMA0" 2>/dev/null || true
+pkill -9 -f "agetty.*serial0" 2>/dev/null || true
+
+# Remove serial console from kernel command line so Linux kernel and agetty don't touch ttyAMA0
+for cmdline_file in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+  if [[ -f "${cmdline_file}" ]]; then
+    sed -i -E 's/\bconsole=(serial0|ttyAMA0|ttyS0)(,[0-9]+[npeo]?[0-9]*)?//g' "${cmdline_file}"
+    sed -i -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//' "${cmdline_file}"
+  fi
+done
+
+# Raspberry Pi raspi-config non-interactive serial console disable (if available)
+if command -v raspi-config >/dev/null 2>&1; then
+  raspi-config nonint do_serial_cons 1 2>/dev/null || true
+  raspi-config nonint do_serial_hw 0 2>/dev/null || true
+fi
+
 if [[ -f /boot/firmware/config.txt ]]; then
   CFG=/boot/firmware/config.txt
 elif [[ -f /boot/config.txt ]]; then
@@ -44,6 +65,12 @@ if [[ -n "${CFG}" ]]; then
   grep -q 'dtparam=uart0' "${CFG}" || echo 'dtparam=uart0=on' >> "${CFG}" || true
 fi
 usermod -aG dialout "${USER_NAME}" || true
+
+# Ensure user has passwordless sudo for service automation
+if [[ ! -f "/etc/sudoers.d/010_${USER_NAME}-nopasswd" ]]; then
+  echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/010_${USER_NAME}-nopasswd"
+  chmod 0440 "/etc/sudoers.d/010_${USER_NAME}-nopasswd"
+fi
 
 # --- dirs ---
 install -d -m 0755 /opt/navpro/scripts /etc/navpro /etc/ros /var/lib/navpro/maps /var/log/navpro
@@ -173,4 +200,3 @@ echo "      Open  http://10.42.0.1/  → set Wi‑Fi + robot name"
 echo ""
 echo "    Check:  systemctl status navpro-display navpro-robot navpro-provision navpro-mission-planner navpro-sdk navpro-mcp"
 echo "    Reboot recommended once after first install."
-echo "    Web UI (PC): docker compose up in nav2_mission_planner react-web → http://localhost:8080"
