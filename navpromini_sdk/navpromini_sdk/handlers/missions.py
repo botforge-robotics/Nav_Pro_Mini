@@ -690,26 +690,35 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 return True, 'succeeded', str(exc)
             return False, 'failed', str(exc)
 
-    if ntype == 'ui_interaction':
+    if ntype in ('ui_interaction', 'ui_choice'):
         interaction_id = f"ui_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
         timeout_sec = float(params.get('timeout_sec', 60.0))
         default_option = str(params.get('default_option', 'timeout')).lower()
-        subtype = params.get('subtype', 'dynamic_form')
+        subtype = 'choice' if ntype == 'ui_choice' else str(params.get('subtype', 'dynamic_form')).lower()
         target = str(params.get('target', 'robot_screen')).lower()
         if target not in ('robot_screen', 'operator_app', 'both'):
             target = 'robot_screen'
+
+        opts_list = params.get('options') or params.get('choices') or ['Yes', 'No']
+        raw_media = params.get('media_url') or params.get('image_url')
+        media_url = resolve_template_value(raw_media, context) if raw_media else None
 
         interaction_data = {
             'interaction_id': interaction_id,
             'mission_id': RUNNER.mission_id,
             'node_id': node['id'],
             'subtype': subtype,
+            'interaction_type': subtype,
+            'type': subtype,
             'target': target,
             'title': resolve_template_value(params.get('title', 'Operator Input'), context),
             'message': resolve_template_value(params.get('message', ''), context),
             'fields': resolve_template_value(params.get('fields', []), context),
-            'options': params.get('options', ['Yes', 'No']),
-            'media_url': resolve_template_value(params.get('media_url'), context),
+            'options': opts_list,
+            'choices': opts_list,
+            'buttons': opts_list,
+            'media_url': media_url,
+            'image_url': media_url,
             'speech_text': resolve_template_value(params.get('speech_text'), context),
             'timeout_sec': timeout_sec,
             'default_option': default_option,
@@ -726,20 +735,21 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
         try:
             resp_data = await asyncio.wait_for(future, timeout=timeout_sec)
-            action = resp_data.get('action', 'submit')
-            selected = str(resp_data.get('selected', '')).strip().lower()
+            action = str(resp_data.get('action', 'submit')).strip()
+            selected = str(resp_data.get('selected', '')).strip()
             form_data = resp_data.get('form_data') or resp_data.get('data') or {}
 
             context['forms'][node['id']] = form_data
             context['form'] = form_data
             context['form_data'].update(form_data)
 
-            if subtype == 'choice' and selected:
-                output_port = selected
-            elif action == 'cancel':
+            if subtype in ('choice', 'choices') or ntype == 'ui_choice':
+                chosen = selected if (selected and selected.lower() != 'selected') else action
+                output_port = str(chosen).strip().lower()
+            elif action.lower() in ('cancel', 'skip'):
                 output_port = 'cancelled'
-            elif subtype == 'kiosk':
-                chosen_dest = resp_data.get('destination') or form_data.get('destination')
+            elif subtype in ('kiosk', 'destination_picker'):
+                chosen_dest = resp_data.get('destination') or form_data.get('destination') or selected
                 if chosen_dest:
                     context['variables']['selected_destination'] = chosen_dest
                 output_port = 'selected'
@@ -1384,7 +1394,12 @@ class ActiveUiInteractionHandler(BaseHandler):
     """GET /api/v1/missions/active_ui_interaction"""
 
     def get(self) -> None:
-        self.send({'active_interaction': RUNNER.active_interaction})
+        inter = RUNNER.active_interaction
+        self.send({
+            'active': inter is not None,
+            'active_interaction': inter,
+            'interaction': inter,
+        })
 
 
 class UiResponseHandler(BaseHandler):
