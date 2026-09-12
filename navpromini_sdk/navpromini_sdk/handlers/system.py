@@ -60,6 +60,7 @@ _lifecycle_cache = {'lifecycle': 'HARDWARE_STARTING', 'since_sec': 0.0, 'detail'
 _failing_sources_last: frozenset = frozenset()
 
 _SETUP_AP_CONN = 'navpro-setup-ap'
+_SETUP_AP_PREFIX = 'NavPro-Setup'
 
 
 def _setup_ap_active() -> bool:
@@ -566,15 +567,31 @@ class WifiStatusHandler(BaseHandler):
         ip = ""
         interface = "wlan0"
         try:
-            r = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
-                               capture_output=True, text=True, timeout=5)
-            for line in (r.stdout or '').splitlines():
-                parts = line.split(':')
-                if len(parts) >= 4 and parts[1] == 'wifi':
-                    interface = parts[0]
-                    if parts[2] == 'connected' and parts[3] != _SETUP_AP_CONN:
-                        ssid = parts[3]
-                        break
+            # 1. Try active dev wifi first to get broadcast SSID
+            r_act = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'],
+                                   capture_output=True, text=True, timeout=5)
+            for line in (r_act.stdout or '').splitlines():
+                if line.startswith('yes:'):
+                    ssid = line[4:].strip()
+                    break
+
+            # 2. Fallback to device status connection
+            if not ssid:
+                r = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
+                                   capture_output=True, text=True, timeout=5)
+                for line in (r.stdout or '').splitlines():
+                    parts = line.split(':')
+                    if len(parts) >= 4 and parts[1] == 'wifi':
+                        interface = parts[0]
+                        if parts[2] == 'connected' and parts[3] != _SETUP_AP_CONN:
+                            ssid = parts[3].strip()
+                            break
+
+            # Strip any internal netplan prefix if present (e.g. netplan-wlan0-MySSID -> MySSID)
+            if ssid.startswith('netplan-'):
+                sub_parts = ssid.split('-', 2)
+                ssid = sub_parts[-1] if len(sub_parts) > 2 else ssid
+
             ip_cmd = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
             if ip_cmd.returncode == 0:
                 ip = (ip_cmd.stdout or '').strip().split(' ')[0]
@@ -596,22 +613,36 @@ class WifiScanHandler(BaseHandler):
         networks = []
         seen = set()
         try:
-            r = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
-                               capture_output=True, text=True, timeout=8)
+            # Try with --rescan yes first, fallback to cached scan
+            r = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list', '--rescan', 'yes'],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                r = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
+                                   capture_output=True, text=True, timeout=6)
             for line in (r.stdout or '').splitlines():
                 parts = line.split(':')
                 if len(parts) >= 2:
-                    ssid = parts[0].strip()
-                    if not ssid or ssid.startswith(_SETUP_AP_PREFIX) or ssid in seen:
+                    raw_ssid = parts[0].strip()
+                    if not raw_ssid or raw_ssid.startswith(_SETUP_AP_PREFIX):
                         continue
-                    seen.add(ssid)
+                    # Clean netplan prefix if present
+                    display_ssid = raw_ssid
+                    if display_ssid.startswith('netplan-'):
+                        sub_parts = display_ssid.split('-', 2)
+                        display_ssid = sub_parts[-1] if len(sub_parts) > 2 else display_ssid
+
+                    if display_ssid in seen:
+                        continue
+                    seen.add(display_ssid)
+
                     try:
                         signal = int(parts[1])
                     except (ValueError, IndexError):
                         signal = 50
                     sec = parts[2] if len(parts) > 2 else ""
                     networks.append({
-                        'ssid': ssid,
+                        'ssid': display_ssid,
+                        'raw_ssid': raw_ssid,
                         'signal': signal,
                         'security': sec,
                         'protected': bool(sec and sec != '--')
