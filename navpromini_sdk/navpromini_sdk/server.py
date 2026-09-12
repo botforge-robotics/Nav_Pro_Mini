@@ -148,16 +148,27 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/routes.*', NotImplementedHandler, opts),
     ]
 
-    ui_dir = os.environ.get('NAVPRO_ROBOT_UI_DIR', '/home/chaitu/Projects/navpromini_robot_ui')
-    flutter_dir = os.path.join(ui_dir, 'build', 'web')
+    ui_dir = os.environ.get('NAVPRO_ROBOT_UI_DIR')
+    if not ui_dir or not os.path.isdir(ui_dir):
+        for candidate in [
+            '/home/navpromini/navpromini_robot_ui',
+            '/opt/navpro/ui',
+            '/home/chaitu/Projects/navpromini_robot_ui',
+            os.path.expanduser('~/navpromini_robot_ui'),
+        ]:
+            if os.path.isdir(candidate):
+                ui_dir = candidate
+                break
 
-    if os.path.isdir(flutter_dir):
+    flutter_dir = os.path.join(ui_dir, 'build', 'web') if ui_dir else None
+
+    if flutter_dir and os.path.isdir(flutter_dir):
         routes.extend([
             (r'/flutter/?', tornado.web.RedirectHandler, {'url': '/flutter/index.html'}),
             (r'/flutter/(.*)', tornado.web.StaticFileHandler, {'path': flutter_dir, 'default_filename': 'index.html'}),
         ])
 
-    if os.path.isdir(ui_dir):
+    if ui_dir and os.path.isdir(ui_dir):
         routes.extend([
             (r'/', tornado.web.RedirectHandler, {'url': '/ui/'}),
             (r'/ui/?', tornado.web.RedirectHandler, {'url': '/ui/index.html'}),
