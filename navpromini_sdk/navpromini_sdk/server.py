@@ -84,6 +84,7 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/system/updates/check', system.UpdateCheckHandler, opts),
         (rf'{API}/system/updates/apply', system.UpdateApplyHandler, opts),
         (rf'{API}/system/updates/status', system.UpdateStatusHandler, opts),
+        (rf'{API}/system/keyboard/toggle', system.ToggleKeyboardHandler, opts),
         # state
         (rf'{API}/state', state.RobotStateHandler, opts),
         (rf'{API}/state/pose', state.PoseHandler, opts),

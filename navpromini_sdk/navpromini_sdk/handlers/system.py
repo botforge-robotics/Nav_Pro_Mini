@@ -519,3 +519,42 @@ class UpdateStatusHandler(BaseHandler):
             'log_tail': log_tail,
         })
 
+
+class ToggleKeyboardHandler(BaseHandler):
+    """Toggle onboard virtual keyboard on the robot's local screen (:0)."""
+    def post(self) -> None:
+        try:
+            env = os.environ.copy()
+            env['DISPLAY'] = env.get('DISPLAY', ':0')
+            env['XAUTHORITY'] = env.get('XAUTHORITY', '/home/navpromini/.Xauthority')
+            if 'DBUS_SESSION_BUS_ADDRESS' not in env:
+                # Default systemd user bus path for uid 1000
+                uid = os.getuid() if os.getuid() != 0 else 1000
+                bus = f'/run/user/{uid}/bus'
+                if os.path.exists(bus):
+                    env['DBUS_SESSION_BUS_ADDRESS'] = f'unix:path={bus}'
+
+            # Try DBus method call first
+            res = subprocess.run([
+                'dbus-send', '--type=method_call',
+                '--dest=org.onboard.Onboard',
+                '/org/onboard/Onboard/Keyboard',
+                'org.onboard.Onboard.Keyboard.ToggleVisible'
+            ], env=env, capture_output=True, timeout=2)
+
+            if res.returncode == 0:
+                self.send({'status': 'ok', 'action': 'toggled_dbus'})
+                return
+
+            # Fallback: check if running and send USR1 or launch
+            p = subprocess.run(['pgrep', '-f', 'onboard'], env=env, capture_output=True, text=True)
+            if p.returncode == 0:
+                subprocess.run(['pkill', '-USR1', '-f', 'onboard'], env=env, timeout=2)
+                self.send({'status': 'ok', 'action': 'toggled_signal'})
+            else:
+                subprocess.Popen(['/usr/bin/onboard'], env=env, start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.send({'status': 'ok', 'action': 'launched'})
+        except Exception as exc:
+            raise ApiError(500, 'keyboard_toggle_failed', str(exc))
+
