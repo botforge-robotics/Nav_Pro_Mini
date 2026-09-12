@@ -463,11 +463,13 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
 
     if ntype == 'navigate_coordinates':
-        target_dict = {
-            'x': float(params.get('x', 0.0)),
-            'y': float(params.get('y', 0.0)),
-            'theta': float(params.get('theta', 0.0)),
-        }
+        try:
+            x_val = float(resolve_template_value(params.get('x', 0.0), context))
+            y_val = float(resolve_template_value(params.get('y', 0.0), context))
+            th_val = float(resolve_template_value(params.get('theta', 0.0), context))
+        except (ValueError, TypeError) as conv_err:
+            return False, 'failed', f"Invalid coordinate value: {conv_err}"
+        target_dict = {'x': x_val, 'y': y_val, 'theta': th_val}
         res = await navigate_to(bridge, target_dict)
         return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
 
@@ -579,16 +581,17 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             return False, 'false', str(e)
 
     if ntype == 'set_variable':
-        key = params.get('key')
+        raw_key = params.get('key') or params.get('name') or params.get('variable')
         val = params.get('value')
-        if key:
+        if raw_key:
+            key = str(resolve_template_value(raw_key, context)).strip()
             val = resolve_template_value(val, context)
             context['variables'][key] = val
-        return True, 'next', f"Set {key}"
+        return True, 'next', f"Set {raw_key}"
 
     if ntype == 'call_api':
         raw_url = params.get('url', '')
-        url = resolve_template_value(raw_url, context)
+        url = str(resolve_template_value(raw_url, context)).strip()
         method = str(params.get('method', 'POST')).upper()
         
         headers_val = resolve_template_value(params.get('headers') or {}, context)
@@ -600,7 +603,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         else:
             headers = headers_val if isinstance(headers_val, dict) else {}
             
-        bearer = params.get('bearer_token', '').strip()
+        bearer = str(resolve_template_value(params.get('bearer_token', ''), context)).strip()
         if bearer:
             headers['Authorization'] = f"Bearer {bearer}"
             
@@ -629,11 +632,17 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         try:
             status_code, resp_text = await asyncio.to_thread(_do_request)
             ok = (200 <= status_code < 300)
+            parsed_json = None
             try:
                 parsed_json = json.loads(resp_text)
                 context['api_responses'][node['id']] = parsed_json
             except Exception:
                 context['api_responses'][node['id']] = {'raw': resp_text, 'status_code': status_code}
+
+            out_var = params.get('output_variable') or params.get('variable_name') or params.get('store_to')
+            if out_var:
+                out_val = parsed_json if parsed_json is not None else {'raw': resp_text, 'status_code': status_code}
+                context['variables'][str(out_var).strip()] = out_val
 
             if ok or ignore_error:
                 return True, 'success', f"HTTP {status_code}"
@@ -648,7 +657,8 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         ignore_error = bool(params.get('ignore_error', False))
         timeout = float(params.get('timeout_sec', params.get('timeout', 15.0)))
         try:
-            srv_name = params.get('service_name') or params.get('service')
+            raw_srv = params.get('service_name') or params.get('service')
+            srv_name = str(resolve_template_value(raw_srv, context)).strip()
             client, srv_cls = _get_service_client(bridge, params['service_type'], srv_name)
             request = srv_cls.Request()
             req_data = resolve_template_value(params.get('payload') or params.get('request') or params.get('args') or {}, context)
@@ -659,7 +669,11 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                     req_data = {}
             set_message_fields(request, req_data)
             response = await call_service(client, request, srv_name, timeout=timeout)
-            return True, 'success', json.dumps(message_to_ordereddict(response))[:500]
+            resp_dict = message_to_ordereddict(response)
+            out_var = params.get('output_variable') or params.get('variable_name') or params.get('store_to')
+            if out_var:
+                context['variables'][str(out_var).strip()] = resp_dict
+            return True, 'success', json.dumps(resp_dict)[:500]
         except Exception as exc:
             bridge.get_logger().error(f"call_service node failed: {exc}")
             if ignore_error:
@@ -670,7 +684,8 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         ignore_error = bool(params.get('ignore_error', False))
         timeout = float(params.get('timeout_sec', params.get('timeout', 300.0)))
         try:
-            act_name = params.get('action_name') or params.get('action')
+            raw_act = params.get('action_name') or params.get('action')
+            act_name = str(resolve_template_value(raw_act, context)).strip()
             client, act_cls = _get_action_client(bridge, params['action_type'], act_name)
             goal = act_cls.Goal()
             goal_data = resolve_template_value(params.get('payload') or params.get('goal') or {}, context)
@@ -681,8 +696,12 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                     goal_data = {}
             set_message_fields(goal, goal_data)
             ok, result = await send_goal(client, goal, act_name, timeout=timeout)
+            res_dict = message_to_ordereddict(result)
+            out_var = params.get('output_variable') or params.get('variable_name') or params.get('store_to')
+            if out_var:
+                context['variables'][str(out_var).strip()] = res_dict
             if ok or ignore_error:
-                return True, 'succeeded', json.dumps(message_to_ordereddict(result))[:500]
+                return True, 'succeeded', json.dumps(res_dict)[:500]
             return False, 'failed', str(result)
         except Exception as exc:
             bridge.get_logger().error(f"call_action node failed: {exc}")
@@ -699,7 +718,8 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         if target not in ('robot_screen', 'operator_app', 'both'):
             target = 'robot_screen'
 
-        opts_list = params.get('options') or params.get('choices') or ['Yes', 'No']
+        raw_opts = params.get('options') or params.get('choices') or params.get('buttons') or (['Yes', 'No'] if (ntype == 'ui_choice' or subtype in ('choice', 'choices')) else [])
+        opts_list = resolve_template_value(raw_opts, context)
         raw_media = params.get('media_url') or params.get('image_url')
         media_url = resolve_template_value(raw_media, context) if raw_media else None
 
@@ -742,30 +762,66 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             context['forms'][node['id']] = form_data
             context['form'] = form_data
             context['form_data'].update(form_data)
+            if isinstance(form_data, dict):
+                context['variables'].update(form_data)
+                context['variables']['last_form'] = form_data
+                context['variables']['last_form_data'] = form_data
+                context['variables'][f"{node['id']}_form"] = form_data
 
+            chosen_val = None
             if subtype in ('choice', 'choices') or ntype == 'ui_choice':
                 chosen = selected if (selected and selected.lower() != 'selected') else action
+                chosen_val = chosen
                 output_port = str(chosen).strip().lower()
+                context['variables']['selected_choice'] = chosen
+                context['variables']['last_choice'] = chosen
+                context['variables']['choice'] = chosen
+                context['variables'][f"{node['id']}_choice"] = chosen
             elif action.lower() in ('cancel', 'skip'):
                 output_port = 'cancelled'
             elif subtype in ('kiosk', 'destination_picker'):
                 chosen_dest = resp_data.get('destination') or form_data.get('destination') or selected
+                chosen_val = chosen_dest
                 if chosen_dest:
                     context['variables']['selected_destination'] = chosen_dest
+                    context['variables']['destination'] = chosen_dest
+                    context['variables']['target'] = chosen_dest
+                    context['variables']['waypoint'] = chosen_dest
                 output_port = 'selected'
             else:
                 output_port = 'submitted'
 
+            out_var = params.get('output_variable') or params.get('variable_name') or params.get('store_to')
+            if out_var:
+                out_var_key = str(out_var).strip()
+                if chosen_val is not None:
+                    context['variables'][out_var_key] = chosen_val
+                else:
+                    context['variables'][out_var_key] = form_data
+
+            context['variables'][f"{node['id']}_response"] = resp_data
+            bridge.emit_event('mission.ui_interaction_dismissed', {
+                'interaction_id': interaction_id,
+                'node_id': node['id'],
+                'action': action,
+                'output_port': output_port
+            })
             return True, output_port, f"User response: {output_port}"
         except asyncio.TimeoutError:
             bridge.get_logger().info(f"UI interaction {interaction_id} timed out after {timeout_sec}s.")
+            bridge.emit_event('mission.ui_interaction_dismissed', {
+                'interaction_id': interaction_id,
+                'node_id': node['id'],
+                'action': 'timeout',
+                'output_port': default_option
+            })
             return True, default_option, "Timed out waiting for operator"
         finally:
             RUNNER.active_interaction = None
             RUNNER.interaction_future = None
             if RUNNER.state == 'waiting_for_user':
                 RUNNER.state = 'running'
-            bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
+            bridge.emit_event('mission.ui_interaction_dismissed', {'interaction_id': interaction_id})
 
     if ntype == 'ui_media':
         url = resolve_template_value(params.get('url', ''), context)
@@ -844,8 +900,10 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         return True, 'next', 'Notification sent'
 
     if ntype == 'publish_topic':
-        topic_name = params.get('topic_name')
-        msg_type = params.get('message_type')
+        raw_topic = params.get('topic_name') or params.get('topic')
+        topic_name = str(resolve_template_value(raw_topic, context)).strip()
+        raw_type = params.get('message_type') or params.get('type')
+        msg_type = str(resolve_template_value(raw_type, context)).strip()
         payload_val = resolve_template_value(params.get('payload', '{}'), context)
         try:
             if isinstance(payload_val, str):

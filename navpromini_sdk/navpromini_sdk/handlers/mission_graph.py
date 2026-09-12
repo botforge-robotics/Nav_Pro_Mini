@@ -638,25 +638,90 @@ def evaluate_condition_safely(expression: str, context: dict) -> bool:
     return _SafeConditionVisitor(context).eval(expr)
 
 
-_TEMPLATE_PATTERN = re.compile(r"\{\{\s*([\w\.\_]+)\s*\}\}")
+_TEMPLATE_PATTERN = re.compile(r"\{\{\s*([\w\.\_]+)\s*\}\}|\{\s*([\w\.\_]+)\s*\}")
+
+def _lookup_context_path(path: list[str], context: dict) -> tuple[bool, Any]:
+    if not path:
+        return False, None
+    first = path[0]
+    rest = path[1:]
+
+    root_obj = None
+    found = False
+
+    if first == 'context':
+        root_obj = context
+        found = True
+    elif isinstance(context.get('variables'), dict) and first in context['variables']:
+        root_obj = context['variables'][first]
+        found = True
+    elif isinstance(context.get('form_data'), dict) and first in context['form_data']:
+        root_obj = context['form_data'][first]
+        found = True
+    elif isinstance(context.get('form'), dict) and first in context['form']:
+        root_obj = context['form'][first]
+        found = True
+    elif isinstance(context.get('forms'), dict) and first in context['forms']:
+        root_obj = context['forms'][first]
+        found = True
+    elif isinstance(context.get('api_responses'), dict) and first in context['api_responses']:
+        root_obj = context['api_responses'][first]
+        found = True
+    elif isinstance(context.get('system'), dict) and first in context['system']:
+        root_obj = context['system'][first]
+        found = True
+    elif first in context:
+        root_obj = context[first]
+        found = True
+
+    if not found:
+        return False, None
+
+    curr = root_obj
+    for p in rest:
+        if isinstance(curr, dict) and p in curr:
+            curr = curr[p]
+        elif isinstance(curr, (list, tuple)) and p.isdigit():
+            idx = int(p)
+            if 0 <= idx < len(curr):
+                curr = curr[idx]
+            else:
+                return False, None
+        elif hasattr(curr, p):
+            curr = getattr(curr, p)
+        else:
+            return False, None
+    return True, curr
+
 
 def resolve_template_value(template: Any, context: dict) -> Any:
-    """Recursively replaces {{context.key}} tags with values from context."""
+    """Recursively replaces {var} and {{var}} tags with values from context.
+
+    Supports lookup in variables, form_data, forms, api_responses, and system.
+    If the template is exactly a single tag (e.g. '{count}'), preserves the native
+    Python type (int, float, dict, list, bool).
+    """
     if isinstance(template, str):
+        cleaned = template.strip()
+        single_match = _TEMPLATE_PATTERN.fullmatch(cleaned)
+        if single_match:
+            var_name = single_match.group(1) or single_match.group(2)
+            found, val = _lookup_context_path(var_name.split('.'), context)
+            if found:
+                return val
+            return ''
+
         def _repl(match):
-            path = match.group(1).split(".")
-            curr: Any = context
-            for p in path:
-                if isinstance(curr, dict) and p in curr:
-                    curr = curr[p]
-                elif p == "context":
-                    continue
-                else:
-                    return ""
-            return str(curr) if curr is not None else ""
+            var_name = match.group(1) or match.group(2)
+            found, val = _lookup_context_path(var_name.split('.'), context)
+            if found:
+                return str(val) if val is not None else ''
+            return match.group(0)
+
         return _TEMPLATE_PATTERN.sub(_repl, template)
     elif isinstance(template, dict):
         return {k: resolve_template_value(v, context) for k, v in template.items()}
     elif isinstance(template, list):
         return [resolve_template_value(item, context) for item in template]
     return template
+
