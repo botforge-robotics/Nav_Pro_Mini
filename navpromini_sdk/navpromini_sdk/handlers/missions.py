@@ -436,7 +436,7 @@ async def _handle_low_battery_dock_and_resume(bridge, opts, mission: dict) -> No
     bridge.get_logger().info(f"Mission {mission['id']}: resumed successfully at step {RUNNER.step_index}.")
 
 
-async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[bool, str, str]:
+async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: Optional[dict] = None) -> Tuple[bool, str, str]:
     """Execute a single graph node."""
     store = opts['store']
     ntype = node.get('type')
@@ -920,10 +920,30 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict) -> Tuple[
         await cancel_active_goal(bridge, "Emergency stop")
         return True, 'done', "Navigation cancelled"
 
+    if ntype in ('switch_mission', 'redirect_mission'):
+        target_id = params.get('target_mission_id') or params.get('mission_id')
+        transfer_context = bool(params.get('transfer_context', True))
+        if not target_id:
+            return False, 'failed', "No target mission ID specified"
+        target_m = store.get_mission(target_id)
+        if not target_m:
+            return False, 'failed', f"Target mission {target_id!r} not found"
+
+        curr_map = (mission.get('map') if mission else None) or store.current_map()
+        target_map = target_m.get('map')
+        if target_map and curr_map and target_map != curr_map:
+            return False, 'failed', f"Map mismatch: current={curr_map!r}, target={target_map!r}"
+
+        context.setdefault('system', {})['previous_mission_id'] = mission.get('id') if mission else None
+        RUNNER.switch_target = target_m
+        RUNNER.switch_context = dict(context) if transfer_context else None
+        bridge.get_logger().info(f"Mission redirection staged: {RUNNER.mission_id} -> {target_id}")
+        return True, 'out', f"Redirecting to mission {target_id}"
+
     return False, 'abort', f"Unknown node type: {ntype!r}"
 
 
-async def _run_graph_mission(bridge, opts, mission: dict) -> None:
+async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optional[dict] = None) -> None:
     """Execute a visual graph-based mission with branches and UI interactions."""
     nodes = mission['nodes']
     edges = mission.get('edges', [])
@@ -936,7 +956,7 @@ async def _run_graph_mission(bridge, opts, mission: dict) -> None:
     RUNNER.mission_id = mission['id']
     RUNNER.state = 'running'
     RUNNER.started_at = time.time()
-    RUNNER.context = {
+    RUNNER.context = dict(initial_context) if initial_context is not None else {
         'variables': {},
         'form': {},
         'forms': {},
@@ -945,6 +965,13 @@ async def _run_graph_mission(bridge, opts, mission: dict) -> None:
         'system': {},
         'history': [],
     }
+    RUNNER.context.setdefault('variables', {})
+    RUNNER.context.setdefault('form', {})
+    RUNNER.context.setdefault('forms', {})
+    RUNNER.context.setdefault('form_data', {})
+    RUNNER.context.setdefault('api_responses', {})
+    RUNNER.context.setdefault('system', {})
+    RUNNER.context.setdefault('history', [])
     RUNNER.active_interaction = None
     RUNNER.interaction_future = None
     RUNNER.cancel_requested = False
@@ -1031,7 +1058,7 @@ async def _run_graph_mission(bridge, opts, mission: dict) -> None:
                 'label': node.get('label') or node.get('title') or current_node_id,
             })
 
-            ok, output_port, message = await _execute_graph_node(bridge, opts, node, RUNNER.context)
+            ok, output_port, message = await _execute_graph_node(bridge, opts, node, RUNNER.context, mission)
 
             bridge.emit_event('mission.node_completed', {
                 'mission_id': mission['id'],
@@ -1046,6 +1073,22 @@ async def _run_graph_mission(bridge, opts, mission: dict) -> None:
                 RUNNER.message = message
                 bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': current_node_id})
                 return
+
+            if node.get('type') in ('switch_mission', 'redirect_mission') and ok:
+                target_m = getattr(RUNNER, 'switch_target', None)
+                if target_m:
+                    RUNNER.switch_target = None
+                    new_context = getattr(RUNNER, 'switch_context', None)
+                    RUNNER.switch_context = None
+                    bridge.get_logger().info(f"Mission redirection executing: {mission['id']} -> {target_m['id']}")
+                    bridge.emit_event('mission.completed', {
+                        'mission_id': mission['id'],
+                        'message': f"Redirected to mission {target_m['id']}",
+                    })
+                    stop_battery_monitor.set()
+                    monitor_task.cancel()
+                    await _run_mission(bridge, opts, target_m, initial_context=new_context)
+                    return
 
             if node.get('type') in ('end', 'mission_end'):
                 status = str(node.get('params', {}).get('status', 'success')).lower()
@@ -1094,7 +1137,7 @@ async def _run_graph_mission(bridge, opts, mission: dict) -> None:
             pass
 
 
-async def _run_mission(bridge, opts, mission: dict) -> None:
+async def _run_mission(bridge, opts, mission: dict, initial_context: Optional[dict] = None) -> None:
     store = opts['store']
     current_map = store.current_map()
     mission_map = mission.get('map')
@@ -1111,7 +1154,7 @@ async def _run_mission(bridge, opts, mission: dict) -> None:
         return
 
     if 'nodes' in mission and mission['nodes']:
-        await _run_graph_mission(bridge, opts, mission)
+        await _run_graph_mission(bridge, opts, mission, initial_context=initial_context)
         return
 
     steps = mission.get('steps', [])

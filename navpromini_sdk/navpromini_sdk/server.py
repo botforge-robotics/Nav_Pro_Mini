@@ -28,6 +28,7 @@ from .client_hold import ClientHold, ModeState
 from .handlers import (
     docking,
     maps,
+    media,
     missions,
     mode,
     motion,
@@ -132,11 +133,16 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/missions/([^/]+)/(start|pause|resume|cancel)',
          missions.MissionControlHandler, opts),
         (rf'{API}/missions/([^/]+)', missions.MissionHandler, opts),
+        # media
+        (rf'{API}/media/upload', media.MediaUploadHandler, opts),
+        (rf'{API}/media', media.MediaListHandler, opts),
         # schedules
         (rf'{API}/schedules', schedules.SchedulesHandler, opts),
         (rf'{API}/schedules/([^/]+)', schedules.ScheduleHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
+        # media static files
+        (r'/media/(.*)', tornado.web.StaticFileHandler, {'path': str(media.MEDIA_DIR)}),
         # reserved
         (rf'{API}/zones.*', NotImplementedHandler, opts),
         (rf'{API}/routes.*', NotImplementedHandler, opts),

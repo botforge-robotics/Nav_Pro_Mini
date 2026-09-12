@@ -142,6 +142,21 @@ NODE_CATALOG = {
             "max_iterations": {"type": "integer", "default": 50, "description": "Safety cap against runaway loops"},
         },
     },
+    "switch_mission": {
+        "type": "switch_mission",
+        "category": "flow",
+        "title": "Switch Mission",
+        "description": "Hands off execution to another mission on the same map.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "out", "label": "When Switched", "color": "#009688"},
+            {"id": "failed", "label": "If Not Found", "color": "#F44336"},
+        ],
+        "params_schema": {
+            "target_mission_id": {"type": "string", "required": True, "description": "ID of mission to switch to"},
+            "transfer_context": {"type": "boolean", "default": True, "description": "Pass current context variables to new mission"},
+        },
+    },
     "patrol_loop": {
         "type": "patrol_loop",
         "category": "navigation",
