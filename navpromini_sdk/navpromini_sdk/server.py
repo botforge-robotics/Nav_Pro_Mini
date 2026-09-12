@@ -85,6 +85,13 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/system/updates/apply', system.UpdateApplyHandler, opts),
         (rf'{API}/system/updates/status', system.UpdateStatusHandler, opts),
         (rf'{API}/system/keyboard/toggle', system.ToggleKeyboardHandler, opts),
+        (rf'{API}/system/wifi/status', system.WifiStatusHandler, opts),
+        (rf'{API}/system/wifi/scan', system.WifiScanHandler, opts),
+        (rf'{API}/system/wifi/connect', system.WifiConnectHandler, opts),
+        (rf'{API}/system/app/update/check', system.AppUpdateCheckHandler, opts),
+        (rf'{API}/system/app/update/apply', system.AppUpdateApplyHandler, opts),
+        (rf'{API}/system/app/update/status', system.AppUpdateStatusHandler, opts),
+        (rf'{API}/system/app/update/rollback', system.AppUpdateRollbackHandler, opts),
         # state
         (rf'{API}/state', state.RobotStateHandler, opts),
         (rf'{API}/state/pose', state.PoseHandler, opts),

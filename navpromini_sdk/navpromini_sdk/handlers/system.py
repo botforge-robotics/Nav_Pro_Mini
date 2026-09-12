@@ -557,3 +557,332 @@ class ToggleKeyboardHandler(BaseHandler):
         except Exception as exc:
             raise ApiError(500, 'keyboard_toggle_failed', str(exc))
 
+
+class WifiStatusHandler(BaseHandler):
+    """GET /api/v1/system/wifi/status - returns Wi-Fi connection info and IP."""
+    def get(self) -> None:
+        connected = _wifi_site_online()
+        ssid = ""
+        ip = ""
+        interface = "wlan0"
+        try:
+            r = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
+                               capture_output=True, text=True, timeout=5)
+            for line in (r.stdout or '').splitlines():
+                parts = line.split(':')
+                if len(parts) >= 4 and parts[1] == 'wifi':
+                    interface = parts[0]
+                    if parts[2] == 'connected' and parts[3] != _SETUP_AP_CONN:
+                        ssid = parts[3]
+                        break
+            ip_cmd = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
+            if ip_cmd.returncode == 0:
+                ip = (ip_cmd.stdout or '').strip().split(' ')[0]
+        except Exception:
+            pass
+
+        self.send({
+            'connected': connected,
+            'ssid': ssid,
+            'ip': ip,
+            'interface': interface,
+            'hotspot_active': _setup_ap_active()
+        })
+
+
+class WifiScanHandler(BaseHandler):
+    """GET /api/v1/system/wifi/scan - scan nearby available Wi-Fi networks."""
+    def get(self) -> None:
+        networks = []
+        seen = set()
+        try:
+            r = subprocess.run(['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
+                               capture_output=True, text=True, timeout=8)
+            for line in (r.stdout or '').splitlines():
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    ssid = parts[0].strip()
+                    if not ssid or ssid.startswith(_SETUP_AP_PREFIX) or ssid in seen:
+                        continue
+                    seen.add(ssid)
+                    try:
+                        signal = int(parts[1])
+                    except (ValueError, IndexError):
+                        signal = 50
+                    sec = parts[2] if len(parts) > 2 else ""
+                    networks.append({
+                        'ssid': ssid,
+                        'signal': signal,
+                        'security': sec,
+                        'protected': bool(sec and sec != '--')
+                    })
+        except Exception:
+            pass
+        self.send({'networks': networks, 'count': len(networks)})
+
+
+class WifiConnectHandler(BaseHandler):
+    """POST /api/v1/system/wifi/connect - join a Wi-Fi network."""
+    def post(self) -> None:
+        data = self.body(('ssid',))
+        ssid = str(data['ssid']).strip()
+        password = str(data.get('password') or '').strip()
+        if not ssid:
+            raise ApiError(400, 'invalid_ssid', 'SSID cannot be empty')
+
+        cmd = ['nmcli', 'device', 'wifi', 'connect', ssid]
+        if password:
+            cmd.extend(['password', password])
+
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                self.bridge.emit_event('wifi.connected', {'ssid': ssid})
+                self.send({'success': True, 'ssid': ssid, 'output': r.stdout})
+            else:
+                raise ApiError(400, 'wifi_connect_failed', r.stderr or r.stdout or 'Failed to connect to Wi-Fi')
+        except subprocess.TimeoutExpired:
+            raise ApiError(504, 'wifi_timeout', 'Connection to Wi-Fi timed out')
+        except Exception as exc:
+            raise ApiError(500, 'wifi_error', str(exc))
+
+
+# -----------------------------------------------------------------------------
+# Robot UI App Self-Update & 1-Level Backup Rollback Engine
+# -----------------------------------------------------------------------------
+APP_STATUS_FILE = Path('/tmp/navpro_app_update_status.json')
+APP_BASE_DIR = Path('/home/navpromini/navpromini_robot_ui_app')
+APP_CURRENT_DIR = APP_BASE_DIR / 'current'
+APP_BACKUP_DIR = APP_BASE_DIR / 'backup'
+APP_TEMP_DIR = APP_BASE_DIR / 'temp'
+APP_LEGACY_DIR = Path('/home/navpromini/navpromini_robot_ui')
+
+def _read_current_app_version() -> str:
+    for candidate in [APP_CURRENT_DIR / 'version.json', APP_LEGACY_DIR / 'version.json']:
+        if candidate.is_file():
+            try:
+                data = json.loads(candidate.read_text())
+                return data.get('version', '1.0.0')
+            except Exception:
+                pass
+    return '1.0.0'
+
+def _compare_semver(v1: str, v2: str) -> int:
+    def parse(v):
+        return [int(x) if x.isdigit() else 0 for x in v.lstrip('v').split('.')]
+    p1, p2 = parse(v1), parse(v2)
+    for i in range(max(len(p1), len(p2))):
+        n1 = p1[i] if i < len(p1) else 0
+        n2 = p2[i] if i < len(p2) else 0
+        if n1 > n2:
+            return 1
+        if n1 < n2:
+            return -1
+    return 0
+
+class AppUpdateCheckHandler(BaseHandler):
+    """GET /api/v1/system/app/update/check - check GitHub releases for new Robot UI app release."""
+    def get(self) -> None:
+        cur_ver = _read_current_app_version()
+        repo = 'botforge-robotics/navpromini_robot_ui'
+        url = f'https://api.github.com/repos/{repo}/releases/latest'
+        
+        info = {
+            'current_version': cur_ver,
+            'latest_version': cur_ver,
+            'update_available': False,
+            'release_name': f'v{cur_ver}',
+            'release_notes': '',
+            'published_at': '',
+            'download_url': None,
+            'asset_name': None,
+            'asset_size': 0
+        }
+
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={'User-Agent': 'NavProMini-App', 'Accept': 'application/vnd.github.v3+json'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    tag = data.get('tag_name', '').lstrip('v')
+                    if tag:
+                        info['latest_version'] = tag
+                        info['release_name'] = data.get('name') or f'v{tag}'
+                        info['release_notes'] = data.get('body', '')
+                        info['published_at'] = data.get('published_at', '')
+                        if _compare_semver(tag, cur_ver) > 0:
+                            info['update_available'] = True
+                        
+                        assets = data.get('assets', [])
+                        target_asset = None
+                        for a in assets:
+                            name = a.get('name', '').lower()
+                            if 'aarch64' in name and name.endswith('.appimage'):
+                                target_asset = a
+                                break
+                            elif name.endswith('.appimage') and not target_asset:
+                                target_asset = a
+                            elif name.endswith('.zip') and not target_asset:
+                                target_asset = a
+                        if target_asset:
+                            info['download_url'] = target_asset.get('browser_download_url')
+                            info['asset_name'] = target_asset.get('name')
+                            info['asset_size'] = target_asset.get('size', 0)
+        except Exception as exc:
+            info['check_error'] = str(exc)
+
+        self.send(info)
+
+class AppUpdateApplyHandler(BaseHandler):
+    """POST /api/v1/system/app/update/apply - auto-download, rotate 1-level backup, and restart."""
+    def post(self) -> None:
+        data = self.body()
+        download_url = data.get('download_url')
+        target_version = data.get('target_version', 'latest')
+
+        if APP_STATUS_FILE.is_file():
+            try:
+                st = json.loads(APP_STATUS_FILE.read_text())
+                if st.get('state') in ('downloading', 'backing_up', 'applying'):
+                    raise ApiError(409, 'update_in_progress', 'An app update is already in progress')
+            except Exception:
+                pass
+
+        def run_update_thread():
+            import urllib.request
+            import threading
+            try:
+                APP_BASE_DIR.mkdir(parents=True, exist_ok=True)
+                APP_CURRENT_DIR.mkdir(parents=True, exist_ok=True)
+                APP_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+                def update_progress(state, progress, msg, error=None):
+                    APP_STATUS_FILE.write_text(json.dumps({
+                        'state': state,
+                        'progress': progress,
+                        'message': msg,
+                        'error': error,
+                        'timestamp': time.time()
+                    }))
+
+                update_progress('downloading', 15, 'Contacting release servers...')
+                url = download_url
+                if not url:
+                    api_url = 'https://api.github.com/repos/botforge-robotics/navpromini_robot_ui/releases/latest'
+                    req = urllib.request.Request(api_url, headers={'User-Agent': 'NavProMini-App'})
+                    with urllib.request.urlopen(req, timeout=6) as r:
+                        rel = json.loads(r.read().decode())
+                        for a in rel.get('assets', []):
+                            if a.get('name', '').endswith('.AppImage'):
+                                url = a.get('browser_download_url')
+                                break
+
+                if not url:
+                    update_progress('failed', 0, 'No downloadable AppImage asset found', error='Asset not found')
+                    return
+
+                target_file = APP_TEMP_DIR / 'NavProMiniRobotUI-aarch64.AppImage'
+                update_progress('downloading', 30, 'Downloading release package...')
+                
+                req = urllib.request.Request(url, headers={'User-Agent': 'NavProMini-App'})
+                with urllib.request.urlopen(req, timeout=60) as resp, open(target_file, 'wb') as out_f:
+                    total = int(resp.headers.get('Content-Length', 0))
+                    dl = 0
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                        dl += len(chunk)
+                        if total > 0:
+                            pct = 30 + int((dl / total) * 45)
+                            update_progress('downloading', pct, f'Downloading {dl // 1048576}MB of {total // 1048576}MB...')
+
+                target_file.chmod(0o755)
+
+                # Rotate backup: delete old backup, move current to backup
+                update_progress('backing_up', 80, 'Rotating previous version backup...')
+                if APP_BACKUP_DIR.exists():
+                    shutil.rmtree(APP_BACKUP_DIR)
+                APP_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+                if any(APP_CURRENT_DIR.iterdir()):
+                    for item in APP_CURRENT_DIR.iterdir():
+                        dest = APP_BACKUP_DIR / item.name
+                        if item.is_dir():
+                            shutil.copytree(item, dest)
+                        else:
+                            shutil.copy2(item, dest)
+                elif APP_LEGACY_DIR.exists():
+                    shutil.copytree(APP_LEGACY_DIR, APP_BACKUP_DIR / 'legacy_ui', dirs_exist_ok=True)
+
+                # Install new AppImage
+                update_progress('applying', 90, 'Installing new version...')
+                dest_appimage = APP_CURRENT_DIR / 'NavProMiniRobotUI-aarch64.AppImage'
+                shutil.move(str(target_file), str(dest_appimage))
+                dest_appimage.chmod(0o755)
+
+                ver_data = {'version': target_version, 'updated_at': time.time()}
+                (APP_CURRENT_DIR / 'version.json').write_text(json.dumps(ver_data))
+
+                # Restart
+                update_progress('restarting', 98, 'Restarting NavPro Mini UI...')
+                time.sleep(1)
+                subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], timeout=3)
+                subprocess.run(['pkill', '-9', '-f', 'epiphany'], timeout=3)
+                subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], timeout=3)
+                
+                launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
+                if launcher.is_file():
+                    subprocess.Popen(['sudo', '-u', 'navpromini', 'bash', str(launcher)],
+                                     start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                update_progress('completed', 100, 'Update completed successfully!')
+            except Exception as e:
+                update_progress('failed', 0, f'Update failed: {e}', error=str(e))
+
+        import threading
+        t = threading.Thread(target=run_update_thread, daemon=True)
+        t.start()
+        self.send({'status': 'initiated', 'message': 'App update initiated in background'})
+
+class AppUpdateStatusHandler(BaseHandler):
+    """GET /api/v1/system/app/update/status - retrieve download and installation status."""
+    def get(self) -> None:
+        if APP_STATUS_FILE.is_file():
+            try:
+                data = json.loads(APP_STATUS_FILE.read_text())
+                self.send(data)
+                return
+            except Exception:
+                pass
+        self.send({'state': 'idle', 'progress': 0, 'message': 'No update in progress'})
+
+class AppUpdateRollbackHandler(BaseHandler):
+    """POST /api/v1/system/app/update/rollback - restore previous version from backup."""
+    def post(self) -> None:
+        if not APP_BACKUP_DIR.exists() or not any(APP_BACKUP_DIR.iterdir()):
+            raise ApiError(404, 'no_backup', 'No previous version backup available to rollback')
+        
+        try:
+            shutil.rmtree(APP_CURRENT_DIR, ignore_errors=True)
+            APP_CURRENT_DIR.mkdir(parents=True, exist_ok=True)
+            for item in APP_BACKUP_DIR.iterdir():
+                dest = APP_CURRENT_DIR / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest)
+                else:
+                    shutil.copy2(item, dest)
+            
+            subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], timeout=3)
+            launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
+            if launcher.is_file():
+                subprocess.Popen(['sudo', '-u', 'navpromini', 'bash', str(launcher)],
+                                 start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.send({'status': 'rolled_back', 'message': 'Restored previous backup version and restarted'})
+        except Exception as e:
+            raise ApiError(500, 'rollback_failed', str(e))
+
+
+
