@@ -524,37 +524,36 @@ class ToggleKeyboardHandler(BaseHandler):
     """Toggle onboard virtual keyboard on the robot's local screen (:0)."""
     def post(self) -> None:
         try:
-            env = os.environ.copy()
-            env['DISPLAY'] = env.get('DISPLAY', ':0')
-            env['XAUTHORITY'] = env.get('XAUTHORITY', '/home/navpromini/.Xauthority')
-            if 'DBUS_SESSION_BUS_ADDRESS' not in env:
-                # Default systemd user bus path for uid 1000
-                uid = os.getuid() if os.getuid() != 0 else 1000
-                bus = f'/run/user/{uid}/bus'
-                if os.path.exists(bus):
-                    env['DBUS_SESSION_BUS_ADDRESS'] = f'unix:path={bus}'
-
-            # Try DBus method call first
+            # 1. Primary: busctl under navpromini user session bus
             res = subprocess.run([
-                'dbus-send', '--type=method_call',
-                '--dest=org.onboard.Onboard',
+                'sudo', '-u', 'navpromini',
+                'XDG_RUNTIME_DIR=/run/user/1000',
+                'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus',
+                'busctl', '--user', 'call',
+                'org.onboard.Onboard',
                 '/org/onboard/Onboard/Keyboard',
-                'org.onboard.Onboard.Keyboard.ToggleVisible'
-            ], env=env, capture_output=True, timeout=2)
+                'org.onboard.Onboard.Keyboard', 'ToggleVisible'
+            ], capture_output=True, timeout=2)
 
             if res.returncode == 0:
-                self.send({'status': 'ok', 'action': 'toggled_dbus'})
+                self.send({'status': 'ok', 'action': 'toggled_busctl'})
                 return
 
-            # Fallback: check if running and send USR1 or launch
-            p = subprocess.run(['pgrep', '-f', 'onboard'], env=env, capture_output=True, text=True)
-            if p.returncode == 0:
-                subprocess.run(['pkill', '-USR1', '-f', 'onboard'], env=env, timeout=2)
-                self.send({'status': 'ok', 'action': 'toggled_signal'})
-            else:
-                subprocess.Popen(['/usr/bin/onboard'], env=env, start_new_session=True,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 2. Check if onboard is running; if not launch it as navpromini
+            p = subprocess.run(['pgrep', '-f', 'onboard'], capture_output=True, text=True)
+            if p.returncode != 0:
+                subprocess.Popen([
+                    'sudo', '-u', 'navpromini',
+                    'DISPLAY=:0',
+                    'XAUTHORITY=/home/navpromini/.Xauthority',
+                    '/usr/bin/onboard'
+                ], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.send({'status': 'ok', 'action': 'launched'})
+                return
+
+            # 3. Fallback: signal
+            subprocess.run(['pkill', '-USR1', '-f', 'onboard'], timeout=2)
+            self.send({'status': 'ok', 'action': 'toggled_signal'})
         except Exception as exc:
             raise ApiError(500, 'keyboard_toggle_failed', str(exc))
 
