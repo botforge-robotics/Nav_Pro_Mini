@@ -199,13 +199,15 @@ class _MissionRunner:
         self.pause_reason: str | None = None
 
     def snapshot(self) -> dict:
+        is_active = self.state in ('running', 'waiting_for_user', 'paused')
         return {
             'mission_id': self.mission_id,
             'state': self.state,
             'status': self.state,
             'step_index': self.step_index,
-            'active_node_id': self.active_node_id,
-            'active_node_type': self.active_node_type,
+            'active_node_id': self.active_node_id if is_active else None,
+            'active_node_type': self.active_node_type if is_active else None,
+            'last_node_id': self.active_node_id,
             'active_interaction': self.active_interaction,
             'loop_index': self.loop_index,
             'loop_total': self.loop_total,
@@ -1160,6 +1162,8 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
 
             if node.get('type') in ('end', 'mission_end'):
                 status = str(node.get('params', {}).get('status', 'success')).lower()
+                RUNNER.active_node_id = None
+                RUNNER.active_node_type = None
                 if status in ('failed', 'aborted'):
                     RUNNER.state = 'failed'
                     RUNNER.message = message
@@ -1187,6 +1191,9 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
 
             next_edge = matching_edges[0]
             current_node_id = next_edge.get('to_node')
+
+        RUNNER.active_node_id = None
+        RUNNER.active_node_type = None
 
         if visited_count >= max_transitions:
             RUNNER.state = 'failed'
