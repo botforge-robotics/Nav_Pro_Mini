@@ -1036,6 +1036,18 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
         'history': [],
     }
     RUNNER.context.setdefault('variables', {})
+    # Load initial mission variables if defined in mission settings or top-level
+    init_vars = mission.get('variables') or mission.get('settings', {}).get('variables') or {}
+    if isinstance(init_vars, dict):
+        for k, v in init_vars.items():
+            if isinstance(v, dict) and 'value' in v:
+                RUNNER.context['variables'][k] = v['value']
+            else:
+                RUNNER.context['variables'][k] = v
+    elif isinstance(init_vars, list):
+        for item in init_vars:
+            if isinstance(item, dict) and 'name' in item:
+                RUNNER.context['variables'][item['name']] = item.get('default_value') or item.get('value', '')
     RUNNER.context.setdefault('form', {})
     RUNNER.context.setdefault('forms', {})
     RUNNER.context.setdefault('form_data', {})
