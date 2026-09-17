@@ -25,7 +25,7 @@ slam_toolbox:
     # Match RPLidAR A1M8 (ignore body self-hits)
     min_laser_range: 0.35
     max_laser_range: 12.0
-    # Process scans more frequently to maintain high scan-to-scan overlap
+    # Process scans at 10 Hz (native RPLiDAR 8.5 Hz) to maintain high overlap
     minimum_time_interval: 0.1
     transform_timeout: 0.5
     tf_buffer_duration: 30.0
@@ -34,7 +34,7 @@ slam_toolbox:
 
     use_scan_matching: true
     use_scan_barycenter: true
-    # Smaller steps ensure dense scan overlap when moving at speed, preventing skid/rotation drift
+    # Small steps ensure dense scan overlap when moving at speed, preventing skid/rotation drift
     minimum_travel_distance: 0.10
     minimum_travel_heading: 0.15
     check_min_dist_and_heading_precisely: false
@@ -42,18 +42,20 @@ slam_toolbox:
     scan_buffer_maximum_scan_distance: 10.0
 
     # Minimum scan match correlation response to link nodes in the pose graph.
-    # CRITICAL: Was 0.1, which caused garbage/mismatched scans to be accepted
-    # into the graph, twisting the map and causing severe skid distortions.
-    link_match_minimum_response_fine: 0.60
+    # Strictly reject weak/corrupt scan matches to prevent map warping and skidding.
+    link_match_minimum_response_fine: 0.65
     link_scan_maximum_distance: 1.5
 
-    # Robust loop closure to prevent false merges
+    # Robust multi-room loop closure to prevent false merges between adjacent rooms:
+    # 1. High fine response threshold (0.75) requires strong geometric match.
+    # 2. Strict variance threshold (0.35) rejects matches with uncertain orientation.
+    # 3. Chain size (15) requires 15 consecutive matching scans before accepting loop closure.
     do_loop_closing: true
-    loop_match_minimum_chain_size: 10
-    loop_match_maximum_variance_coarse: 0.5
-    loop_match_minimum_response_coarse: 0.55
-    loop_match_minimum_response_fine: 0.70
-    loop_search_maximum_distance: 3.5
+    loop_match_minimum_chain_size: 15
+    loop_match_maximum_variance_coarse: 0.35
+    loop_match_minimum_response_coarse: 0.60
+    loop_match_minimum_response_fine: 0.75
+    loop_search_maximum_distance: 3.0
 
     # Wider search space so scan matcher can recover if wheel slips or moves fast
     correlation_search_space_dimension: 0.8
