@@ -25,8 +25,8 @@ slam_toolbox:
     # Match RPLidAR A1M8 (ignore body self-hits)
     min_laser_range: 0.35
     max_laser_range: 12.0
-    # Process scans more often on real hardware (was 0.3 → laggy map)
-    minimum_time_interval: 0.2
+    # Process scans more frequently to maintain high scan-to-scan overlap
+    minimum_time_interval: 0.1
     transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
@@ -34,22 +34,29 @@ slam_toolbox:
 
     use_scan_matching: true
     use_scan_barycenter: true
-    # Slightly smaller steps → better scan match with wheel odom
-    minimum_travel_distance: 0.15
-    minimum_travel_heading: 0.2
+    # Smaller steps ensure dense scan overlap when moving at speed, preventing skid/rotation drift
+    minimum_travel_distance: 0.10
+    minimum_travel_heading: 0.15
     check_min_dist_and_heading_precisely: false
-    scan_buffer_size: 10
+    scan_buffer_size: 20
     scan_buffer_maximum_scan_distance: 10.0
-    link_match_minimum_response_fine: 0.1
+
+    # Minimum scan match correlation response to link nodes in the pose graph.
+    # CRITICAL: Was 0.1, which caused garbage/mismatched scans to be accepted
+    # into the graph, twisting the map and causing severe skid distortions.
+    link_match_minimum_response_fine: 0.60
     link_scan_maximum_distance: 1.5
-    loop_search_maximum_distance: 3.0
+
+    # Robust loop closure to prevent false merges
     do_loop_closing: true
     loop_match_minimum_chain_size: 10
-    loop_match_maximum_variance_coarse: 3.0
-    loop_match_minimum_response_coarse: 0.35
-    loop_match_minimum_response_fine: 0.45
+    loop_match_maximum_variance_coarse: 0.5
+    loop_match_minimum_response_coarse: 0.55
+    loop_match_minimum_response_fine: 0.70
+    loop_search_maximum_distance: 3.5
 
-    correlation_search_space_dimension: 0.5
+    # Wider search space so scan matcher can recover if wheel slips or moves fast
+    correlation_search_space_dimension: 0.8
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
 
@@ -57,11 +64,11 @@ slam_toolbox:
     loop_search_space_resolution: 0.05
     loop_search_space_smear_deviation: 0.03
 
-    # Trust wheel odom a bit more (reduces smear when lidar frame is correct)
-    distance_variance_penalty: 0.8
-    angle_variance_penalty: 1.2
+    # Scan matcher penalties and search angles
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
     fine_search_angle_offset: 0.00349
-    coarse_search_angle_offset: 0.349
+    coarse_search_angle_offset: 0.45
     coarse_angle_resolution: 0.0349
     minimum_angle_penalty: 0.9
     minimum_distance_penalty: 0.5
