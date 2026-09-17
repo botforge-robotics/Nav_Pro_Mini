@@ -95,12 +95,47 @@ def main(argv: list[str] | None = None) -> int:
         node.get_logger().warn(f'pose graph serialization failed: {exc!r}')
         return 0
     finally:
+        _sync_map_files(path)
         try:
             node.destroy_node()
             if rclpy.ok():
                 rclpy.shutdown()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _sync_map_files(path: str) -> None:
+    """Ensure saved map files exist in both src and install share directories so
+    launch_manager and navigation_launch can immediately locate them."""
+    import shutil
+    base_dir = os.path.dirname(path)
+    base_name = os.path.basename(path)
+
+    targets = []
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share_maps = os.path.join(get_package_share_directory('navpromini_mapping'), 'maps')
+        os.makedirs(share_maps, exist_ok=True)
+        targets.append(share_maps)
+    except Exception:
+        pass
+
+    src_maps = os.path.join(os.path.expanduser('~'), 'NavProMini_ws', 'src', 'navpromini_mapping', 'maps')
+    if os.path.exists(src_maps) or os.path.exists(os.path.dirname(src_maps)):
+        os.makedirs(src_maps, exist_ok=True)
+        targets.append(src_maps)
+
+    destinations = [d for d in targets if os.path.abspath(d) != os.path.abspath(base_dir)]
+
+    for ext in ('.yaml', '.pgm', '.posegraph', '.data'):
+        src_file = os.path.join(base_dir, f'{base_name}{ext}')
+        if os.path.exists(src_file):
+            for dst_dir in destinations:
+                try:
+                    dst_file = os.path.join(dst_dir, f'{base_name}{ext}')
+                    shutil.copy2(src_file, dst_file)
+                except Exception as e:
+                    print(f"serialize_posegraph: warning copying {src_file} to {dst_dir}: {e}")
 
 
 if __name__ == '__main__':

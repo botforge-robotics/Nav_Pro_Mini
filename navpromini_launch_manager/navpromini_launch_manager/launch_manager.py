@@ -171,33 +171,49 @@ class LaunchManager(Node):
                 # -------------------------------------------------
                 # Post-save verification
                 # -------------------------------------------------
+                target_map_name = args_dict.get('map_name', '').strip()
+                if target_map_name.endswith('.yaml'):
+                    target_map_name = target_map_name[:-5]
+                if target_map_name.endswith('.pgm'):
+                    target_map_name = target_map_name[:-4]
+
                 post_maps = None
-                map_list_change = False
                 if verification_path:
                     try:
                         post_maps = self._retrieve_map_list(verification_path)
-                        if pre_maps is not None and post_maps is not None:
-                            map_list_change = len(post_maps) > len(pre_maps)
                     except Exception as e:
                         self.get_logger().warning(
                             f"Post-save map list retrieval failed: {e}")
 
-                # Determine success criteria (ensure boolean)
-                newly_created = map_list_change
-                response.success = (
-                    process.returncode == 0 and
-                    (not verification_path or newly_created)
+                existed_before = (
+                    target_map_name != '' and
+                    pre_maps is not None and
+                    target_map_name in pre_maps
+                )
+                exists_now = (
+                    target_map_name != '' and
+                    post_maps is not None and
+                    target_map_name in post_maps
                 )
 
-                # Decide message based on outcome
-                if verification_path and not newly_created and process.returncode == 0:
-                    # Map file already existed; nothing new created
-                    response.message = "already exist"
-                    response.success = False
+                if process.returncode == 0:
+                    if target_map_name:
+                        if exists_now and not existed_before:
+                            response.success = True
+                            response.message = "Map save successful"
+                        elif exists_now and existed_before:
+                            response.success = False
+                            response.message = "already exist"
+                        else:
+                            response.success = False
+                            response.message = f"Map save failed: map '{target_map_name}' was not created"
+                    else:
+                        map_list_change = (pre_maps is not None and post_maps is not None and len(post_maps) > len(pre_maps))
+                        response.success = map_list_change
+                        response.message = "Map save successful" if map_list_change else "Map save failed"
                 else:
-                    response.message = "Map save " + (
-                        "successful" if response.success else "failed"
-                    )
+                    response.success = False
+                    response.message = f"Map save failed with return code {process.returncode}"
 
                 response.unique_id = unique_id
 

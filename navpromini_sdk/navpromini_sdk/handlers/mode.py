@@ -373,7 +373,8 @@ class FinishMappingHandler(BaseHandler):
         name = str(data['name']).strip()
         overwrite = bool(data.get('overwrite', False))
 
-        await switch_mode(self.opts, self.bridge, 'idle', None)
+        # Save map FIRST while SLAM is actively running and publishing /map!
+        # Do NOT stop SLAM before saving, otherwise map_saver_cli times out waiting for /map.
         try:
             await maps_handlers.save_map(self.bridge, self.opts['store'], name, overwrite)
         except ApiError as exc:
