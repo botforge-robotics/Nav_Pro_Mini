@@ -439,3 +439,11 @@ loopback_simulator:
     scan_angle_max: 3.1415
     scan_angle_increment: 0.02617
     scan_use_inf: true
+
+lifecycle_manager_navigation:
+  ros__parameters:
+    bond_timeout: 40.0
+
+lifecycle_manager_localization:
+  ros__parameters:
+    bond_timeout: 40.0
