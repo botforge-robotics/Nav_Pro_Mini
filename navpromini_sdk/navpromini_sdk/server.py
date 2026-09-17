@@ -278,6 +278,9 @@ def main(args=None) -> None:
         'dock_pose_pub': bridge.create_publisher(PoseStamped, 'dock_pose', LATCHED_QOS),
     }
 
+    # Publish initial mode so latched /robot_mode topic is populated immediately
+    bridge.publish_mode(opts['mode_state'].mode)
+
     # GET /mode is a cache read (see ModeHandler) so it stays cheap under
     # load; this timer is what keeps that cache honest when navigation or
     # mapping is started by something other than this SDK — the Flutter app

@@ -244,6 +244,7 @@ def reconcile_mode(bridge, state) -> None:
     # module docstring in ros_bridge.py: null over an invented value, for
     # what's still genuinely unknowable (launch_id).
     state.set(observed, None, None)
+    bridge.publish_mode(observed)
     bridge.get_logger().info(f'mode reconciled from ROS graph: {observed} '
                              '(started outside the SDK)')
     if observed == 'idle':
@@ -294,6 +295,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         except Exception as e:
             bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
         state.set('idle', None, None)
+        bridge.publish_mode('idle')
         opts['client_hold'].release()
         bridge.invalidate('pose_map', 'dock_status')
 
@@ -314,10 +316,12 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         if not resp.success:
             opts['client_hold'].release()
             bridge.emit_event(f'{mode}.failed', {'message': resp.message or 'launch failed'})
+            bridge.publish_mode('idle')
             raise ApiError(500, 'launch_failed', resp.message or 'launch failed',
                            {'package': package, 'launch_file': launch_file})
 
         state.set(mode, map_name, resp.unique_id)
+        bridge.publish_mode(mode)
         bridge.emit_event(f'{mode}.started', {'map': map_name})
         if mode == 'navigation':
             if map_name:

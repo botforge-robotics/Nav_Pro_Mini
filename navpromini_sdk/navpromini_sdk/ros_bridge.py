@@ -147,6 +147,7 @@ class RosBridge(Node):
             PoseWithCovarianceStamped, 'initialpose', 10)
         self._pub_display = self.create_publisher(String, 'display_text', 10)
         self._pub_led = self.create_publisher(String, 'led_command', 10)
+        self._pub_mode = self.create_publisher(String, 'robot_mode', LATCHED_QOS)
 
         # --- service clients (launch_manager) ------------------------------
         self.cli_launch = self.create_client(LaunchWithArgs, 'launch_with_args',
@@ -243,6 +244,14 @@ class RosBridge(Node):
             'timestamp': time.time(),
             'data': data or {},
         })
+
+    def publish_mode(self, mode_name: str) -> None:
+        try:
+            msg = String()
+            msg.data = mode_name
+            self._pub_mode.publish(msg)
+        except Exception as e:
+            self.get_logger().warn(f"Failed to publish robot mode '{mode_name}': {e}")
 
     # -- subscription callbacks --------------------------------------------
 
