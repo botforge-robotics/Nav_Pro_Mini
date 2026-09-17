@@ -284,7 +284,7 @@ class RosBridge(Node):
             pct *= 100.0
         charging = m.power_supply_status in (1, 4)
         self._put('battery', {
-            'percentage': round(float(pct), 1) if pct == pct else None,
+            'percentage': round(float(pct), 2) if pct == pct else None,
             'voltage': round(float(m.voltage), 2) if m.voltage == m.voltage else None,
             'current': round(float(m.current), 2) if m.current == m.current else None,
             'temperature': (round(float(m.temperature), 1)

@@ -115,11 +115,24 @@ class BatteryNode(Node):
         msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LION
         msg.present = True
 
-        if snap.charge_state == 1 or snap.pack_current_a > 0.2:
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
-        elif snap.charge_state == 2 or snap.pack_current_a < -0.2:
+        is_charging = (
+            snap.charge_state == 1 or
+            snap.pack_current_a > 0.05 or
+            getattr(snap, 'charger_connected', False)
+        )
+        is_discharging = (
+            snap.charge_state == 2 or
+            snap.pack_current_a < -0.05
+        )
+
+        if is_charging:
+            if snap.soc_percent >= 99.95 and snap.pack_current_a < 0.1:
+                msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
+            else:
+                msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
+        elif is_discharging:
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
-        elif snap.soc_percent >= 99.0:
+        elif snap.soc_percent >= 99.95:
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
         else:
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING
