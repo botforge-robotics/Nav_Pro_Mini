@@ -63,26 +63,42 @@ _SETUP_AP_CONN = 'navpro-setup-ap'
 _SETUP_AP_PREFIX = 'NavPro-Setup'
 
 
+_setup_ap_cached = (False, 0.0)
+_wifi_site_cached = (False, 0.0)
+
+
 def _setup_ap_active() -> bool:
     """True only if nmcli reports the setup hotspot connection actually up —
-    mirrors status_display_node.py's _setup_ap_really_up()."""
+    mirrors status_display_node.py's _setup_ap_really_up(). Cached 15s to save CPU."""
+    global _setup_ap_cached
+    now = time.monotonic()
+    if now - _setup_ap_cached[1] < 15.0:
+        return _setup_ap_cached[0]
+    result = False
     try:
         r = subprocess.run(['nmcli', '-t', '-f', 'NAME,STATE', 'connection', 'show', '--active'],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=3)
         for line in (r.stdout or '').splitlines():
             if line.startswith(f'{_SETUP_AP_CONN}:') and 'activated' in line.lower():
-                return True
+                result = True
+                break
     except Exception:  # noqa: BLE001
         pass
-    return False
+    _setup_ap_cached = (result, now)
+    return result
 
 
 def _wifi_site_online() -> bool:
     """True if a Wi-Fi device is connected to a real (non-setup-AP) network
-    with an IP — mirrors status_display_node.py's _wifi_site_online()."""
+    with an IP — mirrors status_display_node.py's _wifi_site_online(). Cached 15s."""
+    global _wifi_site_cached
+    now = time.monotonic()
+    if now - _wifi_site_cached[1] < 15.0:
+        return _wifi_site_cached[0]
+    result = False
     try:
         r = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=3)
         for line in (r.stdout or '').splitlines():
             parts = line.split(':')
             if len(parts) < 4:
@@ -90,12 +106,14 @@ def _wifi_site_online() -> bool:
             _dev, dtype, state, conn = parts[0], parts[1], parts[2], parts[3]
             if dtype != 'wifi' or state != 'connected' or not conn or conn == _SETUP_AP_CONN:
                 continue
-            ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
+            ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2)
             if ip.returncode == 0 and (ip.stdout or '').strip():
-                return True
+                result = True
+                break
     except Exception:  # noqa: BLE001
         pass
-    return False
+    _wifi_site_cached = (result, now)
+    return result
 
 
 def _has_wifi_config() -> bool:

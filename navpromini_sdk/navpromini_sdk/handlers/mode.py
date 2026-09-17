@@ -286,20 +286,16 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         # Always stop what is running first. Mapping and navigation are
         # mutually exclusive (both own map->odom), so overlapping them even
         # briefly corrupts the transform tree.
-        if state.launch_id:
+        stop_target_id = state.launch_id or 'all'
+        try:
             req = StopLaunch.Request()
-            req.unique_id = state.launch_id
-            await call_service(bridge.cli_stop, req, 'stop_launch', timeout=90.0)
-            state.set('idle', None, None)
-            opts['client_hold'].release()
-            # These belong to the launch instance that just stopped, not the
-            # robot as a whole — left cached, they'd read as a perfectly
-            # fresh, confidently wrong answer (LOCALIZED off a pose AMCL's
-            # *previous* instance published, a dock state from the
-            # dock_manager that just died) for as long as it takes whatever
-            # starts next to publish its own first message. See
-            # RosBridge.invalidate's docstring.
-            bridge.invalidate('pose_map', 'dock_status')
+            req.unique_id = stop_target_id
+            await call_service(bridge.cli_stop, req, 'stop_launch', timeout=15.0)
+        except Exception as e:
+            bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
+        state.set('idle', None, None)
+        opts['client_hold'].release()
+        bridge.invalidate('pose_map', 'dock_status')
 
         if mode == 'idle':
             return {'mode': 'idle'}

@@ -317,60 +317,72 @@ class LaunchManager(Node):
             except Exception:
                 pass
 
+    def _terminate_process(self, process, cmd_str=""):
+        """Gracefully terminate a process group with fast fallback to kill."""
+        try:
+            pgid = os.getpgid(process.pid)
+            os.killpg(pgid, signal.SIGINT)
+            try:
+                process.wait(timeout=4.0)
+                return True, "Process stopped gracefully"
+            except subprocess.TimeoutExpired:
+                self.get_logger().warning(f"Graceful SIGINT timed out for {cmd_str}, sending SIGTERM")
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=2.0)
+                    return True, "Process terminated with SIGTERM"
+                except subprocess.TimeoutExpired:
+                    self.get_logger().error(f"SIGTERM timed out for {cmd_str}, killing with SIGKILL")
+                    os.killpg(pgid, signal.SIGKILL)
+                    try:
+                        process.wait(timeout=1.0)
+                    except Exception:
+                        pass
+                    return True, "Process killed with SIGKILL"
+        except ProcessLookupError:
+            return True, "Process already terminated"
+        except Exception as e:
+            return False, f"Stop failed: {str(e)}"
+
     def stop_callback(self, request, response):
-        self.get_logger().debug(
-            f"stop_callback called with unique_id={request.unique_id}")
-        unique_id = request.unique_id
-        if unique_id not in self.active_launches:
-            response.success = False
-            response.message = f"Invalid launch ID: {unique_id}"
-            self.get_logger().warning(response.message)
+        self.get_logger().info(
+            f"stop_callback called with unique_id='{request.unique_id}'")
+        unique_id = (request.unique_id or "").strip()
+
+        to_stop = []
+        if unique_id in ('all', '*', '', 'active'):
+            # Stop all active launches
+            to_stop = list(self.active_launches.items())
+        elif unique_id in ('mapping', 'navigation'):
+            for uid, info in list(self.active_launches.items()):
+                if unique_id in info.get('launch_file', '') or unique_id in info.get('package', ''):
+                    to_stop.append((uid, info))
+        elif unique_id in self.active_launches:
+            to_stop = [(unique_id, self.active_launches[unique_id])]
+        elif len(self.active_launches) == 1:
+            # Only one active launch running, stop it even if ID mismatched
+            to_stop = list(self.active_launches.items())
+            self.get_logger().info(f"Targeting single active launch {to_stop[0][0]} for request '{unique_id}'")
+
+        if not to_stop:
+            response.success = True
+            response.message = f"No matching active launches found for ID: {unique_id}"
+            self.get_logger().info(response.message)
             return response
 
-        launch_info = self.active_launches.pop(unique_id)
-        try:
-            process = launch_info['process']
-            self.get_logger().debug(f"Process PID to stop: {process.pid}")
-            graceful = False
+        all_success = True
+        messages = []
+        for uid, launch_info in to_stop:
+            self.active_launches.pop(uid, None)
+            success, msg = self._terminate_process(launch_info['process'], launch_info.get('cmd', ''))
+            if not success:
+                all_success = False
+            messages.append(f"[{uid[:8]}] {msg}")
+            self.get_logger().info(f"Stopped {uid}: {msg}")
 
-            # Send SIGINT (Ctrl+C equivalent) and wait for 60 seconds
-            os.killpg(os.getpgid(process.pid), signal.SIGINT)
-            self.get_logger().info("Attempting graceful stop with 60 second timeout")
-
-            try:
-                process.wait(timeout=60.0)
-                graceful = True
-                response.message = "Process stopped gracefully"
-                self.get_logger().debug("Process stopped gracefully within timeout")
-            except subprocess.TimeoutExpired:
-                self.get_logger().warning("Graceful stop timed out, forcing termination")
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                try:
-                    process.wait(timeout=30.0)
-                    response.message = "Process forcibly terminated after timeout"
-                    self.get_logger().debug("Process terminated with SIGTERM")
-                except subprocess.TimeoutExpired:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    response.message = "Process killed with SIGKILL after failed termination"
-                    self.get_logger().debug("Process killed with SIGKILL")
-
-            response.success = True
-            self.get_logger().info(
-                f"Successfully stopped: {launch_info['cmd']}")
-
-        except ProcessLookupError:
-            self.get_logger().debug("ProcessLookupError: process already terminated")
-            response.success = True
-            response.message = "Process already terminated"
-        except Exception as e:
-            response.success = False
-            response.message = f"Stop failed: {str(e)}"
-            self.get_logger().error(response.message)
-
-        # After handling, log current active launches
-        self.get_logger().debug(
-            f"Remaining active launches: {list(self.active_launches.keys())}")
-
+        response.success = all_success
+        response.message = "; ".join(messages)
+        self.get_logger().info(f"Stop result: {response.message}")
         return response
 
     def get_map_list_callback(self, request, response):
