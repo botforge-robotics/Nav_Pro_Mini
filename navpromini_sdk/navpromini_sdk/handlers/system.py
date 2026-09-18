@@ -696,6 +696,33 @@ class WifiConnectHandler(BaseHandler):
             raise ApiError(500, 'wifi_error', str(exc))
 
 
+class SystemSpeakHandler(BaseHandler):
+    """POST /api/v1/system/speak - pronounce text through robot hardware speakers with cute neural voice."""
+
+    def post(self) -> None:
+        try:
+            body = json.loads(self.request.body.decode('utf-8') or '{}')
+        except Exception:
+            body = {}
+        text = str(body.get('text', '')).strip()
+        if not text:
+            raise ApiError(400, 'missing_text', 'Field "text" is required')
+
+        self.bridge.get_logger().info(f"[Cute Voice TTS]: {text}")
+        try:
+            if shutil.which('navpro-speak'):
+                subprocess.Popen(['navpro-speak', text])
+            elif shutil.which('spd-say'):
+                subprocess.Popen(['spd-say', '-p', '80', '-t', 'female1', text])
+            elif shutil.which('espeak-ng'):
+                subprocess.Popen(['espeak-ng', '-v', 'en+f4', '-p', '80', '-s', '145', text])
+            else:
+                raise ApiError(500, 'no_tts_engine', 'No TTS engine found on host')
+            self.send({'status': 'speaking', 'text': text})
+        except Exception as exc:
+            raise ApiError(500, 'speak_failed', str(exc))
+
+
 # -----------------------------------------------------------------------------
 # Robot UI App Self-Update & 1-Level Backup Rollback Engine
 # -----------------------------------------------------------------------------
