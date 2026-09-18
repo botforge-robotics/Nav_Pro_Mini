@@ -114,19 +114,147 @@ except Exception:
     pass
 
 
+
+# ---------------------------------------------------------------------------
+# Persistent Piper TTS Daemon
+# ---------------------------------------------------------------------------
+# The first time play_speech() is called, a background piper process is
+# launched with --json-input so the model stays loaded.  Subsequent calls
+# write JSON lines to a FIFO (<100 ms latency vs 1.5 s cold-start).
+# ---------------------------------------------------------------------------
+
+import json as _json
+import signal as _signal
+
+_PIPER_FIFO = '/tmp/navpro_piper.fifo'
+_PIPER_MODEL = '/opt/navpro/piper/voices/en_US-hfc_female-medium.onnx'
+_PIPER_RATE = 23800  # sample rate produced by this model
+
+_piper_lock = threading.Lock()
+_piper_fifo_writer: Optional[int] = None   # open fd for writing to FIFO
+_piper_daemon_thread: Optional[threading.Thread] = None
+_piper_daemon_pid: Optional[int] = None
+
+
+def _piper_daemon_running() -> bool:
+    """Return True if the piper daemon process is still alive."""
+    pid = _piper_daemon_pid
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _start_piper_daemon() -> bool:
+    """Start the piper daemon; return True on success."""
+    global _piper_fifo_writer, _piper_daemon_pid
+
+    if not shutil.which('piper') or not os.path.isfile(_PIPER_MODEL):
+        return False
+    if not shutil.which('paplay'):
+        return False
+
+    # Create FIFO if needed
+    if not os.path.exists(_PIPER_FIFO):
+        try:
+            os.mkfifo(_PIPER_FIFO)
+        except OSError:
+            pass
+
+    env = get_pulse_env()
+
+    # Piper reads JSON lines from stdin; outputs raw s16le audio to stdout.
+    # We pipe that straight into paplay.
+    cmd = (
+        f'piper --model {_PIPER_MODEL} --length_scale 1.20 '
+        f'--json-input --output-raw 2>/dev/null '
+        f'< {_PIPER_FIFO} | '
+        f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null'
+    )
+    try:
+        proc = subprocess.Popen(
+            ['bash', '-c', cmd],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _piper_daemon_pid = proc.pid
+
+        # Open the write-end of the FIFO (non-blocking open to avoid blocking
+        # until a reader is attached — the daemon becomes the reader).
+        # We use a short poll loop to wait until the daemon has opened its end.
+        for _ in range(30):
+            try:
+                fd = os.open(_PIPER_FIFO, os.O_WRONLY | os.O_NONBLOCK)
+                _piper_fifo_writer = fd
+                return True
+            except OSError:
+                time.sleep(0.1)
+        return False
+    except Exception:
+        return False
+
+
+def _ensure_piper_daemon() -> bool:
+    """Ensure the piper daemon is running; (re)start if needed."""
+    global _piper_fifo_writer
+    if _piper_daemon_running() and _piper_fifo_writer is not None:
+        return True
+    # Close stale fd if any
+    if _piper_fifo_writer is not None:
+        try:
+            os.close(_piper_fifo_writer)
+        except OSError:
+            pass
+        _piper_fifo_writer = None
+    return _start_piper_daemon()
+
+
 def play_speech(text: str, wait: bool = False) -> None:
-    """Pronounce text through robot hardware speakers with cute neural voice."""
+    """Pronounce text through robot hardware speakers with cute neural voice.
+
+    Uses a persistent piper daemon to keep the TTS model warm so subsequent
+    calls have near-instant startup (no 1.5 s model-load delay).
+    Falls back to navpro-speak → direct piper → espeak-ng if daemon setup
+    fails.
+    """
     if not text or not text.strip():
         return
     text = text.strip()
-    env = get_pulse_env()
 
+    # ---- Try persistent piper daemon first --------------------------------
+    if shutil.which('piper') and os.path.isfile(_PIPER_MODEL) and shutil.which('paplay'):
+        with _piper_lock:
+            if _ensure_piper_daemon() and _piper_fifo_writer is not None:
+                payload = (_json.dumps({'text': text}) + '\n').encode('utf-8')
+                try:
+                    os.write(_piper_fifo_writer, payload)
+                    if wait:
+                        # Approximate wait: allow ~100 ms startup + ~50 ms/word
+                        word_count = len(text.split())
+                        time.sleep(0.15 + word_count * 0.35)
+                    return
+                except OSError:
+                    # Broken pipe — daemon died; will restart next call
+                    try:
+                        os.close(_piper_fifo_writer)
+                    except OSError:
+                        pass
+                    _piper_fifo_writer = None  # type: ignore[assignment]
+
+    # ---- Fallback: navpro-speak script (legacy) ---------------------------
+    env = get_pulse_env()
     cmd = None
     if shutil.which('navpro-speak'):
         cmd = ['navpro-speak', text]
-    elif shutil.which('piper') and os.path.isfile('/opt/navpro/piper/voices/en_US-hfc_female-medium.onnx'):
-        # Fallback to direct piper pipeline with cute robot pitch and calm reduced speed
-        cmd = ['bash', '-c', f'echo "{text}" | piper --model /opt/navpro/piper/voices/en_US-hfc_female-medium.onnx --length_scale 1.20 --output-raw 2>/dev/null | paplay --raw --rate 23800 --channels 1 --format s16le 2>/dev/null || true']
+    elif shutil.which('piper') and os.path.isfile(_PIPER_MODEL):
+        cmd = ['bash', '-c',
+               f'echo "{text}" | piper --model {_PIPER_MODEL} '
+               f'--length_scale 1.20 --output-raw 2>/dev/null | '
+               f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null || true']
     elif shutil.which('espeak-ng'):
         cmd = ['espeak-ng', '-v', 'en+f4', '-p', '88', '-s', '130', text]
 
@@ -138,8 +266,10 @@ def play_speech(text: str, wait: bool = False) -> None:
             subprocess.run(cmd, env=env, check=False, timeout=30.0)
         else:
             subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception as exc:
+    except Exception:
         pass
+
+
 
 
 def play_sound(sound_name: str, speech_text: Optional[str] = None, wait: bool = False) -> None:

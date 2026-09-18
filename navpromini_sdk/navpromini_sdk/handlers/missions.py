@@ -607,12 +607,16 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
     if ntype == 'condition':
         expr = params.get('expression', 'True')
+        # Pre-resolve any {var} tokens so the evaluator sees plain values, not
+        # set-literals.  evaluate_condition_safely also does this, but resolving
+        # here first makes the logger message more useful.
+        resolved_expr = str(resolve_template_value(expr, context))
         try:
-            eval_result = evaluate_condition_safely(expr, context)
+            eval_result = evaluate_condition_safely(resolved_expr, context)
             port = 'true' if eval_result else 'false'
             return True, port, f"Condition evaluated to {eval_result}"
         except Exception as e:
-            bridge.get_logger().error(f"Condition evaluation error in {node.get('id')}: {e}")
+            bridge.get_logger().error(f"Condition evaluation error in {node.get('id')}: {e} (expression: {resolved_expr!r})")
             return False, 'false', str(e)
 
     if ntype == 'set_variable':
@@ -1244,6 +1248,42 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                     return
 
                 node_label = node.get('label') or node.get('title') or node.get('name') or curr_id
+                ntype_label = node.get('type', '')
+                params_label = node.get('params', {})
+                # Build a human-friendly label for commonly-used node types so the
+                # robot UI shows "Driving to kitchen" rather than "Drive to Saved Place".
+                if ntype_label == 'navigate_waypoint':
+                    wp_name = params_label.get('waypoint') or params_label.get('location') or ''
+                    node_label = f"Driving to {wp_name}" if wp_name else "Navigating to waypoint"
+                elif ntype_label == 'navigate_coordinates':
+                    node_label = "Driving to coordinates"
+                elif ntype_label == 'dock':
+                    node_label = "Docking robot"
+                elif ntype_label == 'undock':
+                    node_label = "Undocking robot"
+                elif ntype_label in ('ui_speech', 'speech'):
+                    speech_text = str(params_label.get('text', '') or params_label.get('message', ''))
+                    node_label = f"Speaking: {speech_text[:45]}{'…' if len(speech_text) > 45 else ''}" if speech_text else "Speaking"
+                elif ntype_label == 'ui_notification':
+                    notif_title = str(params_label.get('title', '') or params_label.get('message', ''))
+                    node_label = f"Notifying: {notif_title[:40]}{'…' if len(notif_title) > 40 else ''}" if notif_title else "Sending notification"
+                elif ntype_label in ('ui_choice', 'ui_form', 'ui_input'):
+                    prompt = str(params_label.get('prompt', '') or params_label.get('question', '') or params_label.get('title', ''))
+                    node_label = f"Waiting: {prompt[:45]}{'…' if len(prompt) > 45 else ''}" if prompt else "Awaiting user input"
+                elif ntype_label == 'condition':
+                    node_label = node.get('label') or "Evaluating condition"
+                elif ntype_label in ('delay', 'wait'):
+                    duration = params_label.get('duration') or params_label.get('seconds') or ''
+                    node_label = f"Waiting {duration}s" if duration else "Waiting"
+                elif ntype_label in ('api_call', 'http_request'):
+                    node_label = node.get('label') or "Calling API"
+                elif ntype_label == 'set_variable':
+                    key = params_label.get('key') or params_label.get('name') or ''
+                    node_label = f"Setting {key}" if key else "Setting variable"
+                else:
+                    # Fall back to whatever label the user gave the node
+                    node_label = node.get('label') or node.get('title') or node.get('name') or ntype_label or curr_id
+
                 RUNNER.active_nodes.add(curr_id)
                 RUNNER.active_node_id = ", ".join(RUNNER.active_nodes)
                 RUNNER.active_node_type = node.get('type')

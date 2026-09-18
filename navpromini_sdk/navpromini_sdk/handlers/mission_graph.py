@@ -749,10 +749,24 @@ class _SafeConditionVisitor(ast.NodeVisitor):
 
 
 def evaluate_condition_safely(expression: str, context: dict) -> bool:
-    """Safely evaluates a boolean condition string against execution context."""
+    """Safely evaluates a boolean condition string against execution context.
+
+    Template tokens like ``{var}`` and ``{{var}}`` are resolved against context
+    *before* the expression is handed to the AST evaluator.  Without this step,
+    ``{dinner_query} == "Yes"`` would be parsed by Python's AST as a set-literal
+    (``{<Name>}``), which is not in ALLOWED_NODES and would always raise an
+    error, causing the condition to silently evaluate to ``False``.
+    """
     expr = expression.strip()
     if not expr:
         return True
+    # Pre-resolve {var} / {{var}} template tokens so the resulting string is
+    # a plain Python expression the AST evaluator can handle safely.
+    resolved = resolve_template_value(expr, context)
+    if not isinstance(resolved, str):
+        # resolve_template_value returned a native Python value (e.g. True/False/int)
+        return bool(resolved)
+    expr = resolved
     return _SafeConditionVisitor(context).eval(expr)
 
 
