@@ -180,10 +180,13 @@ class _MissionRunner:
 
     def __init__(self) -> None:
         self.mission_id: str | None = None
+        self.mission_name: str | None = None
         self.state = 'idle'   # idle | running | paused | completed | failed | canceled | waiting_for_user
         self.step_index = -1
         self.active_node_id: str | None = None
         self.active_node_type: str | None = None
+        self.active_node_label: str | None = None
+        self.progress_pct: int = 0
         self.active_interaction: dict | None = None
         self.interaction_future: asyncio.Future | None = None
         self.context: dict = {}
@@ -202,15 +205,18 @@ class _MissionRunner:
         self.active_nodes: set[str] = set()
 
     def snapshot(self) -> dict:
-        is_active = self.state in ('running', 'waiting_for_user', 'paused')
+        is_active = self.state in ('running', 'waiting_for_user', 'paused', 'charging_paused')
         return {
             'mission_id': self.mission_id,
+            'mission_name': self.mission_name or self.mission_id,
             'state': self.state,
             'status': self.state,
             'step_index': self.step_index,
             'active_node_id': self.active_node_id if is_active else None,
             'active_node_type': self.active_node_type if is_active else None,
+            'active_node_label': self.active_node_label if is_active else None,
             'active_nodes': list(self.active_nodes) if is_active else [],
+            'progress_pct': self.progress_pct if is_active else (100 if self.state == 'completed' else 0),
             'last_node_id': self.active_node_id,
             'active_interaction': self.active_interaction,
             'loop_index': self.loop_index,
@@ -862,7 +868,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         finally:
             RUNNER.active_interaction = None
             RUNNER.interaction_future = None
-            if RUNNER.state == 'waiting_for_user':
+            if RUNNER.state == 'waiting_for_user' and not RUNNER.cancel_requested:
                 RUNNER.state = 'running'
             bridge.emit_event('mission.ui_interaction_dismissed', {'interaction_id': interaction_id})
 
@@ -915,7 +921,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         finally:
             RUNNER.active_interaction = None
             RUNNER.interaction_future = None
-            if RUNNER.state == 'waiting_for_user':
+            if RUNNER.state == 'waiting_for_user' and not RUNNER.cancel_requested:
                 RUNNER.state = 'running'
             bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
 
@@ -1002,7 +1008,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         finally:
             RUNNER.active_interaction = None
             RUNNER.interaction_future = None
-            if RUNNER.state == 'waiting_for_user':
+            if RUNNER.state == 'waiting_for_user' and not RUNNER.cancel_requested:
                 RUNNER.state = 'running'
             bridge.emit_event('mission.ui_interaction_dismissed', {'interaction_id': interaction_id})
 
@@ -1139,6 +1145,9 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
         entrypoint = nodes[0]['id']
 
     RUNNER.mission_id = mission['id']
+    RUNNER.mission_name = mission.get('name') or mission.get('id')
+    RUNNER.progress_pct = 0
+    RUNNER.active_node_label = None
     RUNNER.state = 'running'
     RUNNER.started_at = time.time()
     RUNNER.context = dict(initial_context) if initial_context is not None else {
@@ -1231,10 +1240,15 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                     bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
                     return
 
+                node_label = node.get('label') or node.get('title') or node.get('name') or curr_id
                 RUNNER.active_nodes.add(curr_id)
                 RUNNER.active_node_id = ", ".join(RUNNER.active_nodes)
                 RUNNER.active_node_type = node.get('type')
+                RUNNER.active_node_label = node_label
                 RUNNER.context['history'].append(curr_id)
+                total_nodes = len(nodes) if nodes else 1
+                history_len = len(RUNNER.context.get('history', []))
+                RUNNER.progress_pct = min(99, int((history_len / max(1, total_nodes)) * 100))
 
                 batt = bridge.get('battery') or {}
                 RUNNER.context['system']['battery_pct'] = batt.get('percentage', 0.0)
@@ -1264,9 +1278,11 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
 
                 bridge.emit_event('mission.node_started', {
                     'mission_id': mission['id'],
+                    'mission_name': RUNNER.mission_name,
                     'node_id': curr_id,
                     'node_type': node.get('type'),
-                    'label': node.get('label') or node.get('title') or curr_id,
+                    'label': node_label,
+                    'progress_pct': RUNNER.progress_pct,
                 })
 
                 ok, output_port, message = await _execute_graph_node(bridge, opts, node, RUNNER.context, mission)
@@ -1276,10 +1292,12 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
 
                 bridge.emit_event('mission.node_completed', {
                     'mission_id': mission['id'],
+                    'mission_name': RUNNER.mission_name,
                     'node_id': curr_id,
                     'output_port': output_port,
                     'ok': ok,
                     'message': message,
+                    'progress_pct': RUNNER.progress_pct,
                 })
 
                 if RUNNER.cancel_requested or (not ok and output_port == 'cancelled'):
@@ -1318,8 +1336,10 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                         bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': curr_id})
                     else:
                         RUNNER.state = 'completed'
+                        RUNNER.progress_pct = 100
+                        RUNNER.active_node_label = 'Completed'
                         RUNNER.message = message
-                        bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'message': message})
+                        bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'mission_name': RUNNER.mission_name, 'message': message, 'progress_pct': 100})
                     return
 
                 matching_edges = [
@@ -1360,7 +1380,9 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
 
         if RUNNER.state == 'running':
             RUNNER.state = 'completed'
-            bridge.emit_event('mission.completed', {'mission_id': mission['id']})
+            RUNNER.progress_pct = 100
+            RUNNER.active_node_label = 'Completed'
+            bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'mission_name': RUNNER.mission_name, 'progress_pct': 100})
     finally:
         stop_battery_monitor.set()
         monitor_task.cancel()
@@ -1395,16 +1417,22 @@ async def _run_mission(bridge, opts, mission: dict, initial_context: Optional[di
     loop_count = max(1, int(mission.get('loop_count', 1)))
 
     RUNNER.mission_id = mission['id']
+    RUNNER.mission_name = mission.get('name') or mission.get('id')
     RUNNER.state = 'running'
     RUNNER.step_index = 0
     RUNNER.loop_index = 0
     RUNNER.loop_total = None if loop_forever else loop_count
     RUNNER.message = ''
+    RUNNER.progress_pct = 0
+    RUNNER.active_node_label = None
     RUNNER.started_at = time.time()
     RUNNER.cancel_requested = False
     RUNNER.pause_requested = False
     RUNNER.pause_reason = None
-    bridge.emit_event('mission.started', {'mission_id': mission['id']})
+    bridge.emit_event('mission.started', {
+        'mission_id': mission['id'],
+        'mission_name': RUNNER.mission_name,
+    })
 
     stop_battery_monitor = asyncio.Event()
 
@@ -1467,6 +1495,19 @@ async def _run_mission(bridge, opts, mission: dict, initial_context: Optional[di
                     bridge.emit_event('mission.resumed', {'mission_id': mission['id'],
                                                            'step_index': RUNNER.step_index})
 
+                step_obj = steps[RUNNER.step_index]
+                step_type = step_obj.get('type', 'step')
+                RUNNER.active_node_label = f"Step {RUNNER.step_index + 1}: {step_type.capitalize()}"
+                RUNNER.progress_pct = min(99, int((RUNNER.step_index / max(1, len(steps))) * 100))
+                bridge.emit_event('mission.node_started', {
+                    'mission_id': mission['id'],
+                    'mission_name': RUNNER.mission_name,
+                    'node_id': f"step_{RUNNER.step_index + 1}",
+                    'node_type': step_type,
+                    'label': RUNNER.active_node_label,
+                    'progress_pct': RUNNER.progress_pct,
+                })
+
                 ok, message = await _run_step(bridge, store, steps[RUNNER.step_index])
                 if not ok:
                     if RUNNER.pause_reason == 'low_battery':
@@ -1494,8 +1535,14 @@ async def _run_mission(bridge, opts, mission: dict, initial_context: Optional[di
                                                              'loop_index': RUNNER.loop_index})
 
         RUNNER.state = 'completed'
+        RUNNER.progress_pct = 100
+        RUNNER.active_node_label = 'Completed'
         RUNNER.step_index = max(0, len(steps) - 1)
-        bridge.emit_event('mission.completed', {'mission_id': mission['id']})
+        bridge.emit_event('mission.completed', {
+            'mission_id': mission['id'],
+            'mission_name': RUNNER.mission_name,
+            'progress_pct': 100,
+        })
     finally:
         stop_battery_monitor.set()
         monitor_task.cancel()
