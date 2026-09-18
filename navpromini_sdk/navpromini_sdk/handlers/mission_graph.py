@@ -267,6 +267,26 @@ NODE_CATALOG = {
             "target": {"type": "string", "enum": ["robot_screen", "operator_app", "both"], "default": "robot_screen"},
         },
     },
+    "ui_notification": {
+        "type": "ui_notification",
+        "category": "hri",
+        "title": "Show Notification",
+        "description": "Displays a notification banner/card with Title, Description, and an OK button.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "confirmed", "label": "OK", "color": "#4CAF50"},
+            {"id": "timeout", "label": "Timeout", "color": "#FF9800"},
+        ],
+        "params_schema": {
+            "title": {"type": "string", "default": "Notice", "description": "Notification title"},
+            "message": {"type": "string", "default": "", "description": "Notification description/details"},
+            "button_text": {"type": "string", "default": "OK", "description": "Confirmation button label"},
+            "timeout_sec": {"type": "number", "default": 30.0, "description": "Auto-dismiss timeout in seconds (0 for indefinite)"},
+            "sound_alert": {"type": "boolean", "default": True, "description": "Play notification chime"},
+            "speech_text": {"type": "string", "description": "Optional TTS speech to announce with notification"},
+            "target": {"type": "string", "enum": ["robot_screen", "operator_app", "both"], "default": "robot_screen"},
+        },
+    },
     "ui_media": {
         "type": "ui_media",
         "category": "hri",
@@ -523,6 +543,9 @@ def validate_graph_mission(data: dict) -> Tuple[List[dict], List[dict], str]:
                 "media": "ui_media",
                 "ask_choice": "ui_choice",
                 "ask_info": "ui_interaction",
+                "notification": "ui_notification",
+                "show_notification": "ui_notification",
+                "alert": "ui_notification",
             }
             if ntype in aliases:
                 node["type"] = aliases[ntype]
@@ -570,6 +593,60 @@ def validate_graph_mission(data: dict) -> Tuple[List[dict], List[dict], str]:
             "to_node": to_node,
             "to_port": to_port,
         })
+
+    # Fail-safe validation: Ensure concurrent/parallel branches do not execute conflicting motion nodes
+    EXCLUSIVE_MOTION_NODES = {
+        'navigate_waypoint', 'navigate_coordinates', 'navigate', 'goto',
+        'dock', 'undock', 'patrol_loop', 'relocalize', 'jog_motion'
+    }
+
+    forks: dict[tuple[str, str], list[str]] = {}
+    for edge in edges:
+        key = (edge['from_node'], edge['from_port'])
+        forks.setdefault(key, []).append(edge['to_node'])
+
+    adj: dict[str, list[str]] = {}
+    for edge in edges:
+        adj.setdefault(edge['from_node'], []).append(edge['to_node'])
+
+    nodes_dict = {n['id']: n for n in nodes}
+
+    def _get_branch_motion_nodes(start_nid: str) -> list[str]:
+        visited = set()
+        queue = [start_nid]
+        motions = []
+        while queue:
+            curr = queue.pop(0)
+            if curr in visited:
+                continue
+            visited.add(curr)
+            cnode = nodes_dict.get(curr)
+            if cnode and cnode.get('type') in EXCLUSIVE_MOTION_NODES:
+                label = cnode.get('label') or cnode.get('title') or curr
+                motions.append(f"{cnode.get('type')} ('{label}')")
+            for nxt in adj.get(curr, []):
+                if nxt not in visited:
+                    queue.append(nxt)
+        return motions
+
+    for (from_node, from_port), targets in forks.items():
+        unique_targets = list(dict.fromkeys(targets))
+        if len(unique_targets) > 1:
+            motion_branches = []
+            for tgt in unique_targets:
+                m_nodes = _get_branch_motion_nodes(tgt)
+                if m_nodes:
+                    motion_branches.append((tgt, m_nodes))
+            if len(motion_branches) > 1:
+                conflict_details = "; ".join([f"Path via '{tgt}': {', '.join(mnodes)}" for tgt, mnodes in motion_branches])
+                source_label = nodes_dict.get(from_node, {}).get('label') or from_node
+                raise ApiError(
+                    400,
+                    "parallel_motion_conflict",
+                    f"Safety Violation: Step '{source_label}' branches into parallel paths that both contain robot movement ({conflict_details}). "
+                    "The robot cannot execute multiple navigation or docking actions concurrently. "
+                    "Please sequence movements one after another, or run non-movement actions (such as voice announcements or screen notifications) in parallel."
+                )
 
     return nodes, edges, entrypoint
 

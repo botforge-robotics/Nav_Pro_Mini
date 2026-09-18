@@ -198,6 +198,8 @@ class _MissionRunner:
         self.cancel_requested = False
         self.pause_requested = False
         self.pause_reason: str | None = None
+        self.motion_lock: asyncio.Lock = asyncio.Lock()
+        self.active_nodes: set[str] = set()
 
     def snapshot(self) -> dict:
         is_active = self.state in ('running', 'waiting_for_user', 'paused')
@@ -208,6 +210,7 @@ class _MissionRunner:
             'step_index': self.step_index,
             'active_node_id': self.active_node_id if is_active else None,
             'active_node_type': self.active_node_type if is_active else None,
+            'active_nodes': list(self.active_nodes) if is_active else [],
             'last_node_id': self.active_node_id,
             'active_interaction': self.active_interaction,
             'loop_index': self.loop_index,
@@ -449,32 +452,40 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         return True, 'next', 'Started'
 
     if ntype in ('navigate', 'navigate_waypoint'):
-        target = params.get('waypoint') or params.get('target')
-        if isinstance(target, str):
-            target = resolve_template_value(target, context)
-            wp = store.get_waypoint(target)
-            if wp is None:
-                return False, 'failed', f"Waypoint {target!r} not found"
-            target_dict = {'waypoint': wp['name'], 'x': wp['x'], 'y': wp['y'], 'theta': wp.get('theta', 0.0)}
-        else:
-            target_dict = {
-                'x': float(params.get('x', 0.0)),
-                'y': float(params.get('y', 0.0)),
-                'theta': float(params.get('theta', 0.0)),
-            }
-        res = await navigate_to(bridge, target_dict)
-        return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+        if RUNNER.motion_lock.locked():
+            bridge.get_logger().error(f"Safety lockout: Node {node.get('id')} attempted navigation while another motion is active!")
+            return False, 'failed', "Safety lockout: Concurrent navigation attempted"
+        async with RUNNER.motion_lock:
+            target = params.get('waypoint') or params.get('target')
+            if isinstance(target, str):
+                target = resolve_template_value(target, context)
+                wp = store.get_waypoint(target)
+                if wp is None:
+                    return False, 'failed', f"Waypoint {target!r} not found"
+                target_dict = {'waypoint': wp['name'], 'x': wp['x'], 'y': wp['y'], 'theta': wp.get('theta', 0.0)}
+            else:
+                target_dict = {
+                    'x': float(params.get('x', 0.0)),
+                    'y': float(params.get('y', 0.0)),
+                    'theta': float(params.get('theta', 0.0)),
+                }
+            res = await navigate_to(bridge, target_dict)
+            return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
 
     if ntype == 'navigate_coordinates':
-        try:
-            x_val = float(resolve_template_value(params.get('x', 0.0), context))
-            y_val = float(resolve_template_value(params.get('y', 0.0), context))
-            th_val = float(resolve_template_value(params.get('theta', 0.0), context))
-        except (ValueError, TypeError) as conv_err:
-            return False, 'failed', f"Invalid coordinate value: {conv_err}"
-        target_dict = {'x': x_val, 'y': y_val, 'theta': th_val}
-        res = await navigate_to(bridge, target_dict)
-        return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+        if RUNNER.motion_lock.locked():
+            bridge.get_logger().error(f"Safety lockout: Node {node.get('id')} attempted navigation while another motion is active!")
+            return False, 'failed', "Safety lockout: Concurrent navigation attempted"
+        async with RUNNER.motion_lock:
+            try:
+                x_val = float(resolve_template_value(params.get('x', 0.0), context))
+                y_val = float(resolve_template_value(params.get('y', 0.0), context))
+                th_val = float(resolve_template_value(params.get('theta', 0.0), context))
+            except (ValueError, TypeError) as conv_err:
+                return False, 'failed', f"Invalid coordinate value: {conv_err}"
+            target_dict = {'x': x_val, 'y': y_val, 'theta': th_val}
+            res = await navigate_to(bridge, target_dict)
+            return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
 
     if ntype in ('wait', 'wait_timer'):
         dur = float(params.get('duration_sec', params.get('duration', 5.0)))
@@ -528,30 +539,34 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             return True, 'completed', f"Loop completed ({count} iterations)"
 
     if ntype == 'patrol_loop':
-        waypoints_list = params.get('waypoints') or []
-        laps = int(params.get('laps', 1))
-        dwell_sec = float(params.get('dwell_sec', 2.0))
-        store = opts['store']
+        if RUNNER.motion_lock.locked():
+            bridge.get_logger().error(f"Safety lockout: Node {node.get('id')} attempted patrol while another motion is active!")
+            return False, 'failed', "Safety lockout: Concurrent patrol attempted"
+        async with RUNNER.motion_lock:
+            waypoints_list = params.get('waypoints') or []
+            laps = int(params.get('laps', 1))
+            dwell_sec = float(params.get('dwell_sec', 2.0))
+            store = opts['store']
 
-        if not waypoints_list:
-            return False, 'failed', "No waypoints provided for patrol loop"
+            if not waypoints_list:
+                return False, 'failed', "No waypoints provided for patrol loop"
 
-        lap = 0
-        while laps == 0 or lap < laps:
-            lap += 1
-            for wp_name in waypoints_list:
-                if RUNNER.cancel_requested:
-                    return False, 'interrupted', "Patrol cancelled by operator"
-                wp = store.get_waypoint(wp_name)
-                if not wp:
-                    return False, 'failed', f"Patrol waypoint {wp_name!r} not found"
-                target_dict = {'waypoint': wp['name'], 'x': wp['x'], 'y': wp['y'], 'theta': wp.get('theta', 0.0)}
-                res = await navigate_to(bridge, target_dict)
-                if not res.get('ok'):
-                    return False, 'failed', f"Failed navigation to {wp_name}: {res.get('message')}"
-                if dwell_sec > 0:
-                    await asyncio.sleep(dwell_sec)
-        return True, 'completed', f"Completed {lap} patrol laps"
+            lap = 0
+            while laps == 0 or lap < laps:
+                lap += 1
+                for wp_name in waypoints_list:
+                    if RUNNER.cancel_requested:
+                        return False, 'interrupted', "Patrol cancelled by operator"
+                    wp = store.get_waypoint(wp_name)
+                    if not wp:
+                        return False, 'failed', f"Patrol waypoint {wp_name!r} not found"
+                    target_dict = {'waypoint': wp['name'], 'x': wp['x'], 'y': wp['y'], 'theta': wp.get('theta', 0.0)}
+                    res = await navigate_to(bridge, target_dict)
+                    if not res.get('ok'):
+                        return False, 'failed', f"Failed navigation to {wp_name}: {res.get('message')}"
+                    if dwell_sec > 0:
+                        await asyncio.sleep(dwell_sec)
+            return True, 'completed', f"Completed {lap} patrol laps"
 
     if ntype == 'battery_guard':
         min_pct = float(params.get('min_battery_pct', 20.0))
@@ -566,12 +581,20 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             return True, 'low_battery', f"Low battery: {pct:.1f}% < {min_pct}% (charging: {charging})"
 
     if ntype == 'dock':
-        res = await dock_robot(bridge, bool(params.get('navigate_to_staging', True)))
-        return (True, 'docked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+        if RUNNER.motion_lock.locked():
+            bridge.get_logger().error(f"Safety lockout: Node {node.get('id')} attempted dock while another motion is active!")
+            return False, 'failed', "Safety lockout: Concurrent docking attempted"
+        async with RUNNER.motion_lock:
+            res = await dock_robot(bridge, bool(params.get('navigate_to_staging', True)))
+            return (True, 'docked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
 
     if ntype == 'undock':
-        res = await undock_robot(bridge)
-        return (True, 'undocked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+        if RUNNER.motion_lock.locked():
+            bridge.get_logger().error(f"Safety lockout: Node {node.get('id')} attempted undock while another motion is active!")
+            return False, 'failed', "Safety lockout: Concurrent undocking attempted"
+        async with RUNNER.motion_lock:
+            res = await undock_robot(bridge)
+            return (True, 'undocked', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
 
     if ntype == 'condition':
         expr = params.get('expression', 'True')
@@ -916,6 +939,73 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 await asyncio.sleep(speech_dur)
         return True, 'done', 'Speech completed'
 
+    if ntype in ('ui_notification', 'notification', 'alert'):
+        interaction_id = f"ui_notif_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+        timeout_sec = float(params.get('timeout_sec', 30.0))
+        btn_text = str(params.get('button_text', params.get('confirm_text', 'OK'))).strip() or 'OK'
+        target = str(params.get('target', 'robot_screen')).lower()
+        if target not in ('robot_screen', 'operator_app', 'both'):
+            target = 'robot_screen'
+
+        title = resolve_template_value(params.get('title', 'Notification'), context)
+        message = resolve_template_value(params.get('message', ''), context)
+        speech_text = resolve_template_value(params.get('speech_text'), context)
+        sound_alert = bool(params.get('sound_alert', True))
+
+        if speech_text:
+            try:
+                from ..audio import play_speech
+                play_speech(speech_text, wait=False)
+            except Exception as exc:
+                bridge.get_logger().warn(f"TTS synthesis error for notification: {exc}")
+
+        interaction_data = {
+            'interaction_id': interaction_id,
+            'mission_id': RUNNER.mission_id,
+            'node_id': node['id'],
+            'subtype': 'notification',
+            'raw_subtype': 'notification',
+            'interaction_type': 'notification',
+            'type': 'notification',
+            'target': target,
+            'title': title,
+            'message': message,
+            'button_text': btn_text,
+            'options': [btn_text],
+            'choices': [btn_text],
+            'buttons': [btn_text],
+            'speech_text': speech_text,
+            'sound_alert': sound_alert,
+            'timeout_sec': timeout_sec,
+            'default_option': 'timeout',
+            'started_at': time.time(),
+        }
+
+        RUNNER.active_interaction = interaction_data
+        RUNNER.state = 'waiting_for_user'
+        bridge.emit_event('mission.ui_interaction', interaction_data)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        RUNNER.interaction_future = future
+
+        try:
+            if timeout_sec > 0:
+                resp_data = await asyncio.wait_for(future, timeout=timeout_sec)
+            else:
+                resp_data = await future
+            return True, 'confirmed', f"Notification acknowledged: {btn_text}"
+        except asyncio.CancelledError:
+            return False, 'cancelled', "Notification cancelled"
+        except asyncio.TimeoutError:
+            return True, 'timeout', "Notification timed out"
+        finally:
+            RUNNER.active_interaction = None
+            RUNNER.interaction_future = None
+            if RUNNER.state == 'waiting_for_user':
+                RUNNER.state = 'running'
+            bridge.emit_event('mission.ui_interaction_dismissed', {'interaction_id': interaction_id})
+
     if ntype == 'notify':
         oled = params.get('oled_text')
         led = params.get('led_cmd')
@@ -1119,122 +1209,146 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
     monitor_task = asyncio.create_task(_battery_watcher())
 
     try:
-        while current_node_id and visited_count < max_transitions:
-            visited_count += 1
-            node = nodes_by_id.get(current_node_id)
-            if not node:
-                RUNNER.state = 'failed'
-                RUNNER.message = f"Node {current_node_id!r} not found in graph"
-                bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
-                return
+        visited_lock = asyncio.Lock()
 
-            RUNNER.active_node_id = current_node_id
-            RUNNER.active_node_type = node.get('type')
-            RUNNER.context['history'].append(current_node_id)
+        async def _execute_branch(start_node_id: str) -> None:
+            nonlocal visited_count
+            curr_id = start_node_id
 
-            batt = bridge.get('battery') or {}
-            RUNNER.context['system']['battery_pct'] = batt.get('percentage', 0.0)
-            RUNNER.context['system']['is_charging'] = bool(batt.get('charging'))
-
-            if RUNNER.cancel_requested:
-                RUNNER.state = 'canceled'
-                bridge.emit_event('mission.canceled', {'mission_id': mission['id'], 'node_id': current_node_id})
-                return
-
-            if RUNNER.pause_requested:
-                if RUNNER.pause_reason == 'low_battery':
-                    await _handle_low_battery_dock_and_resume(bridge, opts, mission)
-                    if RUNNER.cancel_requested:
-                        RUNNER.state = 'canceled'
+            while curr_id and not RUNNER.cancel_requested:
+                async with visited_lock:
+                    visited_count += 1
+                    if visited_count > max_transitions:
+                        RUNNER.state = 'failed'
+                        RUNNER.message = f"Exceeded maximum node transitions ({max_transitions})"
+                        bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
                         return
-                else:
-                    RUNNER.state = 'paused'
-                    bridge.emit_event('mission.paused', {'mission_id': mission['id'], 'node_id': current_node_id})
-                    while RUNNER.pause_requested and not RUNNER.cancel_requested:
-                        await asyncio.sleep(0.2)
-                    if RUNNER.cancel_requested:
-                        RUNNER.state = 'canceled'
-                        return
-                    RUNNER.state = 'running'
-                    bridge.emit_event('mission.resumed', {'mission_id': mission['id'], 'node_id': current_node_id})
 
-            bridge.emit_event('mission.node_started', {
-                'mission_id': mission['id'],
-                'node_id': current_node_id,
-                'node_type': node.get('type'),
-                'label': node.get('label') or node.get('title') or current_node_id,
-            })
-
-            ok, output_port, message = await _execute_graph_node(bridge, opts, node, RUNNER.context, mission)
-
-            bridge.emit_event('mission.node_completed', {
-                'mission_id': mission['id'],
-                'node_id': current_node_id,
-                'output_port': output_port,
-                'ok': ok,
-                'message': message,
-            })
-
-            if RUNNER.cancel_requested or (not ok and output_port == 'cancelled'):
-                RUNNER.state = 'canceled'
-                RUNNER.message = message or 'Mission cancelled'
-                bridge.emit_event('mission.canceled', {'mission_id': mission['id'], 'node_id': current_node_id})
-                return
-
-            if not ok and output_port == 'abort':
-                RUNNER.state = 'failed'
-                RUNNER.message = message
-                bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': current_node_id})
-                return
-
-            if node.get('type') in ('switch_mission', 'redirect_mission') and ok:
-                target_m = getattr(RUNNER, 'switch_target', None)
-                if target_m:
-                    RUNNER.switch_target = None
-                    new_context = getattr(RUNNER, 'switch_context', None)
-                    RUNNER.switch_context = None
-                    bridge.get_logger().info(f"Mission redirection executing: {mission['id']} -> {target_m['id']}")
-                    bridge.emit_event('mission.completed', {
-                        'mission_id': mission['id'],
-                        'message': f"Redirected to mission {target_m['id']}",
-                    })
-                    stop_battery_monitor.set()
-                    monitor_task.cancel()
-                    await _run_mission(bridge, opts, target_m, initial_context=new_context)
+                node = nodes_by_id.get(curr_id)
+                if not node:
+                    RUNNER.state = 'failed'
+                    RUNNER.message = f"Node {curr_id!r} not found in graph"
+                    bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
                     return
 
-            if node.get('type') in ('end', 'mission_end'):
-                status = str(node.get('params', {}).get('status', 'success')).lower()
-                RUNNER.active_node_id = None
-                RUNNER.active_node_type = None
-                if status in ('failed', 'aborted'):
+                RUNNER.active_nodes.add(curr_id)
+                RUNNER.active_node_id = ", ".join(RUNNER.active_nodes)
+                RUNNER.active_node_type = node.get('type')
+                RUNNER.context['history'].append(curr_id)
+
+                batt = bridge.get('battery') or {}
+                RUNNER.context['system']['battery_pct'] = batt.get('percentage', 0.0)
+                RUNNER.context['system']['is_charging'] = bool(batt.get('charging'))
+
+                if RUNNER.cancel_requested:
+                    RUNNER.state = 'canceled'
+                    bridge.emit_event('mission.canceled', {'mission_id': mission['id'], 'node_id': curr_id})
+                    return
+
+                if RUNNER.pause_requested:
+                    if RUNNER.pause_reason == 'low_battery':
+                        await _handle_low_battery_dock_and_resume(bridge, opts, mission)
+                        if RUNNER.cancel_requested:
+                            RUNNER.state = 'canceled'
+                            return
+                    else:
+                        RUNNER.state = 'paused'
+                        bridge.emit_event('mission.paused', {'mission_id': mission['id'], 'node_id': curr_id})
+                        while RUNNER.pause_requested and not RUNNER.cancel_requested:
+                            await asyncio.sleep(0.2)
+                        if RUNNER.cancel_requested:
+                            RUNNER.state = 'canceled'
+                            return
+                        RUNNER.state = 'running'
+                        bridge.emit_event('mission.resumed', {'mission_id': mission['id'], 'node_id': curr_id})
+
+                bridge.emit_event('mission.node_started', {
+                    'mission_id': mission['id'],
+                    'node_id': curr_id,
+                    'node_type': node.get('type'),
+                    'label': node.get('label') or node.get('title') or curr_id,
+                })
+
+                ok, output_port, message = await _execute_graph_node(bridge, opts, node, RUNNER.context, mission)
+
+                RUNNER.active_nodes.discard(curr_id)
+                RUNNER.active_node_id = ", ".join(RUNNER.active_nodes) if RUNNER.active_nodes else None
+
+                bridge.emit_event('mission.node_completed', {
+                    'mission_id': mission['id'],
+                    'node_id': curr_id,
+                    'output_port': output_port,
+                    'ok': ok,
+                    'message': message,
+                })
+
+                if RUNNER.cancel_requested or (not ok and output_port == 'cancelled'):
+                    RUNNER.state = 'canceled'
+                    RUNNER.message = message or 'Mission cancelled'
+                    bridge.emit_event('mission.canceled', {'mission_id': mission['id'], 'node_id': curr_id})
+                    return
+
+                if not ok and output_port == 'abort':
                     RUNNER.state = 'failed'
                     RUNNER.message = message
-                    bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': current_node_id})
-                else:
-                    RUNNER.state = 'completed'
-                    RUNNER.message = message
-                    bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'message': message})
-                return
+                    bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': curr_id})
+                    return
 
-            matching_edges = [
-                e for e in edges
-                if e.get('from_node') == current_node_id and str(e.get('from_port', '')).lower() == str(output_port).lower()
-            ]
-            if not matching_edges:
+                if node.get('type') in ('switch_mission', 'redirect_mission') and ok:
+                    target_m = getattr(RUNNER, 'switch_target', None)
+                    if target_m:
+                        RUNNER.switch_target = None
+                        new_context = getattr(RUNNER, 'switch_context', None)
+                        RUNNER.switch_context = None
+                        bridge.get_logger().info(f"Mission redirection executing: {mission['id']} -> {target_m['id']}")
+                        bridge.emit_event('mission.completed', {
+                            'mission_id': mission['id'],
+                            'message': f"Redirected to mission {target_m['id']}",
+                        })
+                        stop_battery_monitor.set()
+                        monitor_task.cancel()
+                        await _run_mission(bridge, opts, target_m, initial_context=new_context)
+                        return
+
+                if node.get('type') in ('end', 'mission_end'):
+                    status = str(node.get('params', {}).get('status', 'success')).lower()
+                    if status in ('failed', 'aborted'):
+                        RUNNER.state = 'failed'
+                        RUNNER.message = message
+                        bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': message, 'node_id': curr_id})
+                    else:
+                        RUNNER.state = 'completed'
+                        RUNNER.message = message
+                        bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'message': message})
+                    return
+
                 matching_edges = [
                     e for e in edges
-                    if e.get('from_node') == current_node_id and str(e.get('from_port', '')).lower() in ('next', 'out', 'selected', 'submitted')
+                    if e.get('from_node') == curr_id and str(e.get('from_port', '')).lower() == str(output_port).lower()
                 ]
+                if not matching_edges:
+                    matching_edges = [
+                        e for e in edges
+                        if e.get('from_node') == curr_id and str(e.get('from_port', '')).lower() in ('next', 'out', 'selected', 'submitted', 'done', 'confirmed', 'completed', 'ok')
+                    ]
 
-            if not matching_edges:
-                bridge.get_logger().info(f"Mission {mission['id']}: terminal node reached at {current_node_id} (port: {output_port})")
-                current_node_id = None
-                break
+                if not matching_edges:
+                    bridge.get_logger().info(f"Mission {mission['id']}: terminal branch reached at {curr_id} (port: {output_port})")
+                    break
 
-            next_edge = matching_edges[0]
-            current_node_id = next_edge.get('to_node')
+                target_node_ids = list(dict.fromkeys([e.get('to_node') for e in matching_edges if e.get('to_node')]))
+                if len(target_node_ids) == 1:
+                    curr_id = target_node_ids[0]
+                elif len(target_node_ids) > 1:
+                    bridge.get_logger().info(f"Mission {mission['id']}: executing {len(target_node_ids)} parallel branches concurrently from {curr_id}")
+                    await asyncio.gather(*[_execute_branch(t_id) for t_id in target_node_ids])
+                    return
+                else:
+                    break
 
+        await _execute_branch(entrypoint)
+
+        RUNNER.active_nodes.clear()
         RUNNER.active_node_id = None
         RUNNER.active_node_type = None
 
@@ -1244,8 +1358,9 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
             bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message})
             return
 
-        RUNNER.state = 'completed'
-        bridge.emit_event('mission.completed', {'mission_id': mission['id']})
+        if RUNNER.state == 'running':
+            RUNNER.state = 'completed'
+            bridge.emit_event('mission.completed', {'mission_id': mission['id']})
     finally:
         stop_battery_monitor.set()
         monitor_task.cancel()
