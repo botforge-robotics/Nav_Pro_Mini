@@ -248,6 +248,12 @@ class RosBridge(Node):
             'timestamp': time.time(),
             'data': data or {},
         })
+        try:
+            from .audio import handle_event_audio
+            handle_event_audio(name, data)
+        except Exception as exc:
+            self.get_logger().debug(f"Event audio dispatcher error: {exc}")
+
 
     def publish_mode(self, mode_name: str) -> None:
         try:

@@ -93,6 +93,7 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/system/app/update/status', system.AppUpdateStatusHandler, opts),
         (rf'{API}/system/app/update/rollback', system.AppUpdateRollbackHandler, opts),
         (rf'{API}/system/speak', system.SystemSpeakHandler, opts),
+        (rf'{API}/system/play_sound', system.SystemPlaySoundHandler, opts),
         # state
         (rf'{API}/state', state.RobotStateHandler, opts),
         (rf'{API}/state/pose', state.PoseHandler, opts),

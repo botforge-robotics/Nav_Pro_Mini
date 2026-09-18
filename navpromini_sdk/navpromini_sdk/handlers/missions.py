@@ -45,6 +45,7 @@ from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.utilities import get_action, get_service
 
 import os
+import subprocess
 import uuid
 import requests
 from .base import ApiError, BaseHandler
@@ -887,17 +888,13 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 pass
             bridge.get_logger().info(f"[TTS Announcement]: {text}")
             bridge.emit_event('mission.speech', {'text': text, 'node_id': node['id']})
+            wait_done = bool(params.get('wait_completion', True))
             try:
-                import shutil
-                if shutil.which('spd-say'):
-                    subprocess.Popen(['spd-say', '-t', 'female1', text])
-                elif shutil.which('espeak-ng'):
-                    subprocess.Popen(['espeak-ng', '-s', '150', text])
-                elif shutil.which('espeak'):
-                    subprocess.Popen(['espeak', '-s', '150', text])
+                from ..audio import play_speech
+                play_speech(text, wait=wait_done)
             except Exception as exc:
                 bridge.get_logger().warn(f"TTS synthesis execution error: {exc}")
-            if bool(params.get('wait_completion', True)):
+            if wait_done:
                 speech_dur = min(15.0, max(1.5, len(text) / 12.0 + 0.8))
                 await asyncio.sleep(speech_dur)
         return True, 'done', 'Speech completed'
@@ -989,6 +986,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 bridge.publish_led_command("blink,255,0,0")
             except:
                 pass
+            bridge.emit_event('motion.estop')
         # Cancel any active navigation
         await cancel_active_goal(bridge, "Emergency stop")
         return True, 'stopped', "Emergency stop executed"

@@ -710,17 +710,36 @@ class SystemSpeakHandler(BaseHandler):
 
         self.bridge.get_logger().info(f"[Cute Voice TTS]: {text}")
         try:
-            if shutil.which('navpro-speak'):
-                subprocess.Popen(['navpro-speak', text])
-            elif shutil.which('spd-say'):
-                subprocess.Popen(['spd-say', '-p', '80', '-t', 'female1', text])
-            elif shutil.which('espeak-ng'):
-                subprocess.Popen(['espeak-ng', '-v', 'en+f4', '-p', '80', '-s', '145', text])
-            else:
-                raise ApiError(500, 'no_tts_engine', 'No TTS engine found on host')
+            from ..audio import play_speech
+            play_speech(text, wait=False)
             self.send({'status': 'speaking', 'text': text})
         except Exception as exc:
             raise ApiError(500, 'speak_failed', str(exc))
+
+
+class SystemPlaySoundHandler(BaseHandler):
+    """POST /api/v1/system/play_sound - play audio tone chime and/or cute voice announcement."""
+
+    def post(self) -> None:
+        try:
+            body = json.loads(self.request.body.decode('utf-8') or '{}')
+        except Exception:
+            body = {}
+        sound = str(body.get('sound', '')).strip()
+        speech = str(body.get('speech', '')).strip() or None
+        if not sound and not speech:
+            raise ApiError(400, 'missing_parameters', 'Provide at least "sound" or "speech"')
+
+        try:
+            from ..audio import play_sound, play_speech
+            if sound:
+                play_sound(sound, speech_text=speech, wait=False)
+            elif speech:
+                play_speech(speech, wait=False)
+            self.send({'status': 'playing', 'sound': sound, 'speech': speech})
+        except Exception as exc:
+            raise ApiError(500, 'sound_failed', str(exc))
+
 
 
 # -----------------------------------------------------------------------------
