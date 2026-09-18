@@ -1224,7 +1224,7 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
             if not matching_edges:
                 matching_edges = [
                     e for e in edges
-                    if e.get('from_node') == current_node_id and str(e.get('from_port', '')).lower() in ('next', 'out')
+                    if e.get('from_node') == current_node_id and str(e.get('from_port', '')).lower() in ('next', 'out', 'selected', 'submitted')
                 ]
 
             if not matching_edges:
@@ -1494,10 +1494,19 @@ class MissionControlHandler(BaseHandler):
         elif action == 'cancel':
             RUNNER.cancel_requested = True
             if RUNNER.interaction_future and not RUNNER.interaction_future.done():
-                RUNNER.interaction_future.cancel()
+                try:
+                    RUNNER.interaction_future.cancel()
+                except Exception:
+                    pass
             RUNNER.active_interaction = None
             if RUNNER.state == 'waiting_for_user':
                 RUNNER.state = 'canceled'
+            self.bridge.emit_event('mission.ui_interaction_dismissed', {'mission_id': mission_id, 'action': 'cancelled'})
+            self.bridge.emit_event('mission.canceled', {'mission_id': mission_id})
+            try:
+                await cancel_active_goal(self.bridge, "Mission cancelled by user")
+            except Exception:
+                pass
         else:
             raise ApiError(404, 'not_found', f'Unknown mission action {action!r}')
         self.send(RUNNER.snapshot())
