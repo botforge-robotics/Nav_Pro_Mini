@@ -71,6 +71,7 @@ class BatteryNode(Node):
             self.get_logger().error(f'BMS open/probe failed: {exc}')
 
         self._last_full_read = 0.0
+        self._is_full_latched = False
         period = 1.0 / max(rate, 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(
@@ -128,19 +129,32 @@ class BatteryNode(Node):
         )
         is_discharging = (
             snap.charge_state == 2 or
-            snap.pack_current_a < -0.05
+            snap.pack_current_a < -0.15
         )
 
+        # Hysteresis and saturation logic for 4S LiFePO4 / Li-ion top-of-charge:
+        # At 100% SOC (or >= 99.5%), current tapers to <= 0.25A (often oscillating
+        # between 0.0A and 0.1A on Daly 0.1A shunt ADCs). Latch into FULL state
+        # so it remains rock-steady and does not flip-flop between CHARGING and FULL.
         if is_charging:
-            if snap.soc_percent >= 99.95 and snap.pack_current_a < 0.1:
-                msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
+            if (snap.soc_percent >= 99.5 and snap.pack_current_a <= 0.25) or self._is_full_latched:
+                if snap.soc_percent >= 98.0 and not is_discharging:
+                    self._is_full_latched = True
+                    msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
+                else:
+                    self._is_full_latched = False
+                    msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
             else:
+                self._is_full_latched = False
                 msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
         elif is_discharging:
+            self._is_full_latched = False
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
-        elif snap.soc_percent >= 99.95:
+        elif snap.soc_percent >= 99.5:
+            self._is_full_latched = True
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
         else:
+            self._is_full_latched = False
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING
 
         if snap.failure_bits:
