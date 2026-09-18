@@ -726,13 +726,15 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         raw_media = params.get('media_url') or params.get('image_url')
         media_url = resolve_template_value(raw_media, context) if raw_media else None
 
+        norm_subtype = 'form' if subtype in ('dynamic_form', 'form', 'survey') else subtype
         interaction_data = {
             'interaction_id': interaction_id,
             'mission_id': RUNNER.mission_id,
             'node_id': node['id'],
-            'subtype': subtype,
-            'interaction_type': subtype,
-            'type': subtype,
+            'subtype': norm_subtype,
+            'raw_subtype': subtype,
+            'interaction_type': norm_subtype,
+            'type': norm_subtype,
             'target': target,
             'title': resolve_template_value(params.get('title', 'Operator Input'), context),
             'message': resolve_template_value(params.get('message', ''), context),
@@ -758,6 +760,12 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
         try:
             resp_data = await asyncio.wait_for(future, timeout=timeout_sec)
+            if isinstance(resp_data, dict) and 'response' in resp_data and isinstance(resp_data['response'], dict):
+                inner = resp_data['response']
+                for k in ('action', 'selected', 'choice', 'status', 'form_data', 'data'):
+                    if k in inner and k not in resp_data:
+                        resp_data[k] = inner[k]
+
             action = str(resp_data.get('action', 'submit')).strip()
             selected = str(resp_data.get('selected', '')).strip()
             form_data = resp_data.get('form_data') or resp_data.get('data') or {}
@@ -780,7 +788,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 context['variables']['last_choice'] = chosen
                 context['variables']['choice'] = chosen
                 context['variables'][f"{node['id']}_choice"] = chosen
-            elif action.lower() in ('cancel', 'skip'):
+            elif action.lower() in ('cancel', 'skip', 'canceled', 'cancelled'):
                 output_port = 'cancelled'
             elif subtype in ('kiosk', 'destination_picker'):
                 chosen_dest = resp_data.get('destination') or form_data.get('destination') or selected
@@ -810,6 +818,15 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 'output_port': output_port
             })
             return True, output_port, f"User response: {output_port}"
+        except asyncio.CancelledError:
+            bridge.get_logger().info(f"UI interaction {interaction_id} cancelled.")
+            bridge.emit_event('mission.ui_interaction_dismissed', {
+                'interaction_id': interaction_id,
+                'node_id': node['id'],
+                'action': 'cancelled',
+                'output_port': 'cancelled'
+            })
+            return False, 'cancelled', "Mission cancelled while waiting for operator input"
         except asyncio.TimeoutError:
             bridge.get_logger().info(f"UI interaction {interaction_id} timed out after {timeout_sec}s.")
             bridge.emit_event('mission.ui_interaction_dismissed', {
@@ -1158,6 +1175,12 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                 'message': message,
             })
 
+            if RUNNER.cancel_requested or (not ok and output_port == 'cancelled'):
+                RUNNER.state = 'canceled'
+                RUNNER.message = message or 'Mission cancelled'
+                bridge.emit_event('mission.canceled', {'mission_id': mission['id'], 'node_id': current_node_id})
+                return
+
             if not ok and output_port == 'abort':
                 RUNNER.state = 'failed'
                 RUNNER.message = message
@@ -1440,7 +1463,7 @@ class MissionControlHandler(BaseHandler):
 
     async def post(self, mission_id: str, action: str) -> None:
         if action == 'start':
-            if RUNNER.state in ('running', 'paused', 'charging_paused'):
+            if RUNNER.state in ('running', 'waiting_for_user', 'paused', 'charging_paused'):
                 raise ApiError(409, 'mission_active',
                                f'Mission {RUNNER.mission_id!r} is already {RUNNER.state}')
             mission = self.opts['store'].get_mission(mission_id)
@@ -1459,7 +1482,7 @@ class MissionControlHandler(BaseHandler):
             self.send({'accepted': True, 'mission_id': mission_id}, status=202)
             return
 
-        if RUNNER.mission_id != mission_id or RUNNER.state not in ('running', 'paused', 'charging_paused'):
+        if RUNNER.mission_id != mission_id or RUNNER.state not in ('running', 'waiting_for_user', 'paused', 'charging_paused'):
             raise ApiError(409, 'mission_not_active',
                            f'Mission {mission_id!r} is not currently active')
         if action == 'pause':
@@ -1470,6 +1493,11 @@ class MissionControlHandler(BaseHandler):
             RUNNER.pause_reason = None
         elif action == 'cancel':
             RUNNER.cancel_requested = True
+            if RUNNER.interaction_future and not RUNNER.interaction_future.done():
+                RUNNER.interaction_future.cancel()
+            RUNNER.active_interaction = None
+            if RUNNER.state == 'waiting_for_user':
+                RUNNER.state = 'canceled'
         else:
             raise ApiError(404, 'not_found', f'Unknown mission action {action!r}')
         self.send(RUNNER.snapshot())
@@ -1480,11 +1508,14 @@ class ActiveUiInteractionHandler(BaseHandler):
 
     def get(self) -> None:
         inter = RUNNER.active_interaction
-        self.send({
+        resp = {
             'active': inter is not None,
             'active_interaction': inter,
             'interaction': inter,
-        })
+        }
+        if inter and isinstance(inter, dict):
+            resp.update(inter)
+        self.send(resp)
 
 
 class UiResponseHandler(BaseHandler):
