@@ -457,6 +457,9 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
     if ntype == 'start':
         return True, 'next', 'Started'
 
+    if ntype in ('parallel', 'parallel_fork', 'fork'):
+        return True, 'all', 'Parallel branches initiated'
+
     if ntype in ('navigate', 'navigate_waypoint'):
         if RUNNER.motion_lock.locked():
             bridge.get_logger().error(f"Safety lockout: Node {node.get('id')} attempted navigation while another motion is active!")
@@ -1342,15 +1345,18 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                         bridge.emit_event('mission.completed', {'mission_id': mission['id'], 'mission_name': RUNNER.mission_name, 'message': message, 'progress_pct': 100})
                     return
 
-                matching_edges = [
-                    e for e in edges
-                    if e.get('from_node') == curr_id and str(e.get('from_port', '')).lower() == str(output_port).lower()
-                ]
-                if not matching_edges:
+                if node.get('type') in ('parallel', 'parallel_fork', 'fork'):
+                    matching_edges = [e for e in edges if e.get('from_node') == curr_id]
+                else:
                     matching_edges = [
                         e for e in edges
-                        if e.get('from_node') == curr_id and str(e.get('from_port', '')).lower() in ('next', 'out', 'selected', 'submitted', 'done', 'confirmed', 'completed', 'ok')
+                        if e.get('from_node') == curr_id and str(e.get('from_port', '')).lower() == str(output_port).lower()
                     ]
+                    if not matching_edges:
+                        matching_edges = [
+                            e for e in edges
+                            if e.get('from_node') == curr_id and str(e.get('from_port', '')).lower() in ('next', 'out', 'selected', 'submitted', 'done', 'confirmed', 'completed', 'ok')
+                        ]
 
                 if not matching_edges:
                     bridge.get_logger().info(f"Mission {mission['id']}: terminal branch reached at {curr_id} (port: {output_port})")
