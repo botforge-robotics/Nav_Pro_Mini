@@ -238,6 +238,35 @@ NODE_CATALOG = {
             "speech_text": {"type": "string", "description": "Text-to-speech announcement text (for speech subtype)"},
         },
     },
+    "ui_choice": {
+        "type": "ui_choice",
+        "category": "hri",
+        "title": "Ask Choice (Buttons)",
+        "description": "Displays quick action buttons or multiple-choice questions on the robot screen.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "selected", "label": "Selected", "color": "#4CAF50"},
+            {"id": "cancelled", "label": "Cancelled", "color": "#9E9E9E"},
+            {"id": "timeout", "label": "Timeout", "color": "#FF9800"},
+        ],
+        "params_schema": {
+            "title": {"type": "string", "default": "Choose an Option"},
+            "message": {"type": "string", "default": "Please select an option to proceed:"},
+            "options": {
+                "type": "array",
+                "description": "Button options list, e.g. ['Yes', 'No', 'Retry']",
+                "default": ["Yes", "No"],
+            },
+            "choices": {"type": "array", "description": "Alias for options"},
+            "buttons": {"type": "array", "description": "Alias for options"},
+            "timeout_sec": {"type": "number", "default": 60.0, "description": "Timeout waiting for human response"},
+            "default_option": {"type": "string", "default": "timeout", "description": "Port to take on timeout"},
+            "sound_alert": {"type": "boolean", "default": True},
+            "speech_text": {"type": "string", "description": "Optional TTS speech prompt"},
+            "output_variable": {"type": "string", "description": "Variable to store chosen option"},
+            "target": {"type": "string", "enum": ["robot_screen", "operator_app", "both"], "default": "robot_screen"},
+        },
+    },
     "ui_media": {
         "type": "ui_media",
         "category": "hri",
@@ -483,12 +512,24 @@ def validate_graph_mission(data: dict) -> Tuple[List[dict], List[dict], str]:
 
         ntype = node.get("type")
         if not ntype or ntype not in NODE_CATALOG:
-            # Check for legacy alias mapping
-            if ntype == "navigate":
-                node["type"] = "navigate_waypoint"
-                ntype = "navigate_waypoint"
+            aliases = {
+                "navigate": "navigate_waypoint",
+                "goto": "navigate_waypoint",
+                "choice": "ui_choice",
+                "form": "ui_interaction",
+                "dialog": "ui_interaction",
+                "speech": "ui_speech",
+                "tts": "ui_speech",
+                "media": "ui_media",
+                "ask_choice": "ui_choice",
+                "ask_info": "ui_interaction",
+            }
+            if ntype in aliases:
+                node["type"] = aliases[ntype]
+                ntype = aliases[ntype]
             else:
-                raise ApiError(400, "invalid_node", f"Node {nid!r} has unknown type {ntype!r}")
+                label = node.get("label") or nid
+                raise ApiError(400, "invalid_node", f"Step '{label}' has unrecognized step type '{ntype}'. Please use a valid mission node.")
 
         # Set default position if missing
         if "position" not in node or not isinstance(node["position"], dict):

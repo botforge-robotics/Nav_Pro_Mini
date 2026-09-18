@@ -726,7 +726,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         raw_media = params.get('media_url') or params.get('image_url')
         media_url = resolve_template_value(raw_media, context) if raw_media else None
 
-        norm_subtype = 'form' if subtype in ('dynamic_form', 'form', 'survey') else subtype
+        norm_subtype = 'choice' if (ntype == 'ui_choice' or subtype in ('choice', 'choices')) else ('form' if subtype in ('dynamic_form', 'form', 'survey') else subtype)
         interaction_data = {
             'interaction_id': interaction_id,
             'mission_id': RUNNER.mission_id,
