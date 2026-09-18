@@ -182,7 +182,7 @@ async def play_sound_async(sound_name: str, speech_text: Optional[str] = None) -
 _LAST_EVENT_SOUND_TIMES: dict[str, float] = {}
 
 def handle_event_audio(event_name: str, data: Optional[dict] = None) -> None:
-    """Dispatches appropriate tone sound effect and cute voice for major robot events."""
+    """Dispatches clean notification tones/chimes for major robot events (no spoken voice)."""
     now = time.time()
     last_time = _LAST_EVENT_SOUND_TIMES.get(event_name, 0.0)
     # Debounce repeated identical events within 1.5s
@@ -194,39 +194,29 @@ def handle_event_audio(event_name: str, data: Optional[dict] = None) -> None:
     op = payload.get('operation')
 
     if event_name == 'dock.started':
-        if op == 'undock':
-            play_sound('undock_start', 'Undocking')
-        else:
-            play_sound('dock_start', 'Docking initiated')
+        play_sound('undock_start' if op == 'undock' else 'dock_start')
     elif event_name == 'dock.completed':
-        if op == 'undock':
-            play_sound('undock_success', 'Undocking complete')
-        else:
-            play_sound('dock_success', 'Robot docked and charging')
+        play_sound('undock_success' if op == 'undock' else 'dock_success')
     elif event_name == 'dock.failed':
-        if op == 'undock':
-            play_sound('dock_fail', 'Undocking failed')
-        else:
-            play_sound('dock_fail', 'Docking failed')
+        play_sound('dock_fail')
     elif event_name == 'navigation.started':
         play_sound('nav_start')
     elif event_name == 'navigation.completed':
-        play_sound('nav_reach', 'Arrived at destination')
+        play_sound('nav_reach')
     elif event_name in ('navigation.cancelled', 'navigation.failed'):
         play_sound('nav_cancel')
     elif event_name == 'mission.started':
         play_sound('mission_start')
     elif event_name == 'mission.completed':
-        play_sound('mission_complete', 'Mission completed successfully')
+        play_sound('mission_complete')
     elif event_name == 'mission.paused':
-        play_sound('mission_pause', 'Mission paused')
+        play_sound('mission_pause')
     elif event_name in ('mission.canceled', 'mission.failed'):
         play_sound('mission_fail')
     elif event_name == 'mission.ui_interaction':
-        prompt = payload.get('prompt') or payload.get('message') or 'Action required on robot screen'
-        play_sound('mission_action', prompt)
+        play_sound('mission_action')
     elif event_name in ('battery.low', 'mission.battery_low_pause'):
-        play_sound('low_battery', 'Warning: Battery low')
+        play_sound('low_battery')
     elif event_name == 'motion.estop':
-        play_sound('estop', 'Emergency stop activated')
+        play_sound('estop')
 
