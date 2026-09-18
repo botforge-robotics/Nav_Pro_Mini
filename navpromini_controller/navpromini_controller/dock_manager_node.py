@@ -73,7 +73,7 @@ class DockManagerNode(Node):
         p('omega_slew', 1.0)
         p('servo_filter_weight', 0.65)
         p('blind_min_r', 0.28)
-        p('blind_fallback_r', 0.55)
+        p('blind_fallback_r', 0.24)
         p('blind_creep_m', 0.25)
         p('blind_creep_speed', 0.018)
         p('blind_push_max_scale', 3.5)
@@ -622,6 +622,7 @@ class DockManagerNode(Node):
             last_seen_tag_x: Optional[float] = None
             last_seen_z: Optional[float] = None
             filt_alpha = filt_beta = filt_r = None
+            servo_loss_count = 0
 
             while True:
                 if goal_handle.is_cancel_requested:
@@ -667,6 +668,15 @@ class DockManagerNode(Node):
 
                 if self._status == 'servo':
                     if not self._in_view():
+                        servo_loss_count += 1
+                        if servo_loss_count < 6:
+                            # Transient frame drop or detection jitter: hold heading and crawl gently
+                            self._drive(-0.010, 0.0)
+                            await self._tick()
+                            continue
+
+                        # Confirmed tag loss after 6 consecutive ticks (~200ms)
+                        servo_loss_count = 0
                         # If we were already close to the dock / entering the funnel,
                         # do NOT rotate in place (sweep)! Creep straight back instead.
                         if filt_r is not None and filt_r < self._blind_fallback_r:
@@ -680,6 +690,9 @@ class DockManagerNode(Node):
                         self._stop()
                         self._set_status('searching')
                         continue
+
+                    # Reset debounce counter when tag is visible
+                    servo_loss_count = 0
 
                     raw_alpha, raw_beta, raw_r = self._fid2pos()
                     if filt_alpha is None:
@@ -758,16 +771,17 @@ class DockManagerNode(Node):
                     if self._charging():
                         self._stop()
                         continue
-                    # Remaining distance to contacts: tag was lost at dock mouth (e.g. 8-10cm),
-                    # so remaining travel to contacts is only ~4-7cm, NOT 25cm!
-                    creep_dist = min(0.08, max(0.03, (last_seen_z - 0.02) if last_seen_z is not None else 0.05))
+                    # Remaining distance to contacts: tag was lost entering dock funnel / mouth,
+                    # travel full remaining distance plus 3cm contact compression margin.
+                    z_target = last_seen_z if last_seen_z is not None else 0.18
+                    creep_dist = min(0.30, max(0.06, z_target + 0.03))
                     self.get_logger().info(
-                        f'blind_creep: last seen at {last_seen_z*100 if last_seen_z else 6:.1f}cm '
-                        f'— creeping {creep_dist*100:.1f}cm gently at 10mm/s into contacts')
+                        f'blind_creep: last seen at {last_seen_z*100 if last_seen_z else 18:.1f}cm '
+                        f'— creeping {creep_dist*100:.1f}cm gently at 10mm/s into contacts with push_effort')
                     if await self._jog(creep_dist,
                                        speed=0.010,
                                        angular=0.0,
-                                       push_effort=False):
+                                       push_effort=True):
                         continue
                     self._stop()
                     approach += 1
