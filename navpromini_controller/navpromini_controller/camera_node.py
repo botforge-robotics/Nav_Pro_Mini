@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import cv2
@@ -73,13 +74,32 @@ class CameraNode(Node):
             self._activate()
 
         if self._info is None:
-            self.get_logger().error(
+            self.get_logger().warn(
                 f'no usable calibration at {self._camera_info_url} — '
-                'camera_info will not be published')
+                'using built-in factory calibration matrix')
+            self._info = self._get_default_calibration()
         else:
             self.get_logger().info(
                 f'camera ready: {self._w}x{self._h} @{self._fps:g}fps, '
                 f'jpeg q={self._quality}, fx~{self._info.k[0]:.0f}px [CALIBRATED]')
+
+    def _get_default_calibration(self) -> CameraInfo:
+        info = CameraInfo()
+        info.header.frame_id = self._frame_id
+        info.width = self._w
+        info.height = self._h
+        info.distortion_model = 'plumb_bob'
+        info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+        sx = self._w / 1280.0
+        sy = self._h / 720.0
+        fx = 754.41 * sx
+        fy = 750.79 * sy
+        cx = 633.59 * sx
+        cy = 372.81 * sy
+        info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
+        info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        info.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+        return info
 
     def _load_calibration(self, path: str) -> Optional[CameraInfo]:
         try:

@@ -103,15 +103,14 @@ class DalySerial:
         self._ser.reset_input_buffer()
         self._ser.write(payload)
         self._ser.flush()
-        time.sleep(0.05)
-        raw = self._ser.read(expect_min)
-        # Drain a bit more if adapter is slow
-        t_end = time.time() + 0.15
-        while time.time() < t_end and len(raw) < expect_min + 32:
-            chunk = self._ser.read(64)
-            if not chunk:
-                break
-            raw += chunk
+        raw = b''
+        t_end = time.time() + 0.20
+        while time.time() < t_end and len(raw) < expect_min:
+            chunk = self._ser.read(expect_min - len(raw))
+            if chunk:
+                raw += chunk
+            else:
+                time.sleep(0.005)
         return raw
 
     # --- Classic A5 UART/485 -------------------------------------------------
@@ -144,7 +143,7 @@ class DalySerial:
                 return True
         return False
 
-    def read_a5(self) -> DalySnapshot:
+    def read_a5(self, full: bool = True) -> DalySnapshot:
         host = getattr(self, '_a5_host', 0x40)
         snap = DalySnapshot(protocol='a5')
 
@@ -154,18 +153,6 @@ class DalySerial:
             snap.pack_voltage_v = _u16_be(d90, 0) * 0.1
             snap.pack_current_a = (_u16_be(d90, 4) - 30000) * 0.1
             snap.soc_percent = _u16_be(d90, 6) * 0.1
-
-        d91 = self.a5_request(0x91, host)
-        if d91:
-            snap.max_cell_v = _u16_be(d91, 0) * 0.001
-            snap.max_cell_index = d91[2]
-            snap.min_cell_v = _u16_be(d91, 3) * 0.001
-            snap.min_cell_index = d91[5]
-
-        d92 = self.a5_request(0x92, host)
-        if d92:
-            snap.max_temp_c = float(d92[0] - 40)
-            snap.min_temp_c = float(d92[2] - 40)
 
         d93 = self.a5_request(0x93, host)
         if d93:
@@ -183,6 +170,34 @@ class DalySerial:
             snap.temp_count = int(d94[1])
             snap.charger_connected = bool(d94[2])
             snap.load_connected = bool(d94[3])
+
+        if not full and getattr(self, '_last_snap', None):
+            prev = self._last_snap
+            snap.cell_count = prev.cell_count or snap.cell_count
+            snap.temp_count = prev.temp_count or snap.temp_count
+            snap.cell_voltages_v = prev.cell_voltages_v
+            snap.temperatures_c = prev.temperatures_c
+            snap.max_cell_v = prev.max_cell_v
+            snap.min_cell_v = prev.min_cell_v
+            snap.max_cell_index = prev.max_cell_index
+            snap.min_cell_index = prev.min_cell_index
+            snap.max_temp_c = prev.max_temp_c
+            snap.min_temp_c = prev.min_temp_c
+            snap.balance_bits = prev.balance_bits
+            self._last_snap = snap
+            return snap
+
+        d91 = self.a5_request(0x91, host)
+        if d91:
+            snap.max_cell_v = _u16_be(d91, 0) * 0.001
+            snap.max_cell_index = d91[2]
+            snap.min_cell_v = _u16_be(d91, 3) * 0.001
+            snap.min_cell_index = d91[5]
+
+        d92 = self.a5_request(0x92, host)
+        if d92:
+            snap.max_temp_c = float(d92[0] - 40)
+            snap.min_temp_c = float(d92[2] - 40)
 
         # Cell voltages: response packs 3 cells per frame; byte0 = frame index
         cells: List[float] = []
@@ -228,6 +243,7 @@ class DalySerial:
         if d98:
             snap.failure_bits = int.from_bytes(d98[:8], 'big')
 
+        self._last_snap = snap
         return snap
 
     # --- Modbus RTU ----------------------------------------------------------
@@ -335,11 +351,11 @@ class DalySerial:
             'Check RS485 A/B wiring, baud 9600, and that FTDI is /dev/battery_bms.'
         )
 
-    def read(self) -> DalySnapshot:
+    def read(self, full: bool = True) -> DalySnapshot:
         if self.protocol is None:
             self.probe()
         if self.protocol == 'a5':
-            return self.read_a5()
+            return self.read_a5(full=full)
         if self.protocol == 'modbus':
             return self.read_modbus()
         raise RuntimeError('BMS protocol not selected')

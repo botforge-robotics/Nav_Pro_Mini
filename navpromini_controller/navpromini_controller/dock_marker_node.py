@@ -84,26 +84,46 @@ class DockMarkerNode(Node):
 
         # Load calibration fallback immediately so camera frames can be processed even before camera_info arrives
         import yaml, os
-        calib_path = '/home/navpromini/.navpromini_camera_calibration.yaml'
-        if os.path.exists(calib_path):
-            try:
-                with open(calib_path) as f:
-                    cal = yaml.safe_load(f)
-                k = np.array(cal['camera_matrix']['data'], dtype=np.float64).reshape(3, 3)
-                d = np.array(cal['distortion_coefficients']['data'], dtype=np.float64).reshape(1, -1)
-                # Scale if running at 1280x720 (calibration file is 640x360)
-                k[0, 0] *= 2.0
-                k[0, 2] *= 2.0
-                k[1, 1] *= 2.0
-                k[1, 2] *= 2.0
-                self._k = k
-                self._d = d
-            except Exception as e:
-                self.get_logger().warn(f'could not load calibration fallback: {e}')
+        calib_paths = [
+            '/home/navpromini/.navpromini_camera_calibration.yaml',
+            '/root/.navpromini_camera_calibration.yaml',
+            os.path.expanduser('~/.navpromini_camera_calibration.yaml')
+        ]
+        for calib_path in calib_paths:
+            if os.path.exists(calib_path):
+                try:
+                    with open(calib_path) as f:
+                        cal = yaml.safe_load(f)
+                    k = np.array(cal['camera_matrix']['data'], dtype=np.float64).reshape(3, 3)
+                    d = np.array(cal['distortion_coefficients']['data'], dtype=np.float64).reshape(1, -1)
+                    cal_w = int(cal.get('image_width', 1280))
+                    if cal_w == 640:
+                        k[0, 0] *= 2.0
+                        k[0, 2] *= 2.0
+                        k[1, 1] *= 2.0
+                        k[1, 2] *= 2.0
+                    self._k = k
+                    self._d = d
+                    break
+                except Exception as e:
+                    self.get_logger().warn(f'could not load calibration fallback from {calib_path}: {e}')
+
+        if self._k is None:
+            self._init_default_k(1280, 720)
 
         self.get_logger().info(
             f'dock_marker ready: id={self._marker_id}, '
             f'{self._size * 1000:.0f}mm' + (', calibrated (fallback loaded)' if self._k is not None else ', waiting for camera_info'))
+
+    def _init_default_k(self, w: int, h: int) -> None:
+        sx = w / 1280.0
+        sy = h / 720.0
+        self._k = np.array([
+            [754.41 * sx, 0.0, 633.59 * sx],
+            [0.0, 750.79 * sy, 372.81 * sy],
+            [0.0, 0.0, 1.0]
+        ], dtype=np.float64)
+        self._d = np.zeros((1, 5), dtype=np.float64)
 
     def _on_info(self, msg: CameraInfo) -> None:
         if len(msg.k) >= 9 and float(msg.k[0]) > 1.0:
@@ -111,8 +131,6 @@ class DockMarkerNode(Node):
             self._d = np.array(msg.d, dtype=np.float64).reshape(1, -1)
 
     def _on_image(self, msg: CompressedImage) -> None:
-        if self._k is None:
-            return
         now = self.get_clock().now().nanoseconds * 1e-9
         if now - self._last_stamp < self._min_period:
             return
@@ -121,6 +139,9 @@ class DockMarkerNode(Node):
         raw = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_UNCHANGED)
         if raw is None:
             return
+        if self._k is None:
+            h_img, w_img = raw.shape[:2]
+            self._init_default_k(w_img, h_img)
         if len(raw.shape) == 2:
             gray = raw
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
@@ -132,8 +153,9 @@ class DockMarkerNode(Node):
         if ids is None or not len(ids):
             # publish crosshair on empty frame
             h_img, w_img = bgr.shape[:2]
-            cv2.line(bgr, (w_img // 2, 0), (w_img // 2, h_img), (80, 80, 80), 1)
-            cv2.putText(bgr, 'NO DOCK TAG', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.line(bgr, (w_img // 2, 0), (w_img // 2, h_img), (0, 165, 255), 1)
+            cv2.line(bgr, (0, h_img // 2), (w_img, h_img // 2), (0, 165, 255), 1)
+            cv2.putText(bgr, f'SEARCHING DOCK MARKER (ID {self._marker_id})', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
             _, enc = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
             dbg_msg = CompressedImage()
             dbg_msg.header = msg.header

@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import tornado.iostream
+
 import json
 import math
 import os
@@ -298,3 +301,60 @@ class DockPoseHandler(BaseHandler):
                 pass
         self.send({'deleted': True})
 
+
+class DockDebugImageHandler(BaseHandler):
+    """Serve the latest dock alignment debug frame or raw camera frame as JPEG."""
+
+    def get(self) -> None:
+        img_data, age = self.bridge.get_with_age('dock_debug_image')
+        if img_data is None or age > 2.5:
+            cam_data, cam_age = self.bridge.get_with_age('camera_image')
+            if cam_data is not None and cam_age < 2.5:
+                img_data = cam_data
+
+        if img_data is None:
+            self.set_status(404)
+            self.finish(b'')
+            return
+
+        self.set_header('Content-Type', 'image/jpeg')
+        self.set_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.set_header('Pragma', 'no-cache')
+        self.set_header('Expires', '0')
+        self.write(img_data)
+
+
+class DockDebugStreamHandler(BaseHandler):
+    """Multipart MJPEG stream of dock debug / camera feed."""
+
+    async def get(self) -> None:
+        self.set_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+        self.set_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.set_header('Pragma', 'no-cache')
+        self.set_header('Connection', 'close')
+
+        last_sent = None
+        try:
+            while not self._finished:
+                img_data = None
+                if self.bridge:
+                    dbg_data, dbg_age = self.bridge.get_with_age('dock_debug_image')
+                    if dbg_data is not None and dbg_age < 2.5:
+                        img_data = dbg_data
+                    else:
+                        cam_data, cam_age = self.bridge.get_with_age('camera_image')
+                        if cam_data is not None and cam_age < 2.5:
+                            img_data = cam_data
+
+                if img_data and img_data != last_sent:
+                    header = (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n"
+                        + f"Content-Length: {len(img_data)}\r\n\r\n".encode()
+                    )
+                    self.write(header + img_data + b"\r\n")
+                    await self.flush()
+                    last_sent = img_data
+                await asyncio.sleep(0.06)
+        except (tornado.iostream.StreamClosedError, asyncio.CancelledError):
+            pass

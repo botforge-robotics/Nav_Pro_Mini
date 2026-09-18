@@ -7,6 +7,7 @@ Default port: /dev/battery_bms (udev symlink for FTDI USB–RS485).
 from __future__ import annotations
 
 import json
+import time
 from typing import Optional
 
 import rclpy
@@ -69,6 +70,7 @@ class BatteryNode(Node):
         except Exception as exc:  # noqa: BLE001 — report and keep node alive
             self.get_logger().error(f'BMS open/probe failed: {exc}')
 
+        self._last_full_read = 0.0
         period = 1.0 / max(rate, 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(
@@ -86,8 +88,12 @@ class BatteryNode(Node):
     def _tick(self) -> None:
         if not self._ok:
             return
+        now = time.monotonic()
+        do_full = (now - self._last_full_read) >= 2.0
         try:
-            snap = self._bms.read()
+            snap = self._bms.read(full=do_full)
+            if do_full:
+                self._last_full_read = now
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(f'BMS read failed: {exc}', throttle_duration_sec=5.0)
             return

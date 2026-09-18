@@ -41,7 +41,7 @@ from rclpy.qos import (
     QoSProfile,
     QoSReliabilityPolicy,
 )
-from sensor_msgs.msg import BatteryState, Imu, LaserScan
+from sensor_msgs.msg import BatteryState, CompressedImage, Imu, LaserScan
 from std_msgs.msg import Float32, Float32MultiArray, String
 from std_srvs.srv import Empty
 
@@ -140,6 +140,10 @@ class RosBridge(Node):
                                  LATCHED_QOS, callback_group=cb)
         self.create_subscription(Float32MultiArray, 'dock_tag', self._on_dock_tag, 10,
                                  callback_group=cb)
+        self.create_subscription(CompressedImage, 'dock_debug/compressed', self._on_dock_debug,
+                                 SENSOR_QOS, callback_group=cb)
+        self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._on_camera_image,
+                                 SENSOR_QOS, callback_group=cb)
 
         # --- outbound -----------------------------------------------------
         self._pub_cmd_vel = self.create_publisher(Twist, 'cmd_vel_teleop', 10)
@@ -370,6 +374,12 @@ class RosBridge(Node):
     
     def _on_map(self, m: OccupancyGrid) -> None:
         self._put('map_msg', m)
+
+    def _on_dock_debug(self, m: CompressedImage) -> None:
+        self._put('dock_debug_image', bytes(m.data))
+
+    def _on_camera_image(self, m: CompressedImage) -> None:
+        self._put('camera_image', bytes(m.data))
 
     def _on_dock_tag(self, m: Float32MultiArray) -> None:
         d = list(m.data)

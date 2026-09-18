@@ -78,9 +78,9 @@ class DockManagerNode(Node):
         p('blind_creep_speed', 0.018)
         p('blind_push_max_scale', 3.5)
         p('stall_speed_mps', 0.003)
-        p('stall_confirm_sec', 1.2)
+        p('stall_confirm_sec', 0.4)
         p('stall_charge_wait_sec', 10.0)
-        p('stall_min_travel_m', 0.06)
+        p('stall_min_travel_m', 0.015)
         p('straight_kp', 1.5)
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
@@ -210,6 +210,7 @@ class DockManagerNode(Node):
 
     def _on_batt(self, msg: BatteryState) -> None:
         self._power = msg.power_supply_status
+        self._batt_current = getattr(msg, 'current', 0.0)
         if self._charging() and self._busy:
             # Immediate wheel stop the millisecond electrodes touch charger
             self._stop()
@@ -236,8 +237,12 @@ class DockManagerNode(Node):
         self._odom = msg
 
     def _charging(self) -> bool:
-        return self._power in (BatteryState.POWER_SUPPLY_STATUS_CHARGING,
-                               BatteryState.POWER_SUPPLY_STATUS_FULL)
+        if self._power in (BatteryState.POWER_SUPPLY_STATUS_CHARGING,
+                           BatteryState.POWER_SUPPLY_STATUS_FULL):
+            return True
+        if hasattr(self, '_batt_current') and self._batt_current is not None and self._batt_current > 0.04:
+            return True
+        return False
 
     def _in_view(self) -> bool:
         return (self._tag is not None
@@ -559,10 +564,6 @@ class DockManagerNode(Node):
                 self.get_logger().warn('staging navigation exceeded staging_timeout — canceling')
                 await goal_handle.cancel_goal_async()
                 return False
-            if self._in_view():
-                self.get_logger().info('dock tag spotted in camera during staging approach — canceling Nav2 early to begin visual servoing')
-                await goal_handle.cancel_goal_async()
-                return True
             await self._tick()
         res = result_fut.result()
         return res.status == GoalStatus.STATUS_SUCCEEDED
