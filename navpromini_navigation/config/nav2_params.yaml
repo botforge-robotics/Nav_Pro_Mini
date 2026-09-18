@@ -99,23 +99,23 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.08
-      lookahead_dist: 0.25
-      min_lookahead_dist: 0.20
-      max_lookahead_dist: 0.50
+      desired_linear_vel: 0.105
+      lookahead_dist: 0.28
+      min_lookahead_dist: 0.22
+      max_lookahead_dist: 0.55
       lookahead_time: 1.5
       use_velocity_scaled_lookahead_dist: true
       use_rotate_to_heading: true
-      rotate_to_heading_angular_vel: 0.28
-      rotate_to_heading_min_angle: 0.45
-      max_angular_accel: 0.22
+      rotate_to_heading_angular_vel: 0.36
+      rotate_to_heading_min_angle: 0.785
+      max_angular_accel: 0.30
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.60
-      min_approach_linear_velocity: 0.05
+      min_approach_linear_velocity: 0.065
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.8
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_speed: 0.055
+      regulated_linear_scaling_min_speed: 0.065
       use_cost_regulated_linear_velocity_scaling: false
       inflation_cost_scaling_factor: 2.2
       transform_tolerance: 0.3
@@ -127,7 +127,7 @@ controller_server:
       angular_dist_threshold: 0.90
       angular_disengage_threshold: 0.35
       forward_sampling_distance: 0.30
-      rotate_to_heading_angular_vel: 0.239
+      rotate_to_heading_angular_vel: 0.31
       max_angular_accel: 0.55
       simulate_ahead_time: 1.0
       rotate_to_heading_once: true
@@ -137,19 +137,19 @@ controller_server:
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.135
+      max_vel_x: 0.175
       max_vel_y: 0.0
-      max_vel_theta: 0.337
+      max_vel_theta: 0.44
       min_speed_xy: 0.0
-      max_speed_xy: 0.135
+      max_speed_xy: 0.175
       min_speed_theta: 0.0
-      max_speed_theta: 0.45
-      acc_lim_x: 0.08
+      max_speed_theta: 0.58
+      acc_lim_x: 0.12
       acc_lim_y: 0.0
-      acc_lim_theta: 0.40
-      decel_lim_x: -0.10
+      acc_lim_theta: 0.45
+      decel_lim_x: -0.14
       decel_lim_y: 0.0
-      decel_lim_theta: -0.45
+      decel_lim_theta: -0.48
       vx_samples: 14
       vy_samples: 1
       vtheta_samples: 24
@@ -359,10 +359,10 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: True
     feedback: "OPEN_LOOP"
-    max_velocity: [0.09, 0.0, 0.35]
-    min_velocity: [-0.0, 0.0, -0.35]
-    max_accel: [0.11, 0.0, 0.22]
-    max_decel: [-0.11, 0.0, -0.25]
+    max_velocity: [0.12, 0.0, 0.45]
+    min_velocity: [-0.0, 0.0, -0.45]
+    max_accel: [0.15, 0.0, 0.30]
+    max_decel: [-0.15, 0.0, -0.32]
     odom_topic: "odom"
     odom_duration: 0.15
     # theta left at its prior values (0.35 ceiling, 0.18/-0.18 accel/decel):

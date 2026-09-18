@@ -56,18 +56,18 @@ class DockManagerNode(Node):
         super().__init__('navpromini_dock_manager')
 
         p = self.declare_parameter
-        p('angular_rate', 0.035)
+        p('angular_rate', 0.045)
         p('wheel_separation_m', 0.225)
         p('wheel_breakaway_mps', 0.02)
         p('wheel_floor_max_scale', 1.8)
-        p('linear_rate', 0.045)
+        p('linear_rate', 0.058)
         p('turn_radians', 0.3491)
         p('min_turn_period', 0.18)
         p('sign', -1)
         p('k_lat', 1.0)
         p('k_yaw', 0.40)
         p('k_rho', 0.015)
-        p('max_linear_speed', 0.0125)
+        p('max_linear_speed', 0.0165)
         p('min_servo_speed', 0.008)
         p('max_omega', 0.08)
         p('omega_slew', 1.0)
@@ -75,7 +75,7 @@ class DockManagerNode(Node):
         p('blind_min_r', 0.28)
         p('blind_fallback_r', 0.24)
         p('blind_creep_m', 0.25)
-        p('blind_creep_speed', 0.018)
+        p('blind_creep_speed', 0.023)
         p('blind_push_max_scale', 3.5)
         p('stall_speed_mps', 0.003)
         p('stall_confirm_sec', 0.4)
@@ -85,7 +85,7 @@ class DockManagerNode(Node):
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
         p('undock_distance', 0.20)
-        p('undock_speed', 0.05)
+        p('undock_speed', 0.065)
         p('dock_origin_offset_m', 0.13)
         p('standoff_m', 0.90)
         p('staging_timeout_sec', 300.0)
@@ -737,19 +737,19 @@ class DockManagerNode(Node):
                     step = self._omega_slew * _TICK
                     omega_cmd += max(-step, min(step, target - omega_cmd))
 
-                    # Staged Approach Velocity:
-                    # Far (>0.60m): 0.040 m/s
-                    # Medium (0.35m - 0.60m): 0.022 m/s
-                    # Close (0.20m - 0.35m): 0.012 m/s
-                    # Final (<=0.20m): 0.008 m/s (slow micro-approach to contacts)
+                    # Staged Approach Velocity (+30%):
+                    # Far (>0.60m): 0.052 m/s
+                    # Medium (0.35m - 0.60m): 0.028 m/s
+                    # Close (0.20m - 0.35m): 0.016 m/s
+                    # Final (<=0.20m): 0.010 m/s (micro-approach to contacts)
                     if tag_z > 0.60:
-                        v_stage = 0.040
+                        v_stage = 0.052
                     elif tag_z > 0.35:
-                        v_stage = 0.022
+                        v_stage = 0.028
                     elif tag_z > 0.20:
-                        v_stage = 0.012
+                        v_stage = 0.016
                     else:
-                        v_stage = 0.008
+                        v_stage = 0.010
 
                     # Slow down to gentle crawl during active angular turns to avoid compound motion blur
                     turn_fraction = abs(target) / max(1e-3, self._max_omega)
@@ -778,9 +778,9 @@ class DockManagerNode(Node):
                     creep_dist = min(0.30, max(0.06, z_target + 0.03))
                     self.get_logger().info(
                         f'blind_creep: last seen at {last_seen_z*100 if last_seen_z else 18:.1f}cm '
-                        f'— creeping {creep_dist*100:.1f}cm gently at 10mm/s into contacts with push_effort')
+                        f'— creeping {creep_dist*100:.1f}cm gently at 13mm/s into contacts with push_effort')
                     if await self._jog(creep_dist,
-                                       speed=0.010,
+                                       speed=0.013,
                                        angular=0.0,
                                        push_effort=True):
                         continue
