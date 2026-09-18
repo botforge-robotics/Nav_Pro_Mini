@@ -125,10 +125,10 @@ def play_speech(text: str, wait: bool = False) -> None:
     if shutil.which('navpro-speak'):
         cmd = ['navpro-speak', text]
     elif shutil.which('piper') and os.path.isfile('/opt/navpro/piper/voices/en_US-hfc_female-medium.onnx'):
-        # Fallback to direct piper pipeline
-        cmd = ['bash', '-c', f'echo "{text}" | piper --model /opt/navpro/piper/voices/en_US-hfc_female-medium.onnx --output-raw | paplay --raw --rate 22050 --channels 1 --format s16le']
+        # Fallback to direct piper pipeline with cute robot pitch and calm reduced speed
+        cmd = ['bash', '-c', f'echo "{text}" | piper --model /opt/navpro/piper/voices/en_US-hfc_female-medium.onnx --length_scale 1.20 --output-raw 2>/dev/null | paplay --raw --rate 23800 --channels 1 --format s16le 2>/dev/null || true']
     elif shutil.which('espeak-ng'):
-        cmd = ['espeak-ng', '-v', 'en+f4', '-p', '80', '-s', '145', text]
+        cmd = ['espeak-ng', '-v', 'en+f4', '-p', '88', '-s', '130', text]
 
     if not cmd:
         return
