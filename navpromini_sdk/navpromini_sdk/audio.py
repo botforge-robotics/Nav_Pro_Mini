@@ -225,6 +225,8 @@ def play_speech(text: str, wait: bool = False) -> None:
         return
     text = text.strip()
 
+    global _piper_fifo_writer  # needed so the OSError handler can reset the fd to None
+
     # ---- Try persistent piper daemon first --------------------------------
     if shutil.which('piper') and os.path.isfile(_PIPER_MODEL) and shutil.which('paplay'):
         with _piper_lock:
@@ -243,7 +245,7 @@ def play_speech(text: str, wait: bool = False) -> None:
                         os.close(_piper_fifo_writer)
                     except OSError:
                         pass
-                    _piper_fifo_writer = None  # type: ignore[assignment]
+                    _piper_fifo_writer = None
 
     # ---- Fallback: navpro-speak script (legacy) ---------------------------
     env = get_pulse_env()

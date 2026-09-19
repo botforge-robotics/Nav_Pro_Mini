@@ -607,16 +607,15 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
     if ntype == 'condition':
         expr = params.get('expression', 'True')
-        # Pre-resolve any {var} tokens so the evaluator sees plain values, not
-        # set-literals.  evaluate_condition_safely also does this, but resolving
-        # here first makes the logger message more useful.
-        resolved_expr = str(resolve_template_value(expr, context))
         try:
-            eval_result = evaluate_condition_safely(resolved_expr, context)
+            # evaluate_condition_safely now calls _resolve_condition_expr which
+            # wraps string values in repr() so {dinner_query} == "Yes" works.
+            eval_result = evaluate_condition_safely(expr, context)
             port = 'true' if eval_result else 'false'
+            bridge.get_logger().info(f"Condition {node.get('id')}: {expr!r} → {eval_result}")
             return True, port, f"Condition evaluated to {eval_result}"
         except Exception as e:
-            bridge.get_logger().error(f"Condition evaluation error in {node.get('id')}: {e} (expression: {resolved_expr!r})")
+            bridge.get_logger().error(f"Condition error in {node.get('id')}: {e} (expr: {expr!r})")
             return False, 'false', str(e)
 
     if ntype == 'set_variable':
