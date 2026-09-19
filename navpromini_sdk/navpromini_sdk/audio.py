@@ -157,12 +157,14 @@ def _start_piper_daemon() -> bool:
     if not shutil.which('paplay'):
         return False
 
-    # Create FIFO if needed
-    if not os.path.exists(_PIPER_FIFO):
-        try:
-            os.mkfifo(_PIPER_FIFO)
-        except OSError:
-            pass
+    # Always delete and recreate the FIFO so there's no stale reader from a
+    # previous daemon session (stale FIFO → ENXIO on O_WRONLY|O_NONBLOCK open).
+    try:
+        if os.path.exists(_PIPER_FIFO):
+            os.remove(_PIPER_FIFO)
+        os.mkfifo(_PIPER_FIFO, 0o666)
+    except OSError:
+        return False
 
     env = get_pulse_env()
 
@@ -183,16 +185,20 @@ def _start_piper_daemon() -> bool:
         )
         _piper_daemon_pid = proc.pid
 
-        # Open the write-end of the FIFO (non-blocking open to avoid blocking
-        # until a reader is attached — the daemon becomes the reader).
-        # We use a short poll loop to wait until the daemon has opened its end.
-        for _ in range(30):
+        # Open the write-end of the FIFO in a short poll loop, waiting for the
+        # daemon (reader) to open its end of the FIFO.
+        for _ in range(40):
             try:
                 fd = os.open(_PIPER_FIFO, os.O_WRONLY | os.O_NONBLOCK)
                 _piper_fifo_writer = fd
                 return True
             except OSError:
                 time.sleep(0.1)
+        # Daemon didn't open FIFO in time — kill and report failure
+        try:
+            proc.kill()
+        except Exception:
+            pass
         return False
     except Exception:
         return False
