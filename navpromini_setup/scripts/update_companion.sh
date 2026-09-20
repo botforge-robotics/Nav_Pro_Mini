@@ -104,10 +104,12 @@ fi
 git -c safe.directory=* -C "${SRC_DIR}" reset --hard "origin/${BRANCH}"
 NEW_COMMIT="$(git -c safe.directory=* -C "${SRC_DIR}" rev-parse HEAD)"
 
-# Also update navpromini_sdk repo if present at USER_HOME/navpromini_sdk
+# Also update navpromini_sdk repo (including MCP server) if present at USER_HOME/navpromini_sdk
 if [[ -d "${USER_HOME}/navpromini_sdk/.git" ]]; then
   echo "==> Updating ${USER_HOME}/navpromini_sdk..."
-  git -C "${USER_HOME}/navpromini_sdk" pull --ff-only origin main || true
+  SDK_BRANCH=$(git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+  git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" fetch origin "${SDK_BRANCH}" || true
+  git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" pull --ff-only origin "${SDK_BRANCH}" || git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" pull origin "${SDK_BRANCH}" || true
   if [[ -d "/opt/navpro/mcp_venv" ]]; then
     /opt/navpro/mcp_venv/bin/pip install --upgrade pip || true
     /opt/navpro/mcp_venv/bin/pip install -e "${USER_HOME}/navpromini_sdk/clients/python" || true
