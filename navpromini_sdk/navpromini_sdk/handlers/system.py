@@ -752,8 +752,23 @@ APP_BACKUP_DIR = APP_BASE_DIR / 'backup'
 APP_TEMP_DIR = APP_BASE_DIR / 'temp'
 APP_LEGACY_DIR = Path('/home/navpromini/navpromini_robot_ui')
 
+def _get_ui_dir() -> Path:
+    env_dir = os.environ.get('NAVPRO_ROBOT_UI_DIR')
+    if env_dir and os.path.isdir(env_dir):
+        return Path(env_dir)
+    for candidate in [
+        '/home/navpromini/navpromini_robot_ui',
+        '/opt/navpro/ui',
+        '/home/chaitu/Projects/navpromini_robot_ui',
+        str(Path.home() / 'navpromini_robot_ui'),
+    ]:
+        if os.path.isdir(candidate):
+            return Path(candidate)
+    return Path('/home/navpromini/navpromini_robot_ui')
+
 def _read_current_app_version() -> str:
-    for candidate in [APP_CURRENT_DIR / 'version.json', APP_LEGACY_DIR / 'version.json']:
+    ui_dir = _get_ui_dir()
+    for candidate in [APP_CURRENT_DIR / 'version.json', ui_dir / 'version.json']:
         if candidate.is_file():
             try:
                 data = json.loads(candidate.read_text())
@@ -775,78 +790,172 @@ def _compare_semver(v1: str, v2: str) -> int:
             return -1
     return 0
 
+def _get_ui_git_info(ui_dir: Path, target_branch: str | None = None) -> dict:
+    info = {
+        'current_commit': 'unknown',
+        'current_commit_short': 'unknown',
+        'current_commit_message': '',
+        'current_commit_date': '',
+        'branch': 'main',
+        'target_branch': target_branch or 'main',
+        'remote_branch': f'origin/{target_branch or "main"}',
+        'latest_commit': None,
+        'latest_commit_short': None,
+        'commits_behind': 0,
+        'changelog': [],
+        'branches_available': ['main', 'dev'],
+        'has_git': False,
+    }
+    if not (ui_dir / '.git').is_dir():
+        return info
+
+    info['has_git'] = True
+    try:
+        r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-parse', '--abbrev-ref', 'HEAD'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            info['branch'] = r.stdout.strip()
+
+        tb = target_branch if target_branch in ('main', 'dev') else info['branch']
+        info['target_branch'] = tb
+        info['remote_branch'] = f'origin/{tb}'
+
+        r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'log', '-1', '--format=%H%n%h%n%s%n%ci'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            lines = r.stdout.strip().splitlines()
+            if len(lines) >= 4:
+                info['current_commit'] = lines[0]
+                info['current_commit_short'] = lines[1]
+                info['current_commit_message'] = lines[2]
+                info['current_commit_date'] = lines[3]
+
+        try:
+            subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'fetch', 'origin', tb],
+                           capture_output=True, text=True, timeout=5)
+        except Exception:
+            pass
+
+        remote_ref = f'origin/{tb}'
+        r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-list', '--count', f'HEAD..{remote_ref}'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip().isdigit():
+            info['commits_behind'] = int(r.stdout.strip())
+
+        if info['branch'] != tb and info['commits_behind'] == 0:
+            r_head = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-parse', 'HEAD'],
+                                    capture_output=True, text=True, timeout=2)
+            r_remote = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-parse', remote_ref],
+                                      capture_output=True, text=True, timeout=2)
+            if r_head.returncode == 0 and r_remote.returncode == 0:
+                if r_head.stdout.strip() != r_remote.stdout.strip():
+                    info['commits_behind'] = 1
+
+        if info['commits_behind'] > 0:
+            r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'log', '-n', '10', '--format=%h %s', f'HEAD..{remote_ref}'],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                info['changelog'] = r.stdout.strip().splitlines()
+
+            r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-parse', remote_ref],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                info['latest_commit'] = r.stdout.strip()
+                info['latest_commit_short'] = info['latest_commit'][:7]
+        else:
+            info['latest_commit'] = info['current_commit']
+            info['latest_commit_short'] = info['current_commit_short']
+    except Exception:
+        pass
+    return info
+
+
 class AppUpdateCheckHandler(BaseHandler):
-    """GET /api/v1/system/app/update/check - check GitHub releases for new Robot UI app release."""
+    """GET /api/v1/system/app/update/check - check Robot UI updates (git branches & GitHub releases)."""
     def get(self) -> None:
+        target_branch = self.get_argument('branch', None)
+        ui_dir = _get_ui_dir()
+        git_info = _get_ui_git_info(ui_dir, target_branch)
         cur_ver = _read_current_app_version()
-        repo = 'botforge-robotics/navpromini_robot_ui'
-        url = f'https://api.github.com/repos/{repo}/releases/latest'
-        
+
         info = {
             'current_version': cur_ver,
             'latest_version': cur_ver,
-            'update_available': False,
-            'release_name': f'v{cur_ver}',
-            'release_notes': '',
-            'published_at': '',
+            'update_available': git_info['commits_behind'] > 0,
+            'update_type': 'git' if git_info['has_git'] else 'appimage',
+            'branch': git_info['target_branch'],
+            'current_branch': git_info['branch'],
+            'current_commit': git_info['current_commit'],
+            'current_commit_short': git_info['current_commit_short'],
+            'current_commit_message': git_info['current_commit_message'],
+            'current_commit_date': git_info['current_commit_date'],
+            'latest_commit': git_info['latest_commit'],
+            'latest_commit_short': git_info['latest_commit_short'],
+            'commits_behind': git_info['commits_behind'],
+            'changelog': git_info['changelog'],
+            'branches_available': ['main', 'dev'],
+            'release_name': f"{git_info['target_branch']} ({git_info['latest_commit_short'] or cur_ver})",
+            'release_notes': "\n".join(git_info['changelog']) if git_info['changelog'] else '',
             'download_url': None,
             'asset_name': None,
             'asset_size': 0
         }
 
+        # Check GitHub releases as well
+        repo = 'botforge-robotics/navpromini_robot_ui'
+        url = f'https://api.github.com/repos/{repo}/releases/latest'
         try:
             import urllib.request
             req = urllib.request.Request(url, headers={'User-Agent': 'NavProMini-App', 'Accept': 'application/vnd.github.v3+json'})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=4) as resp:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode('utf-8'))
                     tag = data.get('tag_name', '').lstrip('v')
                     if tag:
-                        info['latest_version'] = tag
-                        info['release_name'] = data.get('name') or f'v{tag}'
-                        info['release_notes'] = data.get('body', '')
-                        info['published_at'] = data.get('published_at', '')
                         if _compare_semver(tag, cur_ver) > 0:
                             info['update_available'] = True
-                        
+                            info['latest_version'] = tag
+                            info['release_name'] = data.get('name') or f'v{tag}'
+                            if not info['release_notes']:
+                                info['release_notes'] = data.get('body', '')
+                            info['update_type'] = 'appimage'
                         assets = data.get('assets', [])
-                        target_asset = None
                         for a in assets:
                             name = a.get('name', '').lower()
-                            if 'aarch64' in name and name.endswith('.appimage'):
-                                target_asset = a
+                            if ('aarch64' in name and name.endswith('.appimage')) or name.endswith('.appimage'):
+                                info['download_url'] = a.get('browser_download_url')
+                                info['asset_name'] = a.get('name')
+                                info['asset_size'] = a.get('size', 0)
                                 break
-                            elif name.endswith('.appimage') and not target_asset:
-                                target_asset = a
-                            elif name.endswith('.zip') and not target_asset:
-                                target_asset = a
-                        if target_asset:
-                            info['download_url'] = target_asset.get('browser_download_url')
-                            info['asset_name'] = target_asset.get('name')
-                            info['asset_size'] = target_asset.get('size', 0)
-        except Exception as exc:
-            info['check_error'] = str(exc)
+        except Exception:
+            pass
 
         self.send(info)
 
+
 class AppUpdateApplyHandler(BaseHandler):
-    """POST /api/v1/system/app/update/apply - auto-download, rotate 1-level backup, and restart."""
+    """POST /api/v1/system/app/update/apply - apply Robot UI update (git pull or AppImage download)."""
     def post(self) -> None:
         data = self.body()
         download_url = data.get('download_url')
         target_version = data.get('target_version', 'latest')
+        target_branch = data.get('branch') or data.get('target_branch') or 'main'
+        update_type = data.get('update_type', 'git' if not download_url else 'appimage')
 
         if APP_STATUS_FILE.is_file():
             try:
                 st = json.loads(APP_STATUS_FILE.read_text())
-                if st.get('state') in ('downloading', 'backing_up', 'applying'):
-                    raise ApiError(409, 'update_in_progress', 'An app update is already in progress')
+                if st.get('state') in ('downloading', 'backing_up', 'applying', 'pulling'):
+                    ts = st.get('timestamp', 0)
+                    if time.time() - ts < 300:
+                        raise ApiError(409, 'update_in_progress', 'An app update is already in progress')
+            except (ApiError, tornado.web.HTTPError):
+                raise
             except Exception:
                 pass
 
         def run_update_thread():
             import urllib.request
-            import threading
             try:
                 APP_BASE_DIR.mkdir(parents=True, exist_ok=True)
                 APP_CURRENT_DIR.mkdir(parents=True, exist_ok=True)
@@ -861,26 +970,45 @@ class AppUpdateApplyHandler(BaseHandler):
                         'timestamp': time.time()
                     }))
 
-                update_progress('downloading', 15, 'Contacting release servers...')
-                url = download_url
-                if not url:
-                    api_url = 'https://api.github.com/repos/botforge-robotics/navpromini_robot_ui/releases/latest'
-                    req = urllib.request.Request(api_url, headers={'User-Agent': 'NavProMini-App'})
-                    with urllib.request.urlopen(req, timeout=6) as r:
-                        rel = json.loads(r.read().decode())
-                        for a in rel.get('assets', []):
-                            if a.get('name', '').endswith('.AppImage'):
-                                url = a.get('browser_download_url')
-                                break
+                ui_dir = _get_ui_dir()
 
-                if not url:
-                    update_progress('failed', 0, 'No downloadable AppImage asset found', error='Asset not found')
+                # Git pull update
+                if update_type == 'git' or not download_url:
+                    update_progress('pulling', 20, f'Fetching updates from origin/{target_branch}...')
+                    subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'stash'],
+                                   capture_output=True, text=True, timeout=10)
+                    
+                    update_progress('pulling', 40, f'Switching to branch {target_branch}...')
+                    r_co = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'checkout', target_branch],
+                                          capture_output=True, text=True, timeout=10)
+                    if r_co.returncode != 0:
+                        subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'checkout', '-b', target_branch, f'origin/{target_branch}'],
+                                       capture_output=True, text=True, timeout=10)
+
+                    update_progress('pulling', 70, f'Pulling latest commits from {target_branch}...')
+                    r_pull = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'pull', 'origin', target_branch],
+                                            capture_output=True, text=True, timeout=30)
+                    if r_pull.returncode != 0:
+                        update_progress('failed', 0, f'Git pull failed: {r_pull.stderr.strip()}', error=r_pull.stderr)
+                        return
+
+                    ver_data = {
+                        'branch': target_branch,
+                        'version': target_version,
+                        'updated_at': time.time()
+                    }
+                    try:
+                        (ui_dir / 'version.json').write_text(json.dumps(ver_data))
+                    except Exception:
+                        pass
+
+                    update_progress('completed', 100, f'Successfully updated Robot UI to latest {target_branch}!')
                     return
 
+                # AppImage download update
+                update_progress('downloading', 20, 'Downloading release package...')
                 target_file = APP_TEMP_DIR / 'NavProMiniRobotUI-aarch64.AppImage'
-                update_progress('downloading', 30, 'Downloading release package...')
-                
-                req = urllib.request.Request(url, headers={'User-Agent': 'NavProMini-App'})
+                req = urllib.request.Request(download_url, headers={'User-Agent': 'NavProMini-App'})
                 with urllib.request.urlopen(req, timeout=60) as resp, open(target_file, 'wb') as out_f:
                     total = int(resp.headers.get('Content-Length', 0))
                     dl = 0
@@ -891,17 +1019,15 @@ class AppUpdateApplyHandler(BaseHandler):
                         out_f.write(chunk)
                         dl += len(chunk)
                         if total > 0:
-                            pct = 30 + int((dl / total) * 45)
+                            pct = 20 + int((dl / total) * 60)
                             update_progress('downloading', pct, f'Downloading {dl // 1048576}MB of {total // 1048576}MB...')
 
                 target_file.chmod(0o755)
 
-                # Rotate backup: delete old backup, move current to backup
-                update_progress('backing_up', 80, 'Rotating previous version backup...')
+                update_progress('backing_up', 85, 'Rotating backup...')
                 if APP_BACKUP_DIR.exists():
                     shutil.rmtree(APP_BACKUP_DIR)
                 APP_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
                 if any(APP_CURRENT_DIR.iterdir()):
                     for item in APP_CURRENT_DIR.iterdir():
                         dest = APP_BACKUP_DIR / item.name
@@ -909,29 +1035,14 @@ class AppUpdateApplyHandler(BaseHandler):
                             shutil.copytree(item, dest)
                         else:
                             shutil.copy2(item, dest)
-                elif APP_LEGACY_DIR.exists():
-                    shutil.copytree(APP_LEGACY_DIR, APP_BACKUP_DIR / 'legacy_ui', dirs_exist_ok=True)
 
-                # Install new AppImage
-                update_progress('applying', 90, 'Installing new version...')
+                update_progress('applying', 95, 'Installing new AppImage...')
                 dest_appimage = APP_CURRENT_DIR / 'NavProMiniRobotUI-aarch64.AppImage'
                 shutil.move(str(target_file), str(dest_appimage))
                 dest_appimage.chmod(0o755)
 
                 ver_data = {'version': target_version, 'updated_at': time.time()}
                 (APP_CURRENT_DIR / 'version.json').write_text(json.dumps(ver_data))
-
-                # Restart
-                update_progress('restarting', 98, 'Restarting NavPro Mini UI...')
-                time.sleep(1)
-                subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], timeout=3)
-                subprocess.run(['pkill', '-9', '-f', 'epiphany'], timeout=3)
-                subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], timeout=3)
-                
-                launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
-                if launcher.is_file():
-                    subprocess.Popen(['sudo', '-u', 'navpromini', 'bash', str(launcher)],
-                                     start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
                 update_progress('completed', 100, 'Update completed successfully!')
             except Exception as e:
@@ -940,7 +1051,7 @@ class AppUpdateApplyHandler(BaseHandler):
         import threading
         t = threading.Thread(target=run_update_thread, daemon=True)
         t.start()
-        self.send({'status': 'initiated', 'message': 'App update initiated in background'})
+        self.send({'status': 'initiated', 'message': f'Robot UI update to {target_branch} initiated in background'})
 
 class AppUpdateStatusHandler(BaseHandler):
     """GET /api/v1/system/app/update/status - retrieve download and installation status."""
