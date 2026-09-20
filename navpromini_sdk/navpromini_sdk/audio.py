@@ -169,6 +169,19 @@ def _get_piper_proc() -> Optional[subprocess.Popen]:
         return None
 
 
+_audio_busy_until = 0.0
+_audio_lock = threading.Lock()
+
+
+def _wait_audio_clear(max_wait: float = 1.5) -> None:
+    """Ensure any previous sound tone or speech finishes before starting new audio."""
+    global _audio_busy_until
+    now = time.time()
+    wait_time = _audio_busy_until - now
+    if wait_time > 0:
+        time.sleep(min(wait_time, max_wait))
+
+
 def play_speech(text: str, wait: bool = False) -> None:
     """Pronounce text through robot hardware speakers with cute neural voice.
 
@@ -180,6 +193,13 @@ def play_speech(text: str, wait: bool = False) -> None:
     if not text or not text.strip():
         return
     text = text.strip()
+
+    # Ensure previous notification tone (e.g. arrival chime or popup alert) finished cleanly
+    _wait_audio_clear(max_wait=1.5)
+    dur = len(text) / 12.0 + 0.6
+    global _audio_busy_until
+    with _audio_lock:
+        _audio_busy_until = time.time() + dur + 0.15
 
     env = get_pulse_env()
 
@@ -259,6 +279,11 @@ def play_sound(sound_name: str, speech_text: Optional[str] = None, wait: bool = 
 
     Non-blocking by default.
     """
+    dur = sum(s[1] for s in TONE_DEFINITIONS.get(sound_name, [])) or 0.6
+    global _audio_busy_until
+    with _audio_lock:
+        _audio_busy_until = max(_audio_busy_until, time.time() + dur + 0.12)
+
     def _worker():
         try:
             sound_dir = get_sound_dir()

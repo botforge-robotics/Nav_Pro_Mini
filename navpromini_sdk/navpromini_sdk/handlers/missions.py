@@ -479,7 +479,11 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                     'theta': float(params.get('theta', 0.0)),
                 }
             res = await navigate_to(bridge, target_dict)
-            return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+            if res.get('ok'):
+                # Give arrival chime (nav_reach ~0.58s) time to finish cleanly with a natural pause
+                await asyncio.sleep(0.7)
+                return True, 'arrived', res.get('message', '')
+            return False, 'failed', res.get('message', '')
 
     if ntype == 'navigate_coordinates':
         if RUNNER.motion_lock.locked():
@@ -494,7 +498,11 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 return False, 'failed', f"Invalid coordinate value: {conv_err}"
             target_dict = {'x': x_val, 'y': y_val, 'theta': th_val}
             res = await navigate_to(bridge, target_dict)
-            return (True, 'arrived', res.get('message', '')) if res.get('ok') else (False, 'failed', res.get('message', ''))
+            if res.get('ok'):
+                # Give arrival chime (nav_reach ~0.58s) time to finish cleanly with a natural pause
+                await asyncio.sleep(0.7)
+                return True, 'arrived', res.get('message', '')
+            return False, 'failed', res.get('message', '')
 
     if ntype in ('wait', 'wait_timer'):
         dur = float(params.get('duration_sec', params.get('duration', 5.0)))
@@ -941,14 +949,14 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             bridge.get_logger().info(f"[TTS Announcement]: {text}")
             bridge.emit_event('mission.speech', {'text': text, 'node_id': node['id']})
             wait_done = bool(params.get('wait_completion', True))
+            loop = asyncio.get_running_loop()
             try:
                 from ..audio import play_speech
-                play_speech(text, wait=wait_done)
+                await loop.run_in_executor(None, play_speech, text, wait_done)
             except Exception as exc:
                 bridge.get_logger().warn(f"TTS synthesis execution error: {exc}")
             if wait_done:
-                speech_dur = min(15.0, max(1.5, len(text) / 12.0 + 0.8))
-                await asyncio.sleep(speech_dur)
+                await asyncio.sleep(0.3)
         return True, 'done', 'Speech completed'
 
     if ntype in ('ui_notification', 'notification', 'alert'):
