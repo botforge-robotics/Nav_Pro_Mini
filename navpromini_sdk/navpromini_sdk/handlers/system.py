@@ -974,10 +974,16 @@ class AppUpdateApplyHandler(BaseHandler):
 
                 # Git pull update
                 if update_type == 'git' or not download_url:
+                    update_progress('pulling', 15, f'Snapshotting current commit for rollback...')
+                    # Capture current HEAD so we can reset back on failure
+                    r_prev = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-parse', 'HEAD'],
+                                            capture_output=True, text=True, timeout=5)
+                    previous_commit = r_prev.stdout.strip() if r_prev.returncode == 0 else None
+
                     update_progress('pulling', 20, f'Fetching updates from origin/{target_branch}...')
                     subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'stash'],
                                    capture_output=True, text=True, timeout=10)
-                    
+
                     update_progress('pulling', 40, f'Switching to branch {target_branch}...')
                     r_co = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'checkout', target_branch],
                                           capture_output=True, text=True, timeout=10)
@@ -989,8 +995,24 @@ class AppUpdateApplyHandler(BaseHandler):
                     r_pull = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'pull', 'origin', target_branch],
                                             capture_output=True, text=True, timeout=30)
                     if r_pull.returncode != 0:
-                        update_progress('failed', 0, f'Git pull failed: {r_pull.stderr.strip()}', error=r_pull.stderr)
+                        # Rollback: reset to previous commit and restore stash
+                        if previous_commit:
+                            subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'reset', '--hard', previous_commit],
+                                           capture_output=True, text=True, timeout=10)
+                        subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'stash', 'pop'],
+                                       capture_output=True, text=True, timeout=5)
+                        update_progress('failed', 0, f'Git pull failed — rolled back to {previous_commit[:7] if previous_commit else "previous"}: {r_pull.stderr.strip()}',
+                                        error=r_pull.stderr)
                         return
+
+                    # Record previous commit in backup dir for git-based rollback
+                    try:
+                        APP_BASE_DIR.mkdir(parents=True, exist_ok=True)
+                        APP_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                        (APP_BACKUP_DIR / 'git_previous_commit').write_text(previous_commit or '')
+                        (APP_BACKUP_DIR / 'git_repo_path').write_text(str(ui_dir))
+                    except Exception:
+                        pass
 
                     ver_data = {
                         'branch': target_branch,
@@ -1068,27 +1090,59 @@ class AppUpdateStatusHandler(BaseHandler):
 class AppUpdateRollbackHandler(BaseHandler):
     """POST /api/v1/system/app/update/rollback - restore previous version from backup."""
     def post(self) -> None:
-        if not APP_BACKUP_DIR.exists() or not any(APP_BACKUP_DIR.iterdir()):
+        # Try git-based rollback first (if previous commit was saved)
+        git_prev_commit_file = APP_BACKUP_DIR / 'git_previous_commit'
+        git_repo_path_file = APP_BACKUP_DIR / 'git_repo_path'
+
+        if git_prev_commit_file.exists() and git_repo_path_file.exists():
+            prev_commit = git_prev_commit_file.read_text().strip()
+            repo_path = git_repo_path_file.read_text().strip()
+            if prev_commit and repo_path:
+                try:
+                    r = subprocess.run(
+                        ['git', '-c', 'safe.directory=*', '-C', repo_path, 'reset', '--hard', prev_commit],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    if r.returncode == 0:
+                        # Clear the backup markers so we don't double-rollback
+                        git_prev_commit_file.unlink(missing_ok=True)
+                        self.send({
+                            'status': 'rolled_back',
+                            'message': f'Git-based rollback successful — restored commit {prev_commit[:7]}'
+                        })
+                        return
+                    else:
+                        raise ApiError(500, 'rollback_failed', f'git reset failed: {r.stderr.strip()}')
+                except (ApiError, tornado.web.HTTPError):
+                    raise
+                except Exception as e:
+                    raise ApiError(500, 'rollback_failed', str(e))
+
+        # Fall back to AppImage backup
+        if not APP_BACKUP_DIR.exists() or not any(f for f in APP_BACKUP_DIR.iterdir() if f.name not in ('git_previous_commit', 'git_repo_path')):
             raise ApiError(404, 'no_backup', 'No previous version backup available to rollback')
-        
+
         try:
             shutil.rmtree(APP_CURRENT_DIR, ignore_errors=True)
             APP_CURRENT_DIR.mkdir(parents=True, exist_ok=True)
             for item in APP_BACKUP_DIR.iterdir():
+                if item.name in ('git_previous_commit', 'git_repo_path'):
+                    continue
                 dest = APP_CURRENT_DIR / item.name
                 if item.is_dir():
                     shutil.copytree(item, dest)
                 else:
                     shutil.copy2(item, dest)
-            
+
             subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], timeout=3)
             launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
             if launcher.is_file():
                 subprocess.Popen(['sudo', '-u', 'navpromini', 'bash', str(launcher)],
                                  start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.send({'status': 'rolled_back', 'message': 'Restored previous backup version and restarted'})
+            self.send({'status': 'rolled_back', 'message': 'Restored previous AppImage backup and restarted'})
         except Exception as e:
             raise ApiError(500, 'rollback_failed', str(e))
+
 
 
 
