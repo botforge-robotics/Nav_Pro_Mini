@@ -299,6 +299,16 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         opts['client_hold'].release()
         bridge.invalidate('pose_map', 'dock_status')
 
+        # Clean up any lingering or orphaned nav2/amcl/slam processes that may
+        # have survived StopLaunch, preventing zombie nodes from blocking lifecycle transitions.
+        try:
+            import subprocess
+            subprocess.run(['pkill', '-9', '-f', 'nav2_'], check=False)
+            subprocess.run(['pkill', '-9', '-f', 'amcl'], check=False)
+            subprocess.run(['pkill', '-9', '-f', 'slam_toolbox'], check=False)
+        except Exception as e:
+            bridge.get_logger().warn(f'Orphan process cleanup error: {e}')
+
         if mode == 'idle':
             return {'mode': 'idle'}
 
