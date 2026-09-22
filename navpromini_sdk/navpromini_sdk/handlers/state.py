@@ -93,9 +93,11 @@ class RobotStateHandler(BaseHandler):
         pose, age = bridge.get_with_age('pose_map')
         cov_x = pose.get('cov_x', 0.0) if pose else 0.0
         cov_y = pose.get('cov_y', 0.0) if pose else 0.0
-        is_stale = (age is None) or (age > 5.0)
-        is_high_cov = (cov_x > 0.35 or cov_y > 0.35)
-        localized = (pose is not None) and (not is_stale) and (not is_high_cov)
+        # In ROS 2 AMCL, /amcl_pose only updates when the robot moves (update_min_d / update_min_a).
+        # When stationary at dock or room, age naturally grows while remaining valid and latched.
+        # The robot is truly unlocalized only if no pose_map exists or if covariance is dispersed (> 0.45m^2).
+        is_high_cov = (cov_x > 0.45 or cov_y > 0.45)
+        localized = (pose is not None) and (not is_high_cov)
         if pose is None:
             pose, age = bridge.get_with_age('pose_odom')
 
