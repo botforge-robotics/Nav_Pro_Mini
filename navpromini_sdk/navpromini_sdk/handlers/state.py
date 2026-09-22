@@ -90,10 +90,14 @@ class RobotStateHandler(BaseHandler):
         health = system.health_sources(bridge)
         battery = bridge.get('battery') or {}
 
-        pose, _age = bridge.get_with_age('pose_map')
-        localized = pose is not None
+        pose, age = bridge.get_with_age('pose_map')
+        cov_x = pose.get('cov_x', 0.0) if pose else 0.0
+        cov_y = pose.get('cov_y', 0.0) if pose else 0.0
+        is_stale = (age is None) or (age > 5.0)
+        is_high_cov = (cov_x > 0.35 or cov_y > 0.35)
+        localized = (pose is not None) and (not is_stale) and (not is_high_cov)
         if pose is None:
-            pose, _age = bridge.get_with_age('pose_odom')
+            pose, age = bridge.get_with_age('pose_odom')
 
         map_name = mode_state.map_name if mode_state.mode == 'navigation' else None
 
@@ -111,11 +115,15 @@ class RobotStateHandler(BaseHandler):
             'battery': {'percentage': battery.get('percentage'),
                        'charging': bool(battery.get('charging'))},
             'map': {'id': map_name, 'name': map_name} if map_name else None,
+            'is_localized': localized,
             'localization': {
-                'status': 'LOCALIZED' if localized else 'UNKNOWN',
+                'status': 'LOCALIZED' if localized else ('POOR' if is_high_cov else 'UNKNOWN'),
                 'x': pose.get('x') if pose else None,
                 'y': pose.get('y') if pose else None,
                 'yaw': pose.get('theta') if pose else None,
+                'cov_x': cov_x,
+                'cov_y': cov_y,
+                'age_sec': age,
             },
             # goal_id: this SDK tracks the in-flight goal by its target, not
             # a discrete id — null rather than fabricating one (see

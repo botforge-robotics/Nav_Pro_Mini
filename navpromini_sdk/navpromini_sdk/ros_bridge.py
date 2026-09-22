@@ -279,10 +279,14 @@ class RosBridge(Node):
 
     def _on_amcl(self, m: PoseWithCovarianceStamped) -> None:
         p = m.pose.pose.position
+        cov = m.pose.covariance
         self._put('pose_map', {
             'x': round(p.x, 4), 'y': round(p.y, 4),
             'theta': round(yaw_of(m.pose.pose.orientation), 4),
             'frame': m.header.frame_id or 'map',
+            'cov_x': round(float(cov[0]), 4) if len(cov) > 0 else 0.0,
+            'cov_y': round(float(cov[7]), 4) if len(cov) > 7 else 0.0,
+            'cov_yaw': round(float(cov[35]), 4) if len(cov) > 35 else 0.0,
         })
 
     _CHARGE = {0: 'unknown', 1: 'charging', 2: 'discharging',
