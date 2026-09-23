@@ -27,7 +27,7 @@ from typing import Any
 from .base import ApiError, BaseHandler
 from .missions import RUNNER, _run_mission
 
-VALID_REPEATS = ('once', 'daily', 'weekly')
+VALID_REPEATS = ('once', 'daily', 'weekly', 'interval')
 
 
 def _validate_schedule(data: dict, store) -> dict:
@@ -37,39 +37,54 @@ def _validate_schedule(data: dict, store) -> dict:
     if store.get_mission(mission_id) is None:
         raise ApiError(404, 'mission_not_found', f'No mission named {mission_id!r}')
 
-    hour = data.get('hour')
-    minute = data.get('minute')
-    if not isinstance(hour, int) or not (0 <= hour <= 23):
-        raise ApiError(400, 'invalid_field', 'hour must be an integer 0-23')
-    if not isinstance(minute, int) or not (0 <= minute <= 59):
-        raise ApiError(400, 'invalid_field', 'minute must be an integer 0-59')
-
     repeat = data.get('repeat')
     if repeat not in VALID_REPEATS:
         raise ApiError(400, 'invalid_field',
                        f'repeat must be one of: {", ".join(VALID_REPEATS)}')
 
+    hour = data.get('hour')
+    minute = data.get('minute')
+    interval_minutes = None
     date = None
     weekdays: list[int] = []
-    if repeat == 'once':
-        date = str(data.get('date') or '')
-        try:
-            datetime.strptime(date, '%Y-%m-%d')
-        except ValueError:
-            raise ApiError(400, 'invalid_field', 'date must be YYYY-MM-DD for a one-time schedule')
-    elif repeat == 'weekly':
-        raw = data.get('weekdays')
-        if not isinstance(raw, list) or not raw:
-            raise ApiError(400, 'invalid_field',
-                           'weekdays must be a non-empty list (0=Monday .. 6=Sunday)')
-        try:
-            weekdays = sorted({int(d) for d in raw})
-        except (TypeError, ValueError):
-            raise ApiError(400, 'invalid_field', 'weekdays must be integers 0-6')
-        if any(d < 0 or d > 6 for d in weekdays):
-            raise ApiError(400, 'invalid_field', 'weekdays must be integers 0-6')
 
-    return {
+    if repeat == 'interval':
+        raw_interval = data.get('interval_minutes')
+        if raw_interval is None:
+            raw_interval = minute if (isinstance(minute, int) and minute > 0) else 30
+        try:
+            interval_minutes = int(raw_interval)
+            if interval_minutes <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ApiError(400, 'invalid_field', 'interval_minutes must be a positive integer')
+        hour = int(hour) if isinstance(hour, int) and 0 <= hour <= 23 else 0
+        minute = int(minute) if isinstance(minute, int) and 0 <= minute <= 59 else 0
+    else:
+        if not isinstance(hour, int) or not (0 <= hour <= 23):
+            raise ApiError(400, 'invalid_field', 'hour must be an integer 0-23')
+        if not isinstance(minute, int) or not (0 <= minute <= 59):
+            raise ApiError(400, 'invalid_field', 'minute must be an integer 0-59')
+
+        if repeat == 'once':
+            date = str(data.get('date') or '')
+            try:
+                datetime.strptime(date, '%Y-%m-%d')
+            except ValueError:
+                raise ApiError(400, 'invalid_field', 'date must be YYYY-MM-DD for a one-time schedule')
+        elif repeat == 'weekly':
+            raw = data.get('weekdays')
+            if not isinstance(raw, list) or not raw:
+                raise ApiError(400, 'invalid_field',
+                               'weekdays must be a non-empty list (0=Monday .. 6=Sunday)')
+            try:
+                weekdays = sorted({int(d) for d in raw})
+            except (TypeError, ValueError):
+                raise ApiError(400, 'invalid_field', 'weekdays must be integers 0-6')
+            if any(d < 0 or d > 6 for d in weekdays):
+                raise ApiError(400, 'invalid_field', 'weekdays must be integers 0-6')
+
+    res = {
         'mission_id': mission_id,
         'name': str(data.get('name') or '').strip(),
         'hour': hour,
@@ -79,6 +94,9 @@ def _validate_schedule(data: dict, store) -> dict:
         'weekdays': weekdays,
         'enabled': bool(data.get('enabled', True)),
     }
+    if interval_minutes is not None:
+        res['interval_minutes'] = interval_minutes
+    return res
 
 
 class SchedulesHandler(BaseHandler):
@@ -89,13 +107,15 @@ class SchedulesHandler(BaseHandler):
     def post(self) -> None:
         """Create or replace a schedule — same create-or-replace-by-id shape
         as POST /missions."""
-        data = self.body(('id', 'mission_id', 'hour', 'minute', 'repeat'))
+        data = self.body(('id', 'mission_id', 'repeat'))
         schedule_id = str(data['id']).strip()
         if not schedule_id:
             raise ApiError(400, 'invalid_field', 'id must not be empty')
         fields = _validate_schedule(data, self.opts['store'])
         schedule = {'id': schedule_id, **fields}
         self.opts['store'].put_schedule(schedule)
+        _last_interval_fired.pop(schedule_id, None)
+        _last_fired.pop(schedule_id, None)
         self.send({'schedule': schedule}, status=201)
 
 
@@ -107,6 +127,8 @@ class ScheduleHandler(BaseHandler):
         self.send({'schedule': schedule})
 
     def delete(self, schedule_id: str) -> None:
+        _last_interval_fired.pop(schedule_id, None)
+        _last_fired.pop(schedule_id, None)
         if not self.opts['store'].delete_schedule(schedule_id):
             raise ApiError(404, 'schedule_not_found', f'No schedule {schedule_id!r}')
         self.send({'deleted': True, 'id': schedule_id})
@@ -117,11 +139,13 @@ class ScheduleHandler(BaseHandler):
 # up exactly with minute boundaries) fires exactly once, not once per poll
 # tick for the whole minute it's due.
 _last_fired: dict[str, str] = {}
+_last_interval_fired: dict[str, float] = {}
 
 
 def check_schedules(bridge, opts: dict[str, Any]) -> None:
     """Polled on a timer (see server.py) — fires any enabled schedule whose
-    (hour, minute) matches right now, on the right day for its repeat mode.
+    (hour, minute) matches right now, on the right day for its repeat mode,
+    or whose interval has elapsed.
 
     Both "conflict" cases below are a deliberate skip, not a queue — see
     this module's own docstring:
@@ -132,23 +156,47 @@ def check_schedules(bridge, opts: dict[str, Any]) -> None:
     """
     store = opts['store']
     now = datetime.now()
+    now_epoch = time.time()
     minute_key = now.strftime('%Y-%m-%dT%H:%M')
 
     for schedule in store.list_schedules():
         if not schedule.get('enabled'):
             continue
-        if schedule.get('hour') != now.hour or schedule.get('minute') != now.minute:
-            continue
-        if _last_fired.get(schedule['id']) == minute_key:
-            continue  # already handled this exact minute
 
         repeat = schedule.get('repeat')
-        if repeat == 'once' and schedule.get('date') != now.strftime('%Y-%m-%d'):
-            continue
-        if repeat == 'weekly' and now.weekday() not in (schedule.get('weekdays') or []):
-            continue
+        sched_id = schedule.get('id', '')
 
-        _last_fired[schedule['id']] = minute_key
+        if repeat == 'interval':
+            interval_min = schedule.get('interval_minutes') or 30
+            try:
+                interval_min = int(interval_min)
+            except (TypeError, ValueError):
+                interval_min = 30
+            if interval_min <= 0:
+                interval_min = 30
+            interval_sec = interval_min * 60
+
+            last_epoch = _last_interval_fired.get(sched_id)
+            if last_epoch is None:
+                # Initialize timing baseline when schedule is first encountered
+                _last_interval_fired[sched_id] = now_epoch
+                continue
+            if (now_epoch - last_epoch) < interval_sec:
+                continue
+
+            _last_interval_fired[sched_id] = now_epoch
+        else:
+            if schedule.get('hour') != now.hour or schedule.get('minute') != now.minute:
+                continue
+            if _last_fired.get(sched_id) == minute_key:
+                continue  # already handled this exact minute
+
+            if repeat == 'once' and schedule.get('date') != now.strftime('%Y-%m-%d'):
+                continue
+            if repeat == 'weekly' and now.weekday() not in (schedule.get('weekdays') or []):
+                continue
+
+            _last_fired[sched_id] = minute_key
 
         if RUNNER.state in ('running', 'paused'):
             bridge.emit_event('schedule.skipped', {
