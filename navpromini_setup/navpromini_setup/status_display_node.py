@@ -54,13 +54,11 @@ STATE_FX: dict[str, tuple[str, str]] = {
     'offline': ('Offline', 'solid,80,80,80'),
 }
 
-# LED-only override while the pack is actually taking charge, taking priority
-# over STATE_FX's LED (OLED text is untouched). Anything else falls through to
-# the normal state LED — 'nav'/'ready' are already solid green, so "not
-# charging" needs no entry here.
+# LED-only override while the pack is actually taking charge.
+# Doc §1: Docked & Charging = Breathing Green, Full/Idle = Solid Green.
 CHARGE_LED: dict[str, str] = {
-    'charging': 'breathe,255,0,0,1500',
-    'full': 'breathe,0,255,0,1500',
+    'charging': 'breathe,0,255,0,1500',  # Docked & Charging: Breathing Green
+    'full': 'solid,0,200,40',             # Battery Full: Solid Green
 }
 
 # Current thresholds, in amps, with the sign convention battery_node uses
@@ -288,6 +286,8 @@ class StatusDisplayNode(Node):
         return False
 
     def _wifi_site_online(self) -> bool:
+        if self._setup_ap_really_up():
+            return False
         try:
             import subprocess
             r = subprocess.run(
@@ -304,8 +304,11 @@ class StatusDisplayNode(Node):
                 if not conn or conn == 'navpro-setup-ap':
                     continue
                 ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
-                if ip.returncode == 0 and (ip.stdout or '').strip():
-                    return True
+                if ip.returncode == 0:
+                    raw_ips = (ip.stdout or '').strip().split()
+                    non_ap_ips = [a for a in raw_ips if not a.startswith('10.42.') and not a.startswith('127.')]
+                    if non_ap_ips:
+                        return True
         except Exception:  # noqa: BLE001
             pass
         return False
@@ -315,9 +318,14 @@ class StatusDisplayNode(Node):
         changed = False
         hint_live = self._read_hint_state()
 
-        # Reality check: never keep OLED in "setup" if hotspot is not actually up
-        # and site Wi‑Fi is already connected (stale hint / race on boot).
-        if self._state == 'setup' and not self._setup_ap_really_up() and self._wifi_site_online():
+        # Reality check: stay in setup if AP is running and site wifi is offline;
+        # otherwise leave setup if site wifi is online.
+        if self._setup_ap_really_up() and not self._wifi_site_online():
+            if self._state != 'setup':
+                self.get_logger().info('Setup AP is active and site Wi-Fi offline — display state → setup')
+                self._state = 'setup'
+                changed = True
+        elif self._state == 'setup' and not self._setup_ap_really_up() and self._wifi_site_online():
             self.get_logger().info('Wi‑Fi online and no setup AP — display setup → ready')
             self._state = 'ready'
             try:
@@ -348,11 +356,16 @@ class StatusDisplayNode(Node):
                     elif hint_live in ('joining', 'error'):
                         pass
                     elif self._state in ('boot', 'setup', 'joining', 'error'):
-                        self.get_logger().info(
-                            f'robot.yaml present — display {self._state} → ready'
-                        )
-                        self._state = 'ready'
-                        changed = True
+                        if self._setup_ap_really_up() and not self._wifi_site_online():
+                            if self._state != 'setup':
+                                self._state = 'setup'
+                                changed = True
+                        else:
+                            self.get_logger().info(
+                                f'robot.yaml present — display {self._state} → ready'
+                            )
+                            self._state = 'ready'
+                            changed = True
 
         # 2) Hint file (setup/joining/ready/error during / after portal).
         try:
@@ -480,11 +493,18 @@ class StatusDisplayNode(Node):
             self._pending_led = 'solid,255,255,255'
         else:
             self._pending_text = self._oled_ascii(self._compose_text(display_state, text))[:192]
-            # Prioritize setup status mode LEDs (setup, joining, error) over charging animation
-            if display_state in ('setup', 'joining', 'error'):
+            # Priority is strictly based on lifecycle (Doc §1 & §6):
+            # Lifecycle takes top priority: boot (solid red), setup (amber), joining (cyan),
+            # mapping (cyan chase), error (blink red), offline (grey).
+            # ONLY after fully set up (ready/nav) does battery animation have priority when docked & charging.
+            if display_state in ('boot', 'setup', 'joining', 'mapping', 'error', 'offline'):
                 self._pending_led = led
+            elif self._charge_shown == 'charging':
+                # Docked & Charging -> Breathing Green (Doc §1)
+                self._pending_led = 'breathe,0,255,0,1500'
             else:
-                self._pending_led = CHARGE_LED.get(self._charge_shown or '', led)
+                # Fully set up / Idle / Battery Full -> Solid Green (Doc §1: Solid Green = Idle/Ready)
+                self._pending_led = led
 
 
     def _esp_ready(self) -> bool:
