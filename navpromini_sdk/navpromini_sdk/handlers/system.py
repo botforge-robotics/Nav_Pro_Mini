@@ -90,10 +90,13 @@ def _setup_ap_active() -> bool:
 
 def _wifi_site_online() -> bool:
     """True if a Wi-Fi device is connected to a real (non-setup-AP) network
-    with an IP — mirrors status_display_node.py's _wifi_site_online(). Cached 15s."""
+    with an IP — mirrors status_display_node.py's _wifi_site_online(). Cached 4s."""
     global _wifi_site_cached
     now = time.monotonic()
-    if now - _wifi_site_cached[1] < 15.0:
+    if _setup_ap_active():
+        _wifi_site_cached = (False, now)
+        return False
+    if now - _wifi_site_cached[1] < 4.0:
         return _wifi_site_cached[0]
     result = False
     try:
@@ -107,9 +110,12 @@ def _wifi_site_online() -> bool:
             if dtype != 'wifi' or state != 'connected' or not conn or conn == _SETUP_AP_CONN:
                 continue
             ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2)
-            if ip.returncode == 0 and (ip.stdout or '').strip():
-                result = True
-                break
+            if ip.returncode == 0:
+                raw_ips = (ip.stdout or '').strip().split()
+                non_ap_ips = [a for a in raw_ips if not a.startswith('10.42.') and not a.startswith('127.')]
+                if non_ap_ips:
+                    result = True
+                    break
     except Exception:  # noqa: BLE001
         pass
     _wifi_site_cached = (result, now)
@@ -646,7 +652,8 @@ class WifiStatusHandler(BaseHandler):
             except Exception:
                 pass
 
-        if not connected:
+        if hotspot_active or not connected:
+            connected = False
             ssid = ""
             ip = ""
         elif ip.startswith("10.42."):
@@ -934,6 +941,12 @@ def _clean_netplan_wifi() -> None:
         return
     for f in netplan_dir.glob('*.yaml'):
         try:
+            # If it's a dynamic NM netplan file (like 90-NM-*.yaml) and not the setup AP, delete it directly
+            if f.name.startswith('90-NM-'):
+                text = f.read_text(encoding='utf-8')
+                if _SETUP_AP_CONN not in text:
+                    f.unlink()
+                    continue
             text = f.read_text(encoding='utf-8')
             if 'wifis' in text:
                 import yaml
@@ -944,9 +957,12 @@ def _clean_netplan_wifi() -> None:
                         del net['wifis']
                         with f.open('w', encoding='utf-8') as out:
                             yaml.safe_dump(data, out, default_flow_style=False)
-                        subprocess.run(['netplan', 'generate'], capture_output=True, timeout=5)
         except Exception:
             pass
+    try:
+        subprocess.run(['netplan', 'generate'], capture_output=True, timeout=5)
+    except Exception:
+        pass
 
 
 def _forget_wifi_connections() -> None:
