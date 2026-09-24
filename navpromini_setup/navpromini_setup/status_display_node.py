@@ -480,7 +480,12 @@ class StatusDisplayNode(Node):
             self._pending_led = 'solid,255,255,255'
         else:
             self._pending_text = self._oled_ascii(self._compose_text(display_state, text))[:192]
-            self._pending_led = CHARGE_LED.get(self._charge_shown or '', led)
+            # Prioritize setup status mode LEDs (setup, joining, error) over charging animation
+            if display_state in ('setup', 'joining', 'error'):
+                self._pending_led = led
+            else:
+                self._pending_led = CHARGE_LED.get(self._charge_shown or '', led)
+
 
     def _esp_ready(self) -> bool:
         text_subs = self._pub_text.get_subscription_count()

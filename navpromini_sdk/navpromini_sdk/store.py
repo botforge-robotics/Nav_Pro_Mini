@@ -219,3 +219,12 @@ class Store:
         with self._lock, self._conn:
             cur = self._conn.execute('DELETE FROM schedules WHERE id = ?', (schedule_id,))
         return cur.rowcount > 0
+
+    def wipe_all(self) -> None:
+        """Clear all stored tables (kv, waypoints, missions, schedules)."""
+        with self._lock, self._conn:
+            self._conn.execute('DELETE FROM kv')
+            self._conn.execute('DELETE FROM waypoints')
+            self._conn.execute('DELETE FROM missions')
+            self._conn.execute('DELETE FROM schedules')
+

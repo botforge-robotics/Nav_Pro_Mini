@@ -612,16 +612,55 @@ class WifiStatusHandler(BaseHandler):
 
             ip_cmd = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=3)
             if ip_cmd.returncode == 0:
-                ip = (ip_cmd.stdout or '').strip().split(' ')[0]
+                raw_ips = (ip_cmd.stdout or '').strip().split()
+                non_ap_ips = [a for a in raw_ips if a and not a.startswith('10.42.') and not a.startswith('127.')]
+                ip = non_ap_ips[0] if non_ap_ips else ""
         except Exception:
             pass
+
+        # Disallow hotspot SSID from being returned as site Wi-Fi connection
+        if ssid.startswith(_SETUP_AP_PREFIX) or ssid == _SETUP_AP_CONN:
+            ssid = ""
+            connected = False
+
+        hotspot_active = _setup_ap_active()
+        ap_ssid = ""
+        ap_password = "navprosetup"
+        try:
+            from navpromini_setup.robot_config import ap_ssid_from_mac, DEFAULT_AP_PASSWORD
+            ap_ssid = ap_ssid_from_mac()
+            ap_password = DEFAULT_AP_PASSWORD
+        except Exception:
+            try:
+                mac_raw = Path('/sys/class/net/wlan0/address').read_text().strip().replace(':', '')
+                ap_ssid = f"NavPro-Setup-{mac_raw[-6:].upper()}"
+            except Exception:
+                ap_ssid = "NavPro-Setup"
+
+        if not ap_ssid or ap_ssid == "NavPro-Setup":
+            try:
+                ap_r = subprocess.run(['nmcli', '-g', '802-11-wireless.ssid', 'connection', 'show', _SETUP_AP_CONN],
+                                      capture_output=True, text=True, timeout=2)
+                if ap_r.returncode == 0 and ap_r.stdout.strip():
+                    ap_ssid = ap_r.stdout.strip()
+            except Exception:
+                pass
+
+        if not connected:
+            ssid = ""
+            ip = ""
+        elif ip.startswith("10.42."):
+            ip = ""
 
         self.send({
             'connected': connected,
             'ssid': ssid,
             'ip': ip,
             'interface': interface,
-            'hotspot_active': _setup_ap_active()
+            'hotspot_active': hotspot_active,
+            'hotspot_ssid': ap_ssid,
+            'hotspot_password': ap_password,
+            'hotspot_ip': '10.42.0.1',
         })
 
 
@@ -740,6 +779,292 @@ class SystemPlaySoundHandler(BaseHandler):
         except Exception as exc:
             raise ApiError(500, 'sound_failed', str(exc))
 
+
+def _exec_reboot() -> None:
+    """Trigger system reboot via systemctl, reboot, or sudo reboot."""
+    for cmd in [
+        ['systemctl', 'reboot'],
+        ['reboot'],
+        ['sudo', '-n', 'systemctl', 'reboot'],
+        ['sudo', 'reboot'],
+    ]:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                return
+        except Exception:
+            pass
+
+
+class SystemRebootHandler(BaseHandler):
+    """POST /api/v1/system/reboot - reboot the robot host system."""
+
+    def post(self) -> None:
+        try:
+            body = json.loads(self.request.body.decode('utf-8') or '{}')
+        except Exception:
+            body = {}
+        delay = float(body.get('delay', 1.5))
+        self.bridge.get_logger().warn(f"System reboot requested via API (delay={delay}s)")
+        self.bridge.emit_event('system.rebooting', {'delay': delay})
+
+        import threading
+
+        def do_reboot() -> None:
+            time.sleep(max(0.5, delay))
+            _exec_reboot()
+
+        t = threading.Thread(target=do_reboot, daemon=True)
+        t.start()
+        self.send({'success': True, 'message': 'Robot system reboot initiated.', 'delay': delay})
+
+
+def _clean_map_directories() -> None:
+    """Remove all saved maps (.yaml, .pgm, .data, .posegraph) from package share and workspace paths."""
+    candidate_dirs: set[Path] = set()
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = get_package_share_directory('navpromini_mapping')
+        candidate_dirs.add(Path(share) / 'maps')
+    except Exception:
+        pass
+
+    ws = os.environ.get('NAVPRO_WS', '')
+    if ws:
+        candidate_dirs.add(Path(ws) / 'src/navpromini_mapping/maps')
+        candidate_dirs.add(Path(ws) / 'install/navpromini_mapping/share/navpromini_mapping/maps')
+        candidate_dirs.add(Path(ws) / 'build/navpromini_mapping/maps')
+
+    for p in [
+        '/home/navpromini/NavProMini_ws/src/navpromini_mapping/maps',
+        '/home/navpromini/NavProMini_ws/install/navpromini_mapping/share/navpromini_mapping/maps',
+        '/home/navpromini/NavProMini_ws/build/navpromini_mapping/maps',
+        '/home/chaitu/NavProMini_ws/src/navpromini_mapping/maps',
+        '/home/chaitu/NavProMini_ws/install/navpromini_mapping/share/navpromini_mapping/maps',
+        '/home/chaitu/NavProMini_ws/build/navpromini_mapping/maps',
+        '/opt/navpro/maps',
+    ]:
+        candidate_dirs.add(Path(p))
+
+    target_exts = ('.yaml', '.pgm', '.data', '.posegraph')
+    keep_names = ('.gitkeep', 'README.md')
+
+    for d in candidate_dirs:
+        if not d.is_dir():
+            continue
+        try:
+            for item in d.iterdir():
+                if item.name in keep_names:
+                    continue
+                if item.suffix.lower() in target_exts:
+                    try:
+                        if item.is_symlink():
+                            target = item.resolve()
+                            item.unlink(missing_ok=True)
+                            if target.is_file():
+                                target.unlink(missing_ok=True)
+                        elif item.is_file():
+                            item.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+def _clean_dock_pose() -> None:
+    """Delete dock pose files across possible user homes."""
+    paths = [
+        Path(os.path.expanduser('~/.navpromini_dock_pose.json')),
+        Path('/home/navpromini/.navpromini_dock_pose.json'),
+        Path('/home/pi/.navpromini_dock_pose.json'),
+        Path('/root/.navpromini_dock_pose.json'),
+    ]
+    for p in paths:
+        try:
+            if p.is_file():
+                p.unlink()
+        except Exception:
+            pass
+
+
+def _clean_legacy_store_files() -> None:
+    """Delete legacy json store files across possible user homes."""
+    paths = [
+        Path(os.path.expanduser('~/.navpromini_sdk.json')),
+        Path('/home/navpromini/.navpromini_sdk.json'),
+        Path('/home/pi/.navpromini_sdk.json'),
+        Path('/root/.navpromini_sdk.json'),
+    ]
+    for p in paths:
+        try:
+            if p.is_file():
+                p.unlink()
+        except Exception:
+            pass
+
+
+def _remove_robot_config() -> None:
+    """Delete /etc/navpro/robot.yaml and fleet.yaml to reset identity & wifi status."""
+    paths = [
+        Path('/etc/navpro/robot.yaml'),
+        Path('/etc/navpro/fleet.yaml'),
+    ]
+    for p in paths:
+        try:
+            if p.is_file():
+                p.unlink()
+        except Exception:
+            pass
+
+
+def _write_setup_display_hint() -> None:
+    """Write setup mode hint for OLED/LED display."""
+    for p in [Path('/run/navpro/display_state'), Path('/etc/navpro/display_state')]:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('setup\n\n\n', encoding='utf-8')
+        except Exception:
+            pass
+
+
+def _clean_netplan_wifi() -> None:
+    """Strip wifi configurations from /etc/netplan YAML files so they do not recreate on boot."""
+    netplan_dir = Path('/etc/netplan')
+    if not netplan_dir.is_dir():
+        return
+    for f in netplan_dir.glob('*.yaml'):
+        try:
+            text = f.read_text(encoding='utf-8')
+            if 'wifis' in text:
+                import yaml
+                data = yaml.safe_load(text)
+                if isinstance(data, dict) and 'network' in data:
+                    net = data['network']
+                    if 'wifis' in net:
+                        del net['wifis']
+                        with f.open('w', encoding='utf-8') as out:
+                            yaml.safe_dump(data, out, default_flow_style=False)
+                        subprocess.run(['netplan', 'generate'], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+
+def _forget_wifi_connections() -> None:
+    """Delete all saved client Wi-Fi connection profiles from NetworkManager and Netplan."""
+    try:
+        r = subprocess.run(['nmcli', '-t', '-f', 'NAME,TYPE,UUID', 'connection', 'show'],
+                           capture_output=True, text=True, timeout=8)
+        for line in (r.stdout or '').splitlines():
+            parts = line.split(':')
+            if len(parts) >= 3:
+                name, ctype, uuid_str = parts[0], parts[1], parts[2]
+                if ctype == '802-11-wireless':
+                    if name == _SETUP_AP_CONN:
+                        continue
+                    mode_r = subprocess.run(['nmcli', '-g', '802-11-wireless.mode', 'connection', 'show', uuid_str],
+                                            capture_output=True, text=True, timeout=4)
+                    if (mode_r.stdout or '').strip() == 'ap':
+                        continue
+                    subprocess.run(['nmcli', 'connection', 'delete', uuid_str],
+                                   capture_output=True, text=True, timeout=5)
+    except Exception:
+        pass
+
+    _clean_netplan_wifi()
+
+
+def _perform_factory_reset(bridge, store, reboot=True, forget_wifi=True, clear_data=True, delay=1.5) -> None:
+    """Execute complete factory reset sequence: wipe data, forget wifi, reboot."""
+    time.sleep(max(0.5, delay))
+
+    bridge.get_logger().warn("[FACTORY RESET]: Beginning system reset sequence...")
+
+    if clear_data:
+        bridge.get_logger().info("[FACTORY RESET]: Wiping store tables (waypoints, missions, schedules)...")
+        try:
+            store.wipe_all()
+        except Exception as e:
+            bridge.get_logger().error(f"[FACTORY RESET]: Failed wiping store: {e}")
+
+        _clean_legacy_store_files()
+
+        bridge.get_logger().info("[FACTORY RESET]: Cleaning saved maps...")
+        try:
+            _clean_map_directories()
+        except Exception as e:
+            bridge.get_logger().error(f"[FACTORY RESET]: Failed cleaning maps: {e}")
+
+        bridge.get_logger().info("[FACTORY RESET]: Removing dock pose...")
+        try:
+            _clean_dock_pose()
+            bridge.invalidate('dock_pose')
+        except Exception as e:
+            bridge.get_logger().error(f"[FACTORY RESET]: Failed cleaning dock pose: {e}")
+
+    if forget_wifi:
+        bridge.get_logger().info("[FACTORY RESET]: Forgetting saved Wi-Fi connections...")
+        try:
+            _forget_wifi_connections()
+        except Exception as e:
+            bridge.get_logger().error(f"[FACTORY RESET]: Failed forgetting Wi-Fi: {e}")
+
+        bridge.get_logger().info("[FACTORY RESET]: Resetting robot configuration...")
+        try:
+            _remove_robot_config()
+        except Exception as e:
+            bridge.get_logger().error(f"[FACTORY RESET]: Failed removing robot config: {e}")
+
+        try:
+            _write_setup_display_hint()
+        except Exception as e:
+            pass
+
+    if reboot:
+        bridge.get_logger().warn("[FACTORY RESET]: Reset complete! Triggering system reboot now...")
+        _exec_reboot()
+
+
+class SystemResetHandler(BaseHandler):
+    """POST /api/v1/system/reset or /api/v1/system/factory_reset
+    Completely wipes robot data, forgets Wi-Fi, and reboots into AP setup mode.
+    """
+
+    def post(self) -> None:
+        try:
+            body = json.loads(self.request.body.decode('utf-8') or '{}')
+        except Exception:
+            body = {}
+
+        reboot = bool(body.get('reboot', True))
+        forget_wifi = bool(body.get('forget_wifi', True))
+        clear_data = bool(body.get('clear_data', True))
+        delay = float(body.get('delay', 1.5))
+
+        self.bridge.get_logger().warn(
+            f"Factory reset requested via API: reboot={reboot}, forget_wifi={forget_wifi}, clear_data={clear_data}"
+        )
+        self.bridge.emit_event('system.factory_reset', {
+            'reboot': reboot,
+            'forget_wifi': forget_wifi,
+            'clear_data': clear_data
+        })
+
+        import threading
+        store = self.opts['store']
+        t = threading.Thread(
+            target=_perform_factory_reset,
+            args=(self.bridge, store, reboot, forget_wifi, clear_data, delay),
+            daemon=True
+        )
+        t.start()
+
+        self.send({
+            'success': True,
+            'message': 'Factory reset initiated. Robot is wiping data and Wi-Fi, and rebooting into setup mode.',
+            'reboot': reboot,
+            'forget_wifi': forget_wifi,
+            'clear_data': clear_data
+        })
 
 
 # -----------------------------------------------------------------------------
