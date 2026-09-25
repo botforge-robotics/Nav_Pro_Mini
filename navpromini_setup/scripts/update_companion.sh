@@ -133,23 +133,36 @@ fi
 cd "${WS}"
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-# Phase: Re-running installer scripts (to register any new services/udev)
-if [[ -f "${SRC_DIR}/navpromini_setup/scripts/install_navpro.sh" ]]; then
-  echo "==> Updating installed service units and udev rules..."
-  write_status "restarting" 85 "Applying system service and udev updates..." "${NEW_COMMIT}"
-  bash "${SRC_DIR}/navpromini_setup/scripts/install_navpro.sh" || true
+# Phase: Updating systemd units and helper scripts
+echo "==> Updating installed service units and helper scripts..."
+write_status "restarting" 85 "Updating system services and helper scripts..." "${NEW_COMMIT}"
+UNIT_DIR="${SRC_DIR}/navpromini_setup/systemd"
+if [[ -d "${UNIT_DIR}" ]]; then
+  for unit in navpro-robot.service navpro-provision.service navpro-display.service navpro-mission-planner.service navpro-sdk.service navpro-mcp.service; do
+    if [[ -f "${UNIT_DIR}/${unit}" ]]; then
+      sed -e "s|REPLACE_USER|${USER_NAME}|g" -e "s|REPLACE_WS|${WS}|g" "${UNIT_DIR}/${unit}" > "/etc/systemd/system/${unit}"
+      chmod 0644 "/etc/systemd/system/${unit}"
+    fi
+  done
+  systemctl daemon-reload
 fi
 
-# Phase: Restarting
-echo "==> Restarting NavPro services..."
-write_status "restarting" 90 "Restarting robot services..." "${NEW_COMMIT}"
-systemctl restart navpro-robot.service navpro-display.service navpro-mission-planner.service navpro-sdk.service navpro-mcp.service
+# Copy updated helper scripts to /opt/navpro/scripts
+for f in env.sh start_robot.sh start_provision.sh start_display.sh start_mission_planner.sh start_sdk.sh start_mcp.sh update_companion.sh; do
+  if [[ -f "${SRC_DIR}/navpromini_setup/scripts/${f}" ]]; then
+    install -m 0755 "${SRC_DIR}/navpromini_setup/scripts/${f}" "/opt/navpro/scripts/${f}"
+  fi
+done
 
 # Remove EXIT trap since success
 trap - EXIT
 
+# Phase: Success & Service Restart
 echo "==> Update successfully completed!"
 write_status "success" 100 "Update completed successfully. Running on commit ${NEW_COMMIT:0:8}." "${NEW_COMMIT}"
+
+echo "==> Restarting NavPro services..."
+systemctl restart navpro-robot.service navpro-display.service navpro-mission-planner.service navpro-sdk.service navpro-mcp.service || true
 
 echo "=================================================="
 echo "=== Update finished at $(date) ==="

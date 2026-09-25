@@ -501,7 +501,17 @@ class UpdateApplyHandler(BaseHandler):
                 raise ApiError(500, 'updater_not_found', 'update_companion.sh not found on system')
 
         try:
-            # Popen detached session so it survives SDK process restarts
+            # Launch via systemd-run so the update script executes in an isolated unit/cgroup
+            # and survives navpro-sdk.service being restarted.
+            cmd = ['systemd-run', '--unit=navpro-companion-updater', '--remain-after-exit=no',
+                   '/bin/bash', str(script_path)]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if r.returncode != 0:
+                subprocess.Popen(['/bin/bash', str(script_path)],
+                                 start_new_session=True,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        except Exception:
             subprocess.Popen(['/bin/bash', str(script_path)],
                              start_new_session=True,
                              stdout=subprocess.DEVNULL,
