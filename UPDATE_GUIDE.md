@@ -75,3 +75,6 @@ If physical power is disconnected or the battery dies during an active `colcon b
 | `POST` | `/api/v1/system/updates/check` | Triggers background `git fetch origin` |
 | `POST` | `/api/v1/system/updates/apply` | Verifies safety interlocks and launches detached updater |
 | `GET` | `/api/v1/system/updates/status` | Returns live phase (`idle`, `pulling`, `building`, `restarting`, `success`, `failed`) and log tail |
+
+---
+*OTA Update Verified: NavPro Companion v2.0.0+*
