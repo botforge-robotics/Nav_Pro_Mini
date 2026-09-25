@@ -500,6 +500,20 @@ class UpdateApplyHandler(BaseHandler):
             else:
                 raise ApiError(500, 'updater_not_found', 'update_companion.sh not found on system')
 
+        # Seed immediate in-progress status so GET /updates/status returns 'pulling' without delay
+        try:
+            UPDATE_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            UPDATE_STATUS_FILE.write_text(json.dumps({
+                'phase': 'pulling',
+                'progress': 10,
+                'message': 'Companion update process initiated in background...',
+                'commit': None,
+                'error': None,
+                'timestamp': time.time()
+            }))
+        except Exception:
+            pass
+
         try:
             # Launch via systemd-run so the update script executes in an isolated unit/cgroup
             # and survives navpro-sdk.service being restarted.
