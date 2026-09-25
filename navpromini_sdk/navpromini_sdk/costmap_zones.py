@@ -34,8 +34,8 @@ LATCHED_QOS = QoSProfile(
 SPEED_LIMIT_MULTIPLIER = 0.005
 SPEED_LIMIT_BASE = 0.0
 
-# Non-lethal cost bias for preferred lane background (cost ~89 out of 254)
-PREFERRED_LANE_BG_PENALTY = 35
+# Non-lethal cost bias for preferred lane background (cost ~127 out of 254)
+PREFERRED_LANE_BG_PENALTY = 50
 # Non-lethal cost bias for work / caution zones (cost ~88 out of 254)
 WORK_ZONE_COST_PENALTY = 35
 
