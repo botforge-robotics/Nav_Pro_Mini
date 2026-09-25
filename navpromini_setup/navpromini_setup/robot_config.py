@@ -27,6 +27,9 @@ class RobotConfig:
     # timezone the OS image shipped with, which is very likely wrong for the
     # robot's actual deployment site.
     timezone: str = ''
+    # ISO 3166-1 alpha-2 regulatory domain (e.g. "IN", "US", "GB", "DE").
+    # Sets permitted Wi-Fi channels & tx power limits on Linux/Raspberry Pi.
+    country_code: str = ''
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,13 +124,14 @@ def load_robot_config(path: Path | None = None) -> Optional[RobotConfig]:
     if not isinstance(raw, dict):
         return None
     robot = raw.get('robot') if isinstance(raw.get('robot'), dict) else {}
-    known = {'name', 'serial', 'wifi_ssid', 'timezone', 'robot'}
+    known = {'name', 'serial', 'wifi_ssid', 'timezone', 'country_code', 'robot'}
     extra = {k: v for k, v in raw.items() if k not in known}
     return RobotConfig(
         name=str(raw.get('name') or robot.get('name') or ''),
         serial=str(raw.get('serial') or robot.get('serial') or read_cpu_serial()),
         wifi_ssid=str(raw.get('wifi_ssid') or ''),
         timezone=str(raw.get('timezone') or ''),
+        country_code=str(raw.get('country_code') or ''),
         extra=extra,
     )
 

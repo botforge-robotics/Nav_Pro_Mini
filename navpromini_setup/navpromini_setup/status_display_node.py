@@ -50,8 +50,14 @@ STATE_FX: dict[str, tuple[str, str]] = {
     'ready': ('', 'solid,0,200,40'),
     'mapping': ('Mapping...', 'chase,0,120,255,80'),
     'nav': ('Nav ready', 'solid,0,200,40'),
+    'docking': ('Docking...', 'solid,255,255,255'),
     'error': ('Error', 'blink,255,0,0,300'),
     'offline': ('Offline', 'solid,80,80,80'),
+}
+
+DOCKING_STATES = {
+    'staging', 'searching', 'servo', 'blind_creep', 'docking', 'dock',
+    'approaching', 'aligning', 'centering', 'retry'
 }
 
 # LED-only override while the pack is actually taking charge.
@@ -169,7 +175,7 @@ class StatusDisplayNode(Node):
         if not new_state:
             return
         # Don't let a late setup message undo post-setup states.
-        if new_state == 'setup' and self._state in ('joining', 'ready', 'nav', 'mapping'):
+        if new_state == 'setup' and self._state in ('joining', 'ready', 'nav', 'mapping', 'docking'):
             return
         if new_state == self._state:
             return
@@ -186,6 +192,7 @@ class StatusDisplayNode(Node):
         status = (msg.data or '').strip().lower()
         if status != self._dock_status:
             self._dock_status = status
+            self.get_logger().info(f'dock_status topic → {status}')
             self._note_state_composed()
             self._compose_pending(self._state)
 
@@ -488,7 +495,8 @@ class StatusDisplayNode(Node):
         # method's already-intricate hint/mtime race handling untouched.
         display_state = 'boot' if state == 'ready' and not self._hardware_ready() else state
         text, led = STATE_FX.get(display_state, STATE_FX['boot'])
-        if self._dock_status in ('staging', 'searching', 'servo', 'blind_creep'):
+        is_docking = (self._dock_status in DOCKING_STATES) or (display_state == 'docking') or (state == 'docking')
+        if is_docking:
             self._pending_text = self._oled_ascii('Docking...')[:192]
             self._pending_led = 'solid,255,255,255'
         else:

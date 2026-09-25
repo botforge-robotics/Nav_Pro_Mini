@@ -38,6 +38,7 @@ from .handlers import (
     system,
     waypoints,
 )
+from .costmap_zones import CostmapZoneManager
 from .handlers.base import BaseHandler
 from .handlers.events import EventSocket
 from .ros_bridge import LATCHED_QOS, RosBridge
@@ -110,12 +111,17 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/mapping/finish', mode.FinishMappingHandler, opts),
         # maps
         (rf'{API}/maps', maps.MapsHandler, opts),
-                (rf'{API}/maps/current/info', maps.CurrentMapInfoHandler, opts),
+        (rf'{API}/maps/current/info', maps.CurrentMapInfoHandler, opts),
         (rf'{API}/maps/current/raw', maps.CurrentMapRawHandler, opts),
         (rf'{API}/maps/current/image', maps.CurrentMapImageHandler, opts),
         (rf'{API}/maps/current', maps.CurrentMapHandler, opts),
         (rf'{API}/maps/([^/]+)/activate', maps.ActivateMapHandler, opts),
+        (rf'{API}/maps/([^/]+)/zones/([^/]+)', maps.MapZoneHandler, opts),
+        (rf'{API}/maps/([^/]+)/zones', maps.MapZonesHandler, opts),
         (rf'{API}/maps/([^/]+)', maps.MapHandler, opts),
+        # zones
+        (rf'{API}/zones/([^/]+)', maps.ZoneHandler, opts),
+        (rf'{API}/zones', maps.ZonesHandler, opts),
         # waypoints
         (rf'{API}/waypoints', waypoints.WaypointsHandler, opts),
         (rf'{API}/waypoints/([^/]+)', waypoints.WaypointHandler, opts),
@@ -189,6 +195,16 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
             (r'/ui/?', tornado.web.RedirectHandler, {'url': '/ui/index.html'}),
             (r'/ui/(.*)', tornado.web.StaticFileHandler, {'path': ui_dir, 'default_filename': 'index.html'}),
         ])
+
+    # Also support endpoints without /api/v1 prefix (e.g. /system/health, /system/info, /health)
+    compat_routes = []
+    for route in routes:
+        pattern = route[0]
+        if isinstance(pattern, str) and pattern.startswith(API):
+            no_prefix_pattern = pattern[len(API):]
+            compat_routes.append((no_prefix_pattern, route[1], *route[2:]))
+    routes.extend(compat_routes)
+    routes.append((r'/health', system.HealthHandler, opts))
 
     return tornado.web.Application(routes, default_handler_class=NotFoundHandler,
                                    default_handler_args=opts)
@@ -274,9 +290,11 @@ def main(args=None) -> None:
 
     store = Store()
     loop = tornado.ioloop.IOLoop.current()
+    zone_mgr = CostmapZoneManager(bridge, store)
     opts: dict[str, Any] = {
         'bridge': bridge,
         'store': store,
+        'zone_mgr': zone_mgr,
         'mode_state': ModeState(),
         'client_hold': ClientHold(rosbridge_url, logger=bridge.get_logger()),
         'auth_token': token,
@@ -284,6 +302,10 @@ def main(args=None) -> None:
         'spawn': lambda coro: loop.add_callback(lambda: asyncio.ensure_future(coro)),
         'dock_pose_pub': bridge.create_publisher(PoseStamped, 'dock_pose', LATCHED_QOS),
     }
+
+    # Initial publish of keepout filter mask for the current active map
+    initial_map = store.current_map() or 'default'
+    zone_mgr.update_zones(initial_map)
 
     # Publish initial mode so latched /robot_mode topic is populated immediately
     bridge.publish_mode(opts['mode_state'].mode)

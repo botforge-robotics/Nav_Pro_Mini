@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS schedules (
     id    TEXT PRIMARY KEY,
     data  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS zones (
+    map   TEXT NOT NULL,
+    id    TEXT NOT NULL,
+    data  TEXT NOT NULL,
+    PRIMARY KEY (map, id)
+);
 """
 
 
@@ -158,6 +164,41 @@ class Store:
             cur = self._conn.execute(
                 'DELETE FROM waypoints WHERE map = ? AND name = ?', (m, name))
         return cur.rowcount > 0
+
+    # -- zones -------------------------------------------------------------
+
+    def list_zones(self, map_name: Optional[str] = None) -> list[dict]:
+        m = map_name or self.current_map()
+        with self._lock:
+            rows = self._conn.execute(
+                'SELECT data FROM zones WHERE map = ? ORDER BY id', (m,)).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def get_zone(self, zone_id: str, map_name: Optional[str] = None) -> Optional[dict]:
+        m = map_name or self.current_map()
+        with self._lock:
+            row = self._conn.execute(
+                'SELECT data FROM zones WHERE map = ? AND id = ?', (m, zone_id)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put_zone(self, zone: dict, map_name: Optional[str] = None) -> dict:
+        m = map_name or self.current_map()
+        zone_id = str(zone.get('id') or '').strip()
+        if not zone_id:
+            raise ValueError("Zone 'id' is required")
+        with self._lock, self._conn:
+            self._conn.execute(
+                'INSERT OR REPLACE INTO zones (map, id, data) VALUES (?, ?, ?)',
+                (m, zone_id, json.dumps(zone)))
+        return zone
+
+    def delete_zone(self, zone_id: str, map_name: Optional[str] = None) -> bool:
+        m = map_name or self.current_map()
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                'DELETE FROM zones WHERE map = ? AND id = ?', (m, zone_id))
+        return cur.rowcount > 0
+
 
     # -- missions ------------------------------------------------------------
 

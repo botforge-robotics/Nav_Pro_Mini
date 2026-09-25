@@ -68,7 +68,7 @@ async def send_goal(action_client, goal, name: str) -> Any:
         raise ApiError(503, 'action_unavailable',
                        f'{name} action server is not available — is the '
                        'navigation stack running?', {'action': name})
-    handle = await ros_future(action_client.send_goal_async(goal), timeout=10.0)
+    handle = await ros_future(action_client.send_goal_async(goal), timeout=30.0)
     if not handle.accepted:
         raise ApiError(409, 'goal_rejected', f'{name} rejected the goal',
                        {'action': name})

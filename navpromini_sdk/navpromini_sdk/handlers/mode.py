@@ -331,7 +331,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
                            {'package': package, 'launch_file': launch_file})
 
         state.set(mode, map_name, resp.unique_id)
-        bridge.publish_mode(mode)
+        bridge.publish_mode(mode, map_name)
         bridge.emit_event(f'{mode}.started', {'map': map_name})
         if mode == 'navigation':
             if map_name:

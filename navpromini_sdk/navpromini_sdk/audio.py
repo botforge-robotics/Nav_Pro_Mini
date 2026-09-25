@@ -126,6 +126,37 @@ except Exception:
 import json as _json
 import signal as _signal
 
+def _run_play_wav(wav_path: str | Path, timeout: float = 10.0) -> None:
+    """Execute audio playback via paplay or aplay, adapting for root daemon permissions."""
+    path_str = str(wav_path)
+    if not os.path.isfile(path_str):
+        return
+
+    # If run by root, ensure file is world-readable so navpromini user can access it
+    if os.geteuid() == 0:
+        try:
+            os.chmod(path_str, 0o666)
+        except OSError:
+            pass
+
+    env = get_pulse_env()
+    cmd: list[str] = []
+    if shutil.which('paplay'):
+        if os.geteuid() == 0:
+            cmd = ['sudo', '-u', 'navpromini', 'env', 'XDG_RUNTIME_DIR=/run/user/1000',
+                   'PULSE_SERVER=unix:/run/user/1000/pulse/native', 'paplay', path_str]
+        else:
+            cmd = ['paplay', path_str]
+    elif shutil.which('aplay'):
+        cmd = ['aplay', '-q', path_str]
+
+    if cmd:
+        try:
+            subprocess.run(cmd, env=env, check=False, timeout=timeout)
+        except Exception:
+            pass
+
+
 _PIPER_MODEL = '/opt/navpro/piper/voices/en_US-hfc_female-medium.onnx'
 _PIPER_RATE = 23800  # sample rate produced by this model
 
@@ -228,7 +259,7 @@ def play_speech(text: str, wait: bool = False) -> None:
         if synth_ok and os.path.isfile(wav_path):
             if wait:
                 try:
-                    subprocess.run(['paplay', wav_path], env=env, check=False, timeout=30.0)
+                    _run_play_wav(wav_path, timeout=30.0)
                 finally:
                     try:
                         os.remove(wav_path)
@@ -238,7 +269,7 @@ def play_speech(text: str, wait: bool = False) -> None:
             else:
                 def _bg_play(target_wav: str) -> None:
                     try:
-                        subprocess.run(['paplay', target_wav], env=env, check=False, timeout=30.0)
+                        _run_play_wav(target_wav, timeout=30.0)
                     finally:
                         try:
                             os.remove(target_wav)
@@ -253,10 +284,17 @@ def play_speech(text: str, wait: bool = False) -> None:
     if shutil.which('navpro-speak'):
         cmd = ['navpro-speak', text]
     elif shutil.which('piper') and os.path.isfile(_PIPER_MODEL):
-        cmd = ['bash', '-c',
-               f'echo "{text}" | piper --model {_PIPER_MODEL} '
-               f'--length_scale 1.20 --output-raw 2>/dev/null | '
-               f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null || true']
+        if os.geteuid() == 0:
+            cmd = ['sudo', '-u', 'navpromini', 'bash', '-c',
+                   f'echo "{text}" | piper --model {_PIPER_MODEL} '
+                   f'--length_scale 1.20 --output-raw 2>/dev/null | '
+                   f'env XDG_RUNTIME_DIR=/run/user/1000 PULSE_SERVER=unix:/run/user/1000/pulse/native '
+                   f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null || true']
+        else:
+            cmd = ['bash', '-c',
+                   f'echo "{text}" | piper --model {_PIPER_MODEL} '
+                   f'--length_scale 1.20 --output-raw 2>/dev/null | '
+                   f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null || true']
     elif shutil.which('espeak-ng'):
         cmd = ['espeak-ng', '-v', 'en+f4', '-p', '88', '-s', '130', text]
 
@@ -291,11 +329,7 @@ def play_sound(sound_name: str, speech_text: Optional[str] = None, wait: bool = 
             if not wav_path.is_file() and sound_name in TONE_DEFINITIONS:
                 generate_tone_wav(wav_path, TONE_DEFINITIONS[sound_name])
 
-            env = get_pulse_env()
-            if wav_path.is_file() and shutil.which('paplay'):
-                subprocess.run(['paplay', str(wav_path)], env=env, check=False, timeout=5.0)
-            elif wav_path.is_file() and shutil.which('aplay'):
-                subprocess.run(['aplay', '-q', str(wav_path)], env=env, check=False, timeout=5.0)
+            _run_play_wav(wav_path, timeout=5.0)
 
             if speech_text and speech_text.strip():
                 time.sleep(0.08)

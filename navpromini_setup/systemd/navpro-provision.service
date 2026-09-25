@@ -1,8 +1,13 @@
 [Unit]
 Description=NavPro Mini Wi-Fi setup hotspot (only if no saved/nearby Wi-Fi)
 # Display node must be up so /run/navpro/display_state updates reach OLED/LED.
-After=NetworkManager.service navpro-display.service
-Wants=NetworkManager.service navpro-display.service
+# network-online.target (not just NetworkManager.service) ensures NM has
+# actually attempted to bring existing connections online, not just started.
+# This fixes the 1-in-25 race where NM was "started" but hadn't connected
+# to the saved Wi-Fi yet, causing the provision portal to falsely conclude
+# no saved SSID was nearby and start the setup hotspot instead.
+After=NetworkManager.service network-online.target navpro-display.service
+Wants=NetworkManager.service network-online.target navpro-display.service
 
 [Service]
 Type=simple

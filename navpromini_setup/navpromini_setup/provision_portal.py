@@ -24,6 +24,7 @@ from __future__ import annotations
 import html
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -232,6 +233,9 @@ window.addEventListener('DOMContentLoaded', function() {{
         <input name="wifi_password" type="password" required autocomplete="off" placeholder="Wi‑Fi password"/>
         <label>Robot name</label>
         <input name="robot_name" required placeholder="bot-1" autocomplete="off"/>
+        <label>Wi‑Fi country code</label>
+        <input name="country_code" id="wifi_country_code" maxlength="2" placeholder="e.g. IN, US, GB" autocomplete="off" style="text-transform:uppercase"/>
+        <span class="hint" style="margin:0">Two-letter regulatory domain (e.g. IN, US, GB) to enable local 2.4/5GHz Wi‑Fi channels.</span>
         <label>Time zone</label>
         <select id="wifi_timezone" name="timezone">
           {timezone_options}
@@ -499,7 +503,14 @@ def scan_wifi_networks(rescan: bool = True) -> list[tuple[str, int]]:
 
 
 def try_connect_saved_nearby() -> bool:
-    """If a saved Wi‑Fi SSID is nearby, bring it up. Returns True on success."""
+    """If a saved Wi‑Fi SSID is nearby, bring it up. Returns True on success.
+
+    Includes a boot-time grace period: on RPi, NetworkManager may report
+    "started" (satisfying network-online.target's basic check) while wlan0
+    is still initialising. We poll for up to 15 s before concluding that
+    no saved SSID is visible — this eliminates the 1-in-25 race where the
+    first scan came back empty only because the radio wasn't ready yet.
+    """
     if wifi_already_online():
         print('Wi‑Fi already online — no hotspot needed')
         return True
@@ -515,9 +526,21 @@ def try_connect_saved_nearby() -> bool:
         return False
 
     print(f'Saved Wi‑Fi profiles: {[s for _, s in saved]}')
-    nearby = {ssid for ssid, _ in scan_wifi_networks(rescan=True)}
-    print(f'Nearby SSIDs: {sorted(nearby)[:20]}…' if len(
-        nearby) > 20 else f'Nearby SSIDs: {sorted(nearby)}')
+
+    # --- Boot-time grace loop ---
+    # If the radio just came up, the first scan may return an empty list.
+    # Retry for up to 15 s (5 × 3 s) before giving up and starting the AP.
+    nearby: set[str] = set()
+    for attempt in range(5):
+        nearby = {ssid for ssid, _ in scan_wifi_networks(rescan=True)}
+        print(f'Nearby SSIDs (attempt {attempt + 1}): '
+              f'{sorted(nearby)[:20]}{"…" if len(nearby) > 20 else ""}')
+        # If we see at least one of our saved SSIDs, stop waiting
+        if any(ssid in nearby for _, ssid in saved):
+            break
+        if attempt < 4:
+            print('  No saved SSID visible yet — waiting 3 s for radio to settle…')
+            time.sleep(3.0)
 
     for conn_name, ssid in saved:
         if ssid not in nearby:
@@ -636,6 +659,46 @@ def connect_site_wifi(ssid: str, password: str) -> None:
             return
 
 
+def apply_country_code(cc: str) -> None:
+    """Sets the Wi-Fi regulatory domain (country code, e.g. 'IN', 'US', 'GB').
+
+    Essential for Linux Wi-Fi to enable the correct channels and power limits
+    for the deployment region.
+    """
+    if not cc:
+        return
+    cc = cc.strip().upper()
+    if len(cc) != 2 or not cc.isalpha():
+        sys.stderr.write(f'[provision] invalid country code {cc!r} — skipping\n')
+        return
+
+    sys.stderr.write(f'[provision] applying Wi-Fi country code {cc!r}\n')
+    # 1. Apply via iw directly
+    _run(['iw', 'reg', 'set', cc], check=False)
+
+    # 2. Apply via raspi-config nonint if available (Raspberry Pi OS)
+    _run(['raspi-config', 'nonint', 'do_wifi_country', cc], check=False)
+
+    # 3. Update /etc/default/crda if present
+    crda_path = Path('/etc/default/crda')
+    if crda_path.exists():
+        try:
+            content = crda_path.read_text(encoding='utf-8')
+            lines = []
+            replaced = False
+            for line in content.splitlines():
+                if line.startswith('REGDOMAIN='):
+                    lines.append(f'REGDOMAIN={cc}')
+                    replaced = True
+                else:
+                    lines.append(line)
+            if not replaced:
+                lines.append(f'REGDOMAIN={cc}')
+            crda_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        except OSError as exc:
+            sys.stderr.write(f'[provision] failed to update /etc/default/crda: {exc}\n')
+
+
 def apply_timezone(tz: str) -> None:
     """Sets the system timezone via timedatectl — root already (this whole
     portal runs as root, see navpro-provision.service), so no privilege
@@ -698,6 +761,9 @@ class PortalState:
                 'wifi_ok': self.wifi_ok,
                 'busy': self.busy,
                 'done': self.done,
+                'networks': [
+                    {'ssid': s, 'signal': sig} for s, sig in self.networks
+                ],
             }
 
     def set_phase(self, phase: str, **kwargs: Any) -> None:
@@ -771,6 +837,13 @@ def make_handler(state: PortalState):  # noqa: ANN201
             if path == '/api/status':
                 self._send_json(200, state.status_dict())
                 return
+            if path in ('/api/networks', '/api/wifi_list'):
+                self._send_json(200, {
+                    'networks': [
+                        {'ssid': s, 'signal': sig} for s, sig in state.networks
+                    ]
+                })
+                return
             if path == '/status':
                 self._render_status()
                 return
@@ -813,6 +886,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
             wifi_password = form.get('wifi_password', '')
             robot_name = form.get('robot_name', '').strip()
             timezone = form.get('timezone', '').strip()
+            country_code = form.get('country_code', '').strip().upper()
             if not all([wifi_ssid, wifi_password, robot_name]):
                 self._render_form(
                     '<div class="flash err">Wi‑Fi, password, and robot name are required.</div>'
@@ -832,6 +906,8 @@ def make_handler(state: PortalState):  # noqa: ANN201
 
             def worker() -> None:
                 try:
+                    if country_code:
+                        apply_country_code(country_code)
                     apply_timezone(timezone)
                     state.set_phase('joining_wifi')
                     write_display_hint('joining', robot_name)
@@ -842,6 +918,7 @@ def make_handler(state: PortalState):  # noqa: ANN201
                         serial=state.serial,
                         wifi_ssid=wifi_ssid,
                         timezone=timezone,
+                        country_code=country_code,
                     )
                     save_robot_config(cfg)
                     write_display_hint('ready', cfg.name)

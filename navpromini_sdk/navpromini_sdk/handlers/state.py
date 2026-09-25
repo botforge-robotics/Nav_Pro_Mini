@@ -3,10 +3,63 @@
 
 from __future__ import annotations
 
+import os
+import time
+
 from .base import BaseHandler
+
+_last_cpu_sample: tuple[float, float, float] | None = None
+_last_cpu_util_pct: float | None = None
+
+
+def _get_cpu_load_pct() -> float | None:
+    """Calculates instantaneous CPU utilization (%) from /proc/stat.
+
+    Uses consecutive sample deltas (total vs idle ticks) so it reports
+    true processor utilization (0.0% - 100.0%) instead of system load average.
+    """
+    global _last_cpu_sample, _last_cpu_util_pct
+    try:
+        with open('/proc/stat', 'r') as f:
+            first_line = f.readline()
+        if not first_line.startswith('cpu '):
+            return None
+        parts = [float(x) for x in first_line.split()[1:]]
+        idle = parts[3] + (parts[4] if len(parts) > 4 else 0.0)
+        total = sum(parts)
+        now = time.monotonic()
+
+        if _last_cpu_sample is not None:
+            prev_total, prev_idle, prev_ts = _last_cpu_sample
+            d_total = total - prev_total
+            d_idle = idle - prev_idle
+            dt = now - prev_ts
+            if d_total > 0 and dt >= 0.1:
+                pct = 100.0 * (1.0 - (d_idle / d_total))
+                _last_cpu_util_pct = round(min(100.0, max(0.0, pct)), 1)
+                _last_cpu_sample = (total, idle, now)
+        else:
+            time.sleep(0.04)
+            with open('/proc/stat', 'r') as f:
+                line2 = f.readline()
+            parts2 = [float(x) for x in line2.split()[1:]]
+            idle2 = parts2[3] + (parts2[4] if len(parts2) > 4 else 0.0)
+            total2 = sum(parts2)
+            d_total = total2 - total
+            d_idle = idle2 - idle
+            if d_total > 0:
+                _last_cpu_util_pct = round(
+                    min(100.0, max(0.0, 100.0 * (1.0 - d_idle / d_total))), 1
+                )
+            _last_cpu_sample = (total2, idle2, time.monotonic())
+
+        return _last_cpu_util_pct
+    except Exception:
+        return None
 
 
 class PoseHandler(BaseHandler):
+
     """Robot pose, preferring the map frame.
 
     Falls back to odom when AMCL is not running (idle or mapping mode) and says
@@ -55,7 +108,9 @@ class TemperatureHandler(BaseHandler):
         self.send({
             'cpu_c': self.bridge.get('cpu_temperature'),
             'battery_c': battery.get('temperature'),
+            'cpu_load_pct': _get_cpu_load_pct(),
         })
+
 
 
 class RobotStateHandler(BaseHandler):
@@ -137,5 +192,11 @@ class RobotStateHandler(BaseHandler):
             'dock': {'configured': bridge.get('dock_pose') is not None,
                     'status': bridge.get('dock_status'),
                     'operation': dock_tracker.state},
+            'system': {
+                'cpu_load_pct': _get_cpu_load_pct(),
+                'cpu_temperature_c': bridge.get('cpu_temperature'),
+                'battery_temperature_c': battery.get('temperature'),
+            },
             'error': lifecycle['detail'] if lifecycle['lifecycle'] == 'ERROR' else None,
         })
+

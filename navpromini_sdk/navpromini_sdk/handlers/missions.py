@@ -509,7 +509,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         await asyncio.sleep(dur)
         return True, 'next', f"Waited {dur}s"
 
-    if ntype in ('end', 'mission_end', 'dock_and_end'):
+    if ntype in ('end', 'mission_end', 'dock_and_end', 'abort', 'abort_and_end'):
         status = str(params.get('status', 'success')).lower()
         msg = resolve_template_value(params.get('message', 'Mission completed'), context)
         dock_on_end = bool(params.get('dock_on_end', False)) or ntype == 'dock_and_end'

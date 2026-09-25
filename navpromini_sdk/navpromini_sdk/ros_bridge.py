@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import math
+import pathlib
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -140,10 +141,13 @@ class RosBridge(Node):
                                  LATCHED_QOS, callback_group=cb)
         self.create_subscription(Float32MultiArray, 'dock_tag', self._on_dock_tag, 10,
                                  callback_group=cb)
-        self.create_subscription(CompressedImage, 'dock_debug/compressed', self._on_dock_debug,
-                                 SENSOR_QOS, callback_group=cb)
-        self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._on_camera_image,
-                                 SENSOR_QOS, callback_group=cb)
+
+        # Video streams (camera & dock_debug) are subscribed on-demand when active
+        # clients connect to avoid continuous 15/30 FPS JPEG processing when idle.
+        self._video_stream_refcount = 0
+        self._sub_camera_img: Optional[Any] = None
+        self._sub_dock_debug_img: Optional[Any] = None
+        self._video_sub_lock = threading.Lock()
 
         # --- outbound -----------------------------------------------------
         self._pub_cmd_vel = self.create_publisher(Twist, 'cmd_vel_teleop', 10)
@@ -152,6 +156,8 @@ class RosBridge(Node):
         self._pub_display = self.create_publisher(String, 'display_text', 10)
         self._pub_led = self.create_publisher(String, 'led_command', 10)
         self._pub_mode = self.create_publisher(String, 'robot_mode', LATCHED_QOS)
+        self._pub_display_state = self.create_publisher(String, 'navpro/display_state', 10)
+        self._pub_plan = self.create_publisher(Path, 'plan', 10)
 
         # --- service clients (launch_manager) ------------------------------
         self.cli_launch = self.create_client(LaunchWithArgs, 'launch_with_args',
@@ -255,13 +261,40 @@ class RosBridge(Node):
             self.get_logger().debug(f"Event audio dispatcher error: {exc}")
 
 
-    def publish_mode(self, mode_name: str) -> None:
+    def publish_mode(self, mode_name: str, map_name: str | None = None) -> None:
         try:
             msg = String()
             msg.data = mode_name
             self._pub_mode.publish(msg)
         except Exception as e:
             self.get_logger().warn(f"Failed to publish robot mode '{mode_name}': {e}")
+
+        # Update OLED / LED status display node
+        display_val = 'mapping' if mode_name == 'mapping' else 'ready'
+        try:
+            ds_msg = String()
+            ds_msg.data = display_val
+            self._pub_display_state.publish(ds_msg)
+        except Exception as e:
+            self.get_logger().debug(f"Failed to publish display_state: {e}")
+
+        # Also write display hint file so status_display_node picks it up on disk sync
+        try:
+            import pathlib
+            hint_path = pathlib.Path('/run/navpro/display_state')
+            hint_path.parent.mkdir(parents=True, exist_ok=True)
+            if mode_name == 'mapping':
+                hint_path.write_text('mapping\nMapping...\n\n', encoding='utf-8')
+            else:
+                hint_path.write_text('ready\n\n\n', encoding='utf-8')
+        except OSError:
+            pass
+
+        # Emit websocket event for real-time subscribers
+        try:
+            self.emit_event('mode.changed', {'mode': mode_name, 'map': map_name})
+        except Exception:
+            pass
 
     # -- subscription callbacks --------------------------------------------
 
@@ -385,6 +418,37 @@ class RosBridge(Node):
     def _on_map(self, m: OccupancyGrid) -> None:
         self._put('map_msg', m)
 
+    def acquire_video_stream(self) -> None:
+        """Subscribe to camera/dock video streams on demand when an active streaming client connects."""
+        with self._video_sub_lock:
+            self._video_stream_refcount += 1
+            if self._video_stream_refcount == 1:
+                cb = self._cb
+                if self._sub_dock_debug_img is None:
+                    self._sub_dock_debug_img = self.create_subscription(
+                        CompressedImage, 'dock_debug/compressed', self._on_dock_debug,
+                        SENSOR_QOS, callback_group=cb
+                    )
+                if self._sub_camera_img is None:
+                    self._sub_camera_img = self.create_subscription(
+                        CompressedImage, 'camera/image_raw/compressed', self._on_camera_image,
+                        SENSOR_QOS, callback_group=cb
+                    )
+                self.get_logger().info('RosBridge: Subscribed to camera/dock video streams on demand')
+
+    def release_video_stream(self) -> None:
+        """Unsubscribe from video streams when no clients are viewing video streams."""
+        with self._video_sub_lock:
+            self._video_stream_refcount = max(0, self._video_stream_refcount - 1)
+            if self._video_stream_refcount == 0:
+                if self._sub_dock_debug_img is not None:
+                    self.destroy_subscription(self._sub_dock_debug_img)
+                    self._sub_dock_debug_img = None
+                if self._sub_camera_img is not None:
+                    self.destroy_subscription(self._sub_camera_img)
+                    self._sub_camera_img = None
+                self.get_logger().info('RosBridge: Unsubscribed from video streams (no active clients)')
+
     def _on_dock_debug(self, m: CompressedImage) -> None:
         self._put('dock_debug_image', bytes(m.data))
 
@@ -425,6 +489,38 @@ class RosBridge(Node):
         msg = String()
         msg.data = str(cmd)
         self._pub_led.publish(msg)
+
+    def publish_display_state(self, state: str) -> None:
+        msg = String()
+        msg.data = str(state)
+        try:
+            self._pub_display_state.publish(msg)
+        except Exception as exc:
+            self.get_logger().debug(f'Failed to publish display_state: {exc}')
+
+        try:
+            hint_path = pathlib.Path('/run/navpro/display_state')
+            hint_path.parent.mkdir(parents=True, exist_ok=True)
+            name = ''
+            if hint_path.is_file():
+                lines = hint_path.read_text().splitlines()
+                if len(lines) > 1:
+                    name = lines[1]
+            hint_path.write_text(f"{state}\n{name}\n")
+        except Exception:
+            pass
+
+    def publish_empty_plan(self) -> None:
+        """Publish an empty Path to /plan and clear the cache when navigation stops."""
+        msg = Path()
+        msg.header.frame_id = 'map'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.poses = []
+        try:
+            self._pub_plan.publish(msg)
+        except Exception as exc:
+            self.get_logger().warn(f'Failed to publish empty plan: {exc}')
+        self._put('plan', [])
 
     def reinitialize_global_localization(self, timeout_sec: float = 2.0) -> bool:
         """Call AMCL's /reinitialize_global_localization service to disperse particles."""

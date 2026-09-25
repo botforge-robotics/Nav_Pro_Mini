@@ -47,6 +47,15 @@ async def send_dock_goal(bridge, navigate_to_staging: bool = True):
     navigation.py's send_navigate_goal for why that's kept separate from the
     awaited-result half.
     """
+    TRACKER.begin(None, 'docking')
+    if hasattr(bridge, 'acquire_video_stream'):
+        bridge.acquire_video_stream()
+    if hasattr(bridge, 'publish_led_command'):
+        bridge.publish_led_command('solid,255,255,255')
+    if hasattr(bridge, 'publish_display_state'):
+        bridge.publish_display_state('docking')
+    bridge.emit_event('dock.started')
+
     goal = DockRobot.Goal()
     goal.dock_type = 'simple_charging_dock'
     # navigate_to_staging_pose drives to the standoff first. Skipping it only
@@ -55,10 +64,17 @@ async def send_dock_goal(bridge, navigate_to_staging: bool = True):
     goal.navigate_to_staging_pose = bool(navigate_to_staging)
     goal.use_dock_id = True     # use the robot's own saved dock pose
 
-    handle = await send_goal(goal=goal, action_client=bridge.act_dock, name='dock')
-    TRACKER.begin(handle, 'docking')
-    bridge.emit_event('dock.started')
-    return handle
+    try:
+        handle = await send_goal(goal=goal, action_client=bridge.act_dock, name='dock')
+        TRACKER.handle = handle
+        return handle
+    except Exception as exc:
+        TRACKER.finish('failed', str(exc))
+        if hasattr(bridge, 'release_video_stream'):
+            bridge.release_video_stream()
+        if hasattr(bridge, 'publish_display_state'):
+            bridge.publish_display_state('ready')
+        raise
 
 
 async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
@@ -76,6 +92,11 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
         TRACKER.finish('failed', str(exc))
         bridge.emit_event('dock.failed', {'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
+    finally:
+        if hasattr(bridge, 'release_video_stream'):
+            bridge.release_video_stream()
+        if hasattr(bridge, 'publish_display_state'):
+            bridge.publish_display_state('ready')
 
 
 async def dock_robot(bridge, navigate_to_staging: bool = True, timeout: float = 600.0) -> dict:
@@ -104,13 +125,19 @@ async def send_undock_goal(bridge):
     read as the whole endpoint simply not responding. Raises ApiError
     synchronously on rejection, same as send_dock_goal.
     """
+    TRACKER.begin(None, 'undocking')
+    bridge.emit_event('dock.started', {'operation': 'undock'})
+
     goal = NavigateToPose.Goal()
     goal.pose = PoseStamped()   # empty frame_id + zero quaternion = undock only
 
-    handle = await send_goal(goal=goal, action_client=bridge.act_navigate, name='undock')
-    TRACKER.begin(handle, 'undocking')
-    bridge.emit_event('dock.started', {'operation': 'undock'})
-    return handle
+    try:
+        handle = await send_goal(goal=goal, action_client=bridge.act_navigate, name='undock')
+        TRACKER.handle = handle
+        return handle
+    except Exception as exc:
+        TRACKER.finish('failed', str(exc))
+        raise
 
 
 async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
@@ -194,6 +221,10 @@ class DockCancelHandler(BaseHandler):
             return
         await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
         TRACKER.finish('failed', 'Canceled by API request')
+        if hasattr(self.bridge, 'release_video_stream'):
+            self.bridge.release_video_stream()
+        if hasattr(self.bridge, 'publish_display_state'):
+            self.bridge.publish_display_state('ready')
         self.send({'canceled': True})
 
 
@@ -302,20 +333,67 @@ class DockPoseHandler(BaseHandler):
         self.send({'deleted': True})
 
 
+_TINY_JPEG = (
+    b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00'
+    b'\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t'
+    b'\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a'
+    b'\x1f\x1e\x1d\x1a\x1c\x1c $.\' ",#\x1c\x1c(7),01444\x1f\'9=82<.342'
+    b'\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00'
+    b'\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00'
+    b'\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08'
+    b'\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9'
+)
+
+_IMAGE_LEASE_TASK: asyncio.Task | None = None
+
+async def _hold_video_lease(bridge, duration: float = 6.0):
+    global _IMAGE_LEASE_TASK
+    try:
+        await asyncio.sleep(duration)
+    except asyncio.CancelledError:
+        return
+    finally:
+        if bridge and hasattr(bridge, 'release_video_stream'):
+            bridge.release_video_stream()
+        _IMAGE_LEASE_TASK = None
+
+
 class DockDebugImageHandler(BaseHandler):
     """Serve the latest dock alignment debug frame or raw camera frame as JPEG."""
 
-    def get(self) -> None:
-        img_data, age = self.bridge.get_with_age('dock_debug_image')
-        if img_data is None or age > 2.5:
-            cam_data, cam_age = self.bridge.get_with_age('camera_image')
-            if cam_data is not None and cam_age < 2.5:
-                img_data = cam_data
+    async def get(self) -> None:
+        global _IMAGE_LEASE_TASK
+        if self.bridge and hasattr(self.bridge, 'acquire_video_stream'):
+            if _IMAGE_LEASE_TASK is None:
+                self.bridge.acquire_video_stream()
+            else:
+                _IMAGE_LEASE_TASK.cancel()
+            _IMAGE_LEASE_TASK = asyncio.create_task(_hold_video_lease(self.bridge, 6.0))
+
+        img_data = None
+        if self.bridge:
+            dbg_data, dbg_age = self.bridge.get_with_age('dock_debug_image')
+            if dbg_data is not None and dbg_age < 2.5:
+                img_data = dbg_data
+            else:
+                cam_data, cam_age = self.bridge.get_with_age('camera_image')
+                if cam_data is not None and cam_age < 2.5:
+                    img_data = cam_data
+
+        if img_data is None and self.bridge:
+            for _ in range(12):
+                await asyncio.sleep(0.05)
+                dbg_data, dbg_age = self.bridge.get_with_age('dock_debug_image')
+                if dbg_data is not None and dbg_age < 2.0:
+                    img_data = dbg_data
+                    break
+                cam_data, cam_age = self.bridge.get_with_age('camera_image')
+                if cam_data is not None and cam_age < 2.0:
+                    img_data = cam_data
+                    break
 
         if img_data is None:
-            self.set_status(404)
-            self.finish(b'')
-            return
+            img_data = _TINY_JPEG
 
         self.set_header('Content-Type', 'image/jpeg')
         self.set_header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -328,13 +406,15 @@ class DockDebugStreamHandler(BaseHandler):
     """Multipart MJPEG stream of dock debug / camera feed."""
 
     async def get(self) -> None:
-        self.set_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
-        self.set_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-        self.set_header('Pragma', 'no-cache')
-        self.set_header('Connection', 'close')
-
-        last_sent = None
+        if self.bridge and hasattr(self.bridge, 'acquire_video_stream'):
+            self.bridge.acquire_video_stream()
         try:
+            self.set_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.set_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.set_header('Pragma', 'no-cache')
+            self.set_header('Connection', 'close')
+
+            last_sent = None
             while not self._finished:
                 img_data = None
                 if self.bridge:
@@ -358,3 +438,6 @@ class DockDebugStreamHandler(BaseHandler):
                 await asyncio.sleep(0.06)
         except (tornado.iostream.StreamClosedError, asyncio.CancelledError):
             pass
+        finally:
+            if self.bridge and hasattr(self.bridge, 'release_video_stream'):
+                self.bridge.release_video_stream()

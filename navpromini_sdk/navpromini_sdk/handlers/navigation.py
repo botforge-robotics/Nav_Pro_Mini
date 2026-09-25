@@ -113,18 +113,22 @@ async def await_navigate_result(bridge, handle, target: dict, timeout: float = 3
         if status == 4:
             TRACKER.finish('succeeded')
             bridge.emit_event('navigation.completed', {'target': target})
+            bridge.publish_empty_plan()
             return {'ok': True, 'message': ''}
         if status == 5:
             TRACKER.finish('canceled', 'Goal was canceled')
             bridge.emit_event('navigation.cancelled', {'target': target})
+            bridge.publish_empty_plan()
             return {'ok': False, 'message': 'Goal was canceled'}
         message = f'Navigation ended with status {status}'
         TRACKER.finish('failed', message)
         bridge.emit_event('navigation.failed', {'target': target, 'message': message})
+        bridge.publish_empty_plan()
         return {'ok': False, 'message': message}
     except Exception as exc:  # noqa: BLE001
         TRACKER.finish('failed', str(exc))
         bridge.emit_event('navigation.failed', {'target': target, 'message': str(exc)})
+        bridge.publish_empty_plan()
         return {'ok': False, 'message': str(exc)}
 
 
@@ -191,6 +195,7 @@ async def cancel_active_goal(bridge, reason: str = 'canceled') -> bool:
         pass
     TRACKER.finish('canceled', reason)
     bridge.emit_event('navigation.cancelled', {'reason': reason})
+    bridge.publish_empty_plan()
     return True
 
 
