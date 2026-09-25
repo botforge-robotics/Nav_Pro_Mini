@@ -30,4 +30,3 @@ fi
 
 # shellcheck disable=SC1091
 source "${WS}/install/setup.bash"
-set -u

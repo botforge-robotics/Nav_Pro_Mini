@@ -15,6 +15,7 @@ if [[ -f "${SCRIPT_DIR}/env.sh" ]]; then
 fi
 
 USER_NAME="${NAVPRO_USER:-navpromini}"
+ROBOT_USER="${USER_NAME}"
 USER_HOME="$(getent passwd "${USER_NAME}" | cut -d: -f6 || echo /home/${USER_NAME})"
 WS="${NAVPRO_WS:-${USER_HOME}/NavProMini_ws}"
 SRC_DIR="${WS}/src"
@@ -96,10 +97,11 @@ trap rollback EXIT
 # Phase: Pulling
 echo "==> Fetching and updating source on branch ${BRANCH}..."
 write_status "pulling" 30 "Pulling latest code from origin/${BRANCH}..." "${PREV_COMMIT}"
-if [[ "$(id -u)" -eq 0 && -n "${ROBOT_USER}" && "${ROBOT_USER}" != "root" ]]; then
-  sudo -u "${ROBOT_USER}" git -c safe.directory=* -C "${SRC_DIR}" fetch origin "${BRANCH}"
+GIT_OPTS=(-c safe.directory=* -c url.https://github.com/.insteadOf=git@github.com: -c url.https://github.com/.insteadOf=ssh://git@github.com/)
+if [[ "$(id -u)" -eq 0 && -n "${ROBOT_USER:-}" && "${ROBOT_USER:-}" != "root" ]]; then
+  sudo -u "${ROBOT_USER}" git "${GIT_OPTS[@]}" -C "${SRC_DIR}" fetch origin "${BRANCH}"
 else
-  git -c safe.directory=* -C "${SRC_DIR}" fetch origin "${BRANCH}"
+  git "${GIT_OPTS[@]}" -C "${SRC_DIR}" fetch origin "${BRANCH}"
 fi
 git -c safe.directory=* -C "${SRC_DIR}" reset --hard "origin/${BRANCH}"
 NEW_COMMIT="$(git -c safe.directory=* -C "${SRC_DIR}" rev-parse HEAD)"
