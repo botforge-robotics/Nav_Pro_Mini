@@ -5,7 +5,10 @@ __pycache__/
 *.swp
 *.prev
 
-# Dynamic costmap zone filter masks (generated per base map)
-navpromini_mapping/maps/*_keepout.*
-navpromini_mapping/maps/*_speed.*
-navpromini_mapping/maps/*_mask.*
+# User-generated maps and dynamic zone filter masks (never track or overwrite user maps)
+navpromini_mapping/maps/*.pgm
+navpromini_mapping/maps/*.yaml
+navpromini_mapping/maps/*.data
+navpromini_mapping/maps/*.posegraph
+!navpromini_mapping/maps/README.md
+!navpromini_mapping/maps/.gitkeep
