@@ -1109,7 +1109,7 @@ def _get_ui_dir() -> Path:
 
 def _read_current_app_version() -> str:
     ui_dir = _get_ui_dir()
-    for candidate in [APP_CURRENT_DIR / 'version.json', ui_dir / 'version.json']:
+    for candidate in [ui_dir / 'version.json', APP_CURRENT_DIR / 'version.json']:
         if candidate.is_file():
             try:
                 data = json.loads(candidate.read_text())
