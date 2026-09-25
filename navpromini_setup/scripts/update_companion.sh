@@ -110,9 +110,15 @@ NEW_COMMIT="$(git -c safe.directory=* -C "${SRC_DIR}" rev-parse HEAD)"
 # Also update navpromini_sdk repo (including MCP server) if present at USER_HOME/navpromini_sdk
 if [[ -d "${USER_HOME}/navpromini_sdk/.git" ]]; then
   echo "==> Updating ${USER_HOME}/navpromini_sdk..."
-  SDK_BRANCH=$(git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-  git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" fetch origin "${SDK_BRANCH}" || true
-  git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" pull --ff-only origin "${SDK_BRANCH}" || git -c safe.directory=* -C "${USER_HOME}/navpromini_sdk" pull origin "${SDK_BRANCH}" || true
+  git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" remote set-url origin https://github.com/botforge-robotics/navpromini_sdk.git 2>/dev/null || true
+  SDK_BRANCH=$(git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+  if [[ "$(id -u)" -eq 0 && -n "${ROBOT_USER:-}" && "${ROBOT_USER:-}" != "root" ]]; then
+    sudo -u "${ROBOT_USER:-}" git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" fetch origin "${SDK_BRANCH}" || true
+    sudo -u "${ROBOT_USER:-}" git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" pull --ff-only origin "${SDK_BRANCH}" || sudo -u "${ROBOT_USER:-}" git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" pull origin "${SDK_BRANCH}" || true
+  else
+    git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" fetch origin "${SDK_BRANCH}" || true
+    git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" pull --ff-only origin "${SDK_BRANCH}" || git "${GIT_OPTS[@]}" -C "${USER_HOME}/navpromini_sdk" pull origin "${SDK_BRANCH}" || true
+  fi
   if [[ -d "/opt/navpro/mcp_venv" ]]; then
     /opt/navpro/mcp_venv/bin/pip install --upgrade pip || true
     /opt/navpro/mcp_venv/bin/pip install -e "${USER_HOME}/navpromini_sdk/clients/python" || true
