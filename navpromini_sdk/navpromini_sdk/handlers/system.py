@@ -1113,14 +1113,25 @@ def _read_current_app_version() -> str:
         if candidate.is_file():
             try:
                 data = json.loads(candidate.read_text())
-                return data.get('version', '1.0.0')
+                ver = data.get('version')
+                if ver:
+                    return str(ver).strip()
             except Exception:
                 pass
-    return '1.0.0'
+    settings_js = ui_dir / 'js' / 'settings.js'
+    if settings_js.is_file():
+        try:
+            content = settings_js.read_text(encoding='utf-8', errors='ignore')
+            m = re.search(r'APP_CURRENT_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+            if m:
+                return m.group(1).strip()
+        except Exception:
+            pass
+    return '2.0.0'
 
 def _compare_semver(v1: str, v2: str) -> int:
     def parse(v):
-        return [int(x) if x.isdigit() else 0 for x in v.lstrip('v').split('.')]
+        return [int(x) if x.isdigit() else 0 for x in str(v).lstrip('v').split('.')]
     p1, p2 = parse(v1), parse(v2)
     for i in range(max(len(p1), len(p2))):
         n1 = p1[i] if i < len(p1) else 0
@@ -1157,9 +1168,10 @@ def _get_ui_git_info(ui_dir: Path, target_branch: str | None = None) -> dict:
         if r.returncode == 0 and r.stdout.strip():
             info['branch'] = r.stdout.strip()
 
-        tb = target_branch if target_branch in ('main', 'dev') else info['branch']
+        tb = target_branch if target_branch == 'main' else 'main'
         info['target_branch'] = tb
         info['remote_branch'] = f'origin/{tb}'
+        info['branches_available'] = ['main']
 
         r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'log', '-1', '--format=%H%n%h%n%s%n%ci'],
                            capture_output=True, text=True, timeout=3)
@@ -1172,8 +1184,12 @@ def _get_ui_git_info(ui_dir: Path, target_branch: str | None = None) -> dict:
                 info['current_commit_date'] = lines[3]
 
         try:
-            subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'fetch', 'origin', tb],
-                           capture_output=True, text=True, timeout=5)
+            subprocess.run([
+                'git', '-c', 'safe.directory=*',
+                '-c', 'url.https://github.com/.insteadOf=git@github.com:',
+                '-c', 'url.https://github.com/.insteadOf=ssh://git@github.com/',
+                '-C', str(ui_dir), 'fetch', 'origin', tb
+            ], capture_output=True, text=True, timeout=10)
         except Exception:
             pass
 
@@ -1224,7 +1240,7 @@ class AppUpdateCheckHandler(BaseHandler):
             'latest_version': cur_ver,
             'update_available': git_info['commits_behind'] > 0,
             'update_type': 'git' if git_info['has_git'] else 'appimage',
-            'branch': git_info['target_branch'],
+            'branch': 'main',
             'current_branch': git_info['branch'],
             'current_commit': git_info['current_commit'],
             'current_commit_short': git_info['current_commit_short'],
@@ -1234,15 +1250,15 @@ class AppUpdateCheckHandler(BaseHandler):
             'latest_commit_short': git_info['latest_commit_short'],
             'commits_behind': git_info['commits_behind'],
             'changelog': git_info['changelog'],
-            'branches_available': ['main', 'dev'],
-            'release_name': f"{git_info['target_branch']} ({git_info['latest_commit_short'] or cur_ver})",
+            'branches_available': ['main'],
+            'release_name': f"main ({git_info['latest_commit_short'] or cur_ver})",
             'release_notes': "\n".join(git_info['changelog']) if git_info['changelog'] else '',
             'download_url': None,
             'asset_name': None,
             'asset_size': 0
         }
 
-        # Check GitHub releases as well
+        # Check GitHub releases for standalone appimages or assets
         repo = 'botforge-robotics/navpromini_robot_ui'
         url = f'https://api.github.com/repos/{repo}/releases/latest'
         try:
@@ -1253,13 +1269,21 @@ class AppUpdateCheckHandler(BaseHandler):
                     data = json.loads(resp.read().decode('utf-8'))
                     tag = data.get('tag_name', '').lstrip('v')
                     if tag:
-                        if _compare_semver(tag, cur_ver) > 0:
-                            info['update_available'] = True
-                            info['latest_version'] = tag
-                            info['release_name'] = data.get('name') or f'v{tag}'
-                            if not info['release_notes']:
-                                info['release_notes'] = data.get('body', '')
-                            info['update_type'] = 'appimage'
+                        if not git_info['has_git']:
+                            if _compare_semver(tag, cur_ver) > 0:
+                                info['update_available'] = True
+                                info['latest_version'] = tag
+                                info['release_name'] = data.get('name') or f'v{tag}'
+                                if not info['release_notes']:
+                                    info['release_notes'] = data.get('body', '')
+                                info['update_type'] = 'appimage'
+                        else:
+                            # Git-based install: only flag update if git actually has new commits
+                            if git_info['commits_behind'] > 0:
+                                info['latest_version'] = tag
+                            else:
+                                info['update_available'] = False
+                                info['latest_version'] = cur_ver
                         assets = data.get('assets', [])
                         for a in assets:
                             name = a.get('name', '').lower()
@@ -1315,32 +1339,46 @@ class AppUpdateApplyHandler(BaseHandler):
 
                 # Git pull update
                 if update_type == 'git' or not download_url:
+                    target_branch = 'main'
+                    git_cmd = [
+                        'git', '-c', 'safe.directory=*',
+                        '-c', 'url.https://github.com/.insteadOf=git@github.com:',
+                        '-c', 'url.https://github.com/.insteadOf=ssh://git@github.com/',
+                        '-C', str(ui_dir)
+                    ]
+                    # Ensure remote origin is using HTTPS so anonymous git fetch/pull works without SSH keys
+                    try:
+                        subprocess.run(git_cmd + ['remote', 'set-url', 'origin', 'https://github.com/botforge-robotics/navpromini_robot_ui.git'],
+                                       capture_output=True, text=True, timeout=5)
+                    except Exception:
+                        pass
+
                     update_progress('pulling', 15, f'Snapshotting current commit for rollback...')
                     # Capture current HEAD so we can reset back on failure
-                    r_prev = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'rev-parse', 'HEAD'],
+                    r_prev = subprocess.run(git_cmd + ['rev-parse', 'HEAD'],
                                             capture_output=True, text=True, timeout=5)
                     previous_commit = r_prev.stdout.strip() if r_prev.returncode == 0 else None
 
                     update_progress('pulling', 20, f'Fetching updates from origin/{target_branch}...')
-                    subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'stash'],
+                    subprocess.run(git_cmd + ['stash'],
                                    capture_output=True, text=True, timeout=10)
 
                     update_progress('pulling', 40, f'Switching to branch {target_branch}...')
-                    r_co = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'checkout', target_branch],
+                    r_co = subprocess.run(git_cmd + ['checkout', target_branch],
                                           capture_output=True, text=True, timeout=10)
                     if r_co.returncode != 0:
-                        subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'checkout', '-b', target_branch, f'origin/{target_branch}'],
+                        subprocess.run(git_cmd + ['checkout', '-b', target_branch, f'origin/{target_branch}'],
                                        capture_output=True, text=True, timeout=10)
 
                     update_progress('pulling', 70, f'Pulling latest commits from {target_branch}...')
-                    r_pull = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'pull', 'origin', target_branch],
+                    r_pull = subprocess.run(git_cmd + ['pull', 'origin', target_branch],
                                             capture_output=True, text=True, timeout=30)
                     if r_pull.returncode != 0:
                         # Rollback: reset to previous commit and restore stash
                         if previous_commit:
-                            subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'reset', '--hard', previous_commit],
+                            subprocess.run(git_cmd + ['reset', '--hard', previous_commit],
                                            capture_output=True, text=True, timeout=10)
-                        subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'stash', 'pop'],
+                        subprocess.run(git_cmd + ['stash', 'pop'],
                                        capture_output=True, text=True, timeout=5)
                         update_progress('failed', 0, f'Git pull failed — rolled back to {previous_commit[:7] if previous_commit else "previous"}: {r_pull.stderr.strip()}',
                                         error=r_pull.stderr)
