@@ -142,7 +142,7 @@ class DockManagerNode(Node):
         self._odom: Optional[Odometry] = None
 
         self._cmd = self.create_publisher(Twist, 'cmd_vel_dock', 10)
-        self._status_pub = self.create_publisher(String, 'dock_status', 10)
+        self._status_pub = self.create_publisher(String, 'dock_status', _LATCHED_QOS)
         self._dock_pose_pub = self.create_publisher(
             PoseStamped, 'dock_pose', _LATCHED_QOS)
         self.create_subscription(PoseStamped, 'dock_pose',
@@ -560,6 +560,13 @@ class DockManagerNode(Node):
             return False
         result_fut = goal_handle.get_result_async()
         while not result_fut.done():
+            if self._charging():
+                self.get_logger().info('staging navigation: robot already on charger — skipping staging')
+                try:
+                    await goal_handle.cancel_goal_async()
+                except Exception:
+                    pass
+                return True
             if time.monotonic() > deadline:
                 self.get_logger().warn('staging navigation exceeded staging_timeout — canceling')
                 await goal_handle.cancel_goal_async()
@@ -575,6 +582,8 @@ class DockManagerNode(Node):
             if not goal.use_dock_id:
                 self._on_dock_pose_set(goal.dock_pose)
             dock_pose = self._dock_pose
+
+            self._set_status('docking')
 
             # Only undock if the robot is physically on the charger
             if self._charging():

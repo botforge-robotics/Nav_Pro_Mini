@@ -1,8 +1,11 @@
 __pycache__/
 *.pyc
-
 *.bak
 *.orig
 *.swp
-__pycache__/
-*.pyc
+*.prev
+
+# Dynamic costmap zone filter masks (generated per base map)
+navpromini_mapping/maps/*_keepout.*
+navpromini_mapping/maps/*_speed.*
+navpromini_mapping/maps/*_mask.*

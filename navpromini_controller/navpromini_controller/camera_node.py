@@ -29,7 +29,7 @@ class CameraNode(Node):
         p('device', 0)
         p('width', 1280)
         p('height', 720)
-        p('fps', 30.0)
+        p('fps', 15.0)
         p('jpeg_quality', 80)
         p('rotate_180', False)
         p('flip_horizontal', False)

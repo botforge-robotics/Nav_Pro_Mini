@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Mission Planner navigation wrapper (per botforge nav2_mission_planner docs).
 
-Starts Nav2 localization (AMCL + map_server) + navigation.
+Starts Nav2 localization (AMCL + map_server) + navigation + costmap keepout filter servers.
 The app passes only the map name, e.g. map:=office.yaml — this file builds
-the full path under navpromini_mapping/maps.
+the full path under navpromini_mapping/maps and launches the keepout filter servers.
 
 App launch ref: navpromini_mission_planner/navigation_launch
 """
 
+import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -17,6 +18,8 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from nav2_common.launch import RewrittenYaml
 
 
 ARGUMENTS = [
@@ -66,12 +69,22 @@ def launch_setup(context, *args, **kwargs):
     localization_params = LaunchConfiguration('localization_params_file')
     map_name = LaunchConfiguration('map')
 
-    # Full path: <navpromini_mapping share>/maps/<office.yaml>
-    map_file = PathJoinSubstitution([
-        get_package_share_directory('navpromini_mapping'),
-        'maps',
-        map_name,
-    ])
+    map_name_str = map_name.perform(context)
+    base_map_name = map_name_str.replace('.yaml', '')
+
+    maps_share_dir = os.path.join(
+        get_package_share_directory('navpromini_mapping'), 'maps'
+    )
+    map_file = os.path.join(maps_share_dir, map_name_str)
+
+    # Ensure keepout mask YAML and PGM exist before launching filter_mask_server
+    keepout_yaml_path = os.path.join(maps_share_dir, f'{base_map_name}_keepout.yaml')
+    try:
+        from navpromini_sdk.costmap_zones import generate_keepout_mask
+        generated_yaml, _ = generate_keepout_mask(base_map_name)
+        keepout_yaml_path = generated_yaml
+    except Exception as exc:
+        print(f"[navigation_launch] generate_keepout_mask note: {exc}")
 
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
     launch_nav2 = PathJoinSubstitution(
@@ -111,7 +124,52 @@ def launch_setup(context, *args, **kwargs):
         launch_arguments=[('use_sim_time', use_sim_time)],
     )
 
-    return [nav2, localization, dock_nodes]
+    # Costmap Filter servers for keepout/restricted zones
+    filter_mask_params = RewrittenYaml(
+        source_file=nav2_params,
+        param_rewrites={'yaml_filename': keepout_yaml_path},
+        convert_types=True,
+    )
+
+    costmap_filter_info_server = Node(
+        package='nav2_map_server',
+        executable='costmap_filter_info_server',
+        name='costmap_filter_info_server',
+        output='screen',
+        emulate_tty=True,
+        parameters=[nav2_params],
+    )
+
+    filter_mask_server = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        name='filter_mask_server',
+        output='screen',
+        emulate_tty=True,
+        parameters=[filter_mask_params],
+    )
+
+    costmap_filter_lifecycle_manager = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_costmap_filters',
+        output='screen',
+        emulate_tty=True,
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'autostart': autostart,
+            'node_names': ['filter_mask_server', 'costmap_filter_info_server'],
+        }],
+    )
+
+    return [
+        nav2,
+        localization,
+        dock_nodes,
+        costmap_filter_info_server,
+        filter_mask_server,
+        costmap_filter_lifecycle_manager,
+    ]
 
 
 def generate_launch_description():

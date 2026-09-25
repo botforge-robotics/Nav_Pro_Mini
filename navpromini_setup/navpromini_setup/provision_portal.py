@@ -542,9 +542,8 @@ def try_connect_saved_nearby() -> bool:
             print('  No saved SSID visible yet — waiting 3 s for radio to settle…')
             time.sleep(3.0)
 
-    for conn_name, ssid in saved:
-        if ssid not in nearby:
-            continue
+    prioritized_saved = [s for s in saved if s[1] in nearby] + [s for s in saved if s[1] not in nearby]
+    for conn_name, ssid in prioritized_saved:
         print(f'Trying saved connection {conn_name!r} (SSID {ssid!r})')
         r = _nmcli('connection', 'up', conn_name)
         if r.returncode != 0:

@@ -14,6 +14,16 @@ from launch.substitutions import PathJoinSubstitution
 from std_msgs.msg import Int32
 
 
+FILTER_TOKENS = ('_keepout', '_mask', '_filter', '_speed', '_zone', '_restricted', '_costmap')
+
+
+def is_valid_base_map(stem: str) -> bool:
+    if not stem or stem.startswith('.'):
+        return False
+    lower = stem.lower()
+    return not any(tok in lower for tok in FILTER_TOKENS)
+
+
 class LaunchManager(Node):
     def __init__(self):
         super().__init__('launch_manager')
@@ -442,8 +452,11 @@ class LaunchManager(Node):
         if not maps_dir.exists():
             raise ValueError(f"Map directory not found: {maps_dir}")
 
-        # Find all YAML files and extract names
-        map_files = [f.stem for f in maps_dir.glob('*.yaml') if f.is_file()]
+        # Find all YAML files and extract names, excluding internal filter masks and hidden files
+        map_files = [
+            f.stem for f in maps_dir.glob('*.yaml')
+            if f.is_file() and is_valid_base_map(f.stem)
+        ]
 
         if not map_files:
             raise ValueError("No .yaml map files found in directory")
@@ -477,21 +490,21 @@ class LaunchManager(Node):
             response.message = f"Maps directory not found: {maps_dir}"
             return response
 
-        # 4) Delete both .yaml and .pgm files
-        exts = ['.yaml', '.pgm']
+        # 4) Delete base .yaml and .pgm files, and ANY associated filter/mask files
         deleted = []
         errors = []
+        prefix = request.map_name
 
-        for ext in exts:
-            fpath = maps_dir / (request.map_name + ext)
-            if fpath.is_file():
-                try:
-                    fpath.unlink()
-                    deleted.append(fpath.name)
-                except Exception as e:
-                    errors.append(f"Failed to delete {fpath.name}: {e}")
-            else:
-                errors.append(f"File not found: {fpath.name}")
+        try:
+            for fpath in maps_dir.iterdir():
+                if fpath.is_file() and (fpath.name.startswith(f"{prefix}_") or fpath.name.startswith(f"{prefix}.")):
+                    try:
+                        fpath.unlink()
+                        deleted.append(fpath.name)
+                    except Exception as e:
+                        errors.append(f"Failed to delete {fpath.name}: {e}")
+        except Exception as e:
+            errors.append(f"Error reading {maps_dir}: {e}")
 
         # 5) Prepare response
         if deleted:
@@ -609,8 +622,11 @@ class LaunchManager(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LaunchManager()
+    from rclpy.executors import MultiThreadedExecutor
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

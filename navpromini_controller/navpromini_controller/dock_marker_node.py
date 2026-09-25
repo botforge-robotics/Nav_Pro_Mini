@@ -12,7 +12,8 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, String
+from std_srvs.srv import SetBool
 
 _SENSOR_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -50,7 +51,7 @@ class DockMarkerNode(Node):
         p('marker_size_m', 0.08)
         p('image_topic', 'camera/image_raw/compressed')
         p('camera_info_topic', 'camera/camera_info')
-        p('max_rate_hz', 30.0)
+        p('max_rate_hz', 15.0)
 
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self._marker_id = int(g('marker_id'))
@@ -73,6 +74,9 @@ class DockMarkerNode(Node):
         self._last_yaw_stamp = 0.0
         self._yaw_continuity_sec = 1.0
 
+        self._dock_status = 'undocked'
+        self._manual_active = False
+
         self._pub_pose = self.create_publisher(PoseStamped, 'dock_marker', 10)
         self._pub_tag = self.create_publisher(Float32MultiArray, 'dock_tag', 10)
         self._pub_debug_img = self.create_publisher(CompressedImage, 'dock_debug/compressed', 10)
@@ -81,6 +85,8 @@ class DockMarkerNode(Node):
                                  self._on_info, 10)
         self.create_subscription(CompressedImage, str(g('image_topic')),
                                  self._on_image, _SENSOR_QOS)
+        self.create_subscription(String, 'dock_status', self._on_dock_status, 10)
+        self.create_service(SetBool, 'dock_marker/set_active', self._on_set_active)
 
         # Load calibration fallback immediately so camera frames can be processed even before camera_info arrives
         import yaml, os
@@ -130,7 +136,32 @@ class DockMarkerNode(Node):
             self._k = np.array(msg.k, dtype=np.float64).reshape(3, 3)
             self._d = np.array(msg.d, dtype=np.float64).reshape(1, -1)
 
+    def _on_dock_status(self, msg: String) -> None:
+        self._dock_status = (msg.data or '').strip().lower()
+
+    def _on_set_active(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
+        self._manual_active = req.data
+        res.success = True
+        res.message = f"Dock marker detection {'enabled' if req.data else 'disabled'}"
+        return res
+
+    def _is_detection_active(self) -> bool:
+        if self._manual_active:
+            return True
+        if self._pub_debug_img.get_subscription_count() > 0 or self._pub_debug_raw.get_subscription_count() > 0:
+            return True
+        active_docking_states = {
+            'searching', 'servo', 'approaching', 'aligning', 'centering',
+            'docking', 'blind_creep', 'retry', 'dock'
+        }
+        if self._dock_status in active_docking_states:
+            return True
+        return False
+
     def _on_image(self, msg: CompressedImage) -> None:
+        if not self._is_detection_active():
+            return
+
         now = self.get_clock().now().nanoseconds * 1e-9
         if now - self._last_stamp < self._min_period:
             return
