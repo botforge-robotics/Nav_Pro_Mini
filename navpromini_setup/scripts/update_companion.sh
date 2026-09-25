@@ -22,7 +22,8 @@ SRC_DIR="${WS}/src"
 INSTALL_DIR="${WS}/install"
 BACKUP_DIR="${WS}/install.prev"
 
-# Redirect stdout & stderr to log file while also keeping console output
+# Truncate log file so console viewer shows fresh logs for this run
+cat /dev/null > "${LOG_FILE}"
 exec >> >(tee -a "${LOG_FILE}") 2>&1
 
 write_status() {
