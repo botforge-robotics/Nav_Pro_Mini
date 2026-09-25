@@ -1417,15 +1417,17 @@ class AppUpdateApplyHandler(BaseHandler):
                     except Exception:
                         pass
 
-                    ver_data = {
-                        'branch': target_branch,
-                        'version': target_version,
-                        'updated_at': time.time()
-                    }
-                    try:
-                        (ui_dir / 'version.json').write_text(json.dumps(ver_data))
-                    except Exception:
-                        pass
+                    # For standalone installations without git tracking, record update metadata
+                    if not (ui_dir / '.git').is_dir():
+                        ver_data = {
+                            'branch': target_branch,
+                            'version': target_version,
+                            'updated_at': time.time()
+                        }
+                        try:
+                            (ui_dir / 'version.json').write_text(json.dumps(ver_data))
+                        except Exception:
+                            pass
 
                     update_progress('completed', 100, f'Successfully updated Robot UI to latest {target_branch}!')
                     return
