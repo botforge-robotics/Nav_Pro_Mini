@@ -40,12 +40,13 @@ async def ros_future(rf, timeout: float = 15.0) -> Any:
 async def call_service(client, request, name: str, timeout: float = 15.0) -> Any:
     """Call a ROS service without ever blocking tornado's event loop.
 
-    Readiness is checked with the NON-blocking service_is_ready(). The obvious
-    alternative, wait_for_service(timeout_sec=...), is synchronous: calling it
-    from a coroutine freezes the whole IO loop for its duration, stalling every
-    other request and the event stream with it. Observed as an endpoint simply
-    never responding. If the service is not up, say so immediately.
+    Readiness is checked with non-blocking async polling to tolerate DDS discovery jitter.
     """
+    if not client.service_is_ready():
+        for _ in range(15):
+            await asyncio.sleep(0.1)
+            if client.service_is_ready():
+                break
     if not client.service_is_ready():
         raise ApiError(503, 'service_unavailable',
                        f'{name} service is not available — is the robot stack '
