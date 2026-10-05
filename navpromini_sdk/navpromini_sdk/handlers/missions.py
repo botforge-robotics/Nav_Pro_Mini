@@ -1001,6 +1001,67 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 RUNNER.state = 'running'
             bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
 
+    if ntype in ('ui_browser', 'browser'):
+        url = resolve_template_value(params.get('url', ''), context).strip()
+        title = resolve_template_value(params.get('title', 'Web Browser'), context).strip() or 'Web Browser'
+        target = str(params.get('target', 'robot_screen')).lower()
+        if target not in ('robot_screen', 'operator_app', 'both'):
+            target = 'robot_screen'
+        timeout_sec = float(params.get('timeout_sec', 0.0))
+
+        # Safe handle: If URL is empty, safely bypass
+        if not url:
+            bridge.get_logger().warn(
+                f"[ui_browser] Node '{node.get('id', 'unknown')}': No URL specified for browser. Safely completing."
+            )
+            return True, 'closed', "Empty browser URL; safely skipped"
+
+        interaction_id = f"browser_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+        interaction_data = {
+            'interaction_id': interaction_id,
+            'mission_id': RUNNER.mission_id,
+            'node_id': node['id'],
+            'subtype': 'browser',
+            'target': target,
+            'title': title,
+            'url': url,
+            'show_close': True,
+            'options': ['Close'],
+            'timeout_sec': timeout_sec,
+            'default_option': 'closed',
+            'started_at': time.time(),
+        }
+
+        RUNNER.active_interaction = interaction_data
+        RUNNER.state = 'waiting_for_user'
+        bridge.emit_event('mission.ui_interaction', interaction_data)
+
+        # Attempt to open on local display if DISPLAY environment exists on robot host
+        if target in ('robot_screen', 'both') and os.environ.get('DISPLAY'):
+            try:
+                subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                bridge.get_logger().debug(f"[ui_browser] local xdg-open: {e}")
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        RUNNER.interaction_future = future
+
+        try:
+            if timeout_sec > 0:
+                resp_data = await asyncio.wait_for(future, timeout=timeout_sec)
+            else:
+                resp_data = await future
+            return True, 'closed', "Browser closed by user; proceeding to next mission step."
+        except asyncio.TimeoutError:
+            return True, 'closed', "Browser timed out; proceeding to next mission step."
+        finally:
+            RUNNER.active_interaction = None
+            RUNNER.interaction_future = None
+            if RUNNER.state == 'waiting_for_user' and not RUNNER.cancel_requested:
+                RUNNER.state = 'running'
+            bridge.emit_event('mission.ui_interaction_resolved', {'interaction_id': interaction_id})
+
     if ntype == 'ui_speech':
         text = resolve_template_value(params.get('text', ''), context)
         if text:

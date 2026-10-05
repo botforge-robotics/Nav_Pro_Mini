@@ -306,6 +306,22 @@ NODE_CATALOG = {
             "target": {"type": "string", "enum": ["robot_screen", "operator_app", "both"], "default": "robot_screen"},
         },
     },
+    "ui_browser": {
+        "type": "ui_browser",
+        "category": "hri",
+        "title": "Open Web Page (Browser)",
+        "description": "Opens interactive web page on robot screen; stays until user taps Close to proceed.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [
+            {"id": "closed", "label": "When Closed", "color": "#4CAF50"},
+        ],
+        "params_schema": {
+            "url": {"type": "string", "required": True, "description": "Web URL to display (e.g. restaurant menu, forms, kiosks)"},
+            "title": {"type": "string", "default": "Web Browser", "description": "Window title bar text"},
+            "target": {"type": "string", "enum": ["robot_screen", "operator_app", "both"], "default": "robot_screen"},
+            "timeout_sec": {"type": "number", "default": 0.0, "description": "Optional timeout (0 = wait strictly until Close is clicked)"},
+        },
+    },
     "ui_speech": {
         "type": "ui_speech",
         "category": "hri",
@@ -546,6 +562,9 @@ def validate_graph_mission(data: dict) -> Tuple[List[dict], List[dict], str]:
                 "notification": "ui_notification",
                 "show_notification": "ui_notification",
                 "alert": "ui_notification",
+                "browser": "ui_browser",
+                "web": "ui_browser",
+                "web_page": "ui_browser",
             }
             if ntype in aliases:
                 node["type"] = aliases[ntype]
