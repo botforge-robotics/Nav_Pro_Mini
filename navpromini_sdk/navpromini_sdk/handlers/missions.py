@@ -1021,12 +1021,15 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             'interaction_id': interaction_id,
             'mission_id': RUNNER.mission_id,
             'node_id': node['id'],
+            'type': 'browser',
             'subtype': 'browser',
+            'node_type': ntype,
             'target': target,
             'title': title,
             'url': url,
             'show_close': True,
             'options': ['Close'],
+            'choices': ['Close'],
             'timeout_sec': timeout_sec,
             'default_option': 'closed',
             'started_at': time.time(),
@@ -1035,13 +1038,6 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         RUNNER.active_interaction = interaction_data
         RUNNER.state = 'waiting_for_user'
         bridge.emit_event('mission.ui_interaction', interaction_data)
-
-        # Attempt to open on local display if DISPLAY environment exists on robot host
-        if target in ('robot_screen', 'both') and os.environ.get('DISPLAY'):
-            try:
-                subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception as e:
-                bridge.get_logger().debug(f"[ui_browser] local xdg-open: {e}")
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
