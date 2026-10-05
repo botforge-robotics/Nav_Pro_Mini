@@ -157,13 +157,14 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         # media
         (rf'{API}/media/upload', media.MediaUploadHandler, opts),
         (rf'{API}/media', media.MediaListHandler, opts),
+        (rf'{API}/media/([^/]+)', media.MediaItemHandler, opts),
         # schedules
         (rf'{API}/schedules', schedules.SchedulesHandler, opts),
         (rf'{API}/schedules/([^/]+)', schedules.ScheduleHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
         # media static files
-        (r'/media/(.*)', tornado.web.StaticFileHandler, {'path': str(media.MEDIA_DIR)}),
+        (r'/media/(.*)', tornado.web.StaticFileHandler, {'path': str(media.get_media_dir())}),
         # reserved
         (rf'{API}/zones.*', NotImplementedHandler, opts),
         (rf'{API}/routes.*', NotImplementedHandler, opts),
