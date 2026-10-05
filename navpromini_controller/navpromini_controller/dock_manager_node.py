@@ -227,20 +227,20 @@ class DockManagerNode(Node):
                 'full' if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_FULL
                 else 'charging')
         elif self._docked and not self._busy:
-            if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_DISCHARGING:
+            if msg.power_supply_status in (BatteryState.POWER_SUPPLY_STATUS_DISCHARGING,
+                                           BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING):
                 self._docked = False
                 self._set_status('undocked')
-                self.get_logger().info('Battery discharging — robot removed from dock.')
+                self.get_logger().info('Battery not charging — robot removed from dock.')
         self._docked_state_known = True
 
     def _on_odom(self, msg: Odometry) -> None:
         self._odom = msg
 
     def _charging(self) -> bool:
-        if self._power in (BatteryState.POWER_SUPPLY_STATUS_CHARGING,
-                           BatteryState.POWER_SUPPLY_STATUS_FULL):
+        if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
             return True
-        if hasattr(self, '_batt_current') and self._batt_current is not None and self._batt_current > 0.04:
+        if hasattr(self, '_batt_current') and self._batt_current is not None and self._batt_current > 0.3:
             return True
         return False
 

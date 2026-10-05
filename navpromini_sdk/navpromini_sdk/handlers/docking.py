@@ -251,9 +251,11 @@ class DockStatusHandler(BaseHandler):
         battery = self.bridge.get('battery') or {}
         tag = self.bridge.get('dock_tag')
         dock_status, age = self.bridge.get_with_age('dock_status')
-        is_charging = bool(battery.get('charging')) or battery.get('status') in ('charging', 'full')
+        is_charging = bool(battery.get('charging'))
         effective_state = dock_status or 'unknown'
-        if is_charging and effective_state in ('undocked', 'unknown'):
+        if not is_charging and effective_state in ('charging', 'full'):
+            effective_state = 'undocked'
+        elif is_charging and effective_state in ('undocked', 'unknown'):
             effective_state = 'full' if battery.get('status') == 'full' else 'charging'
         self.send({
             'state': effective_state,
