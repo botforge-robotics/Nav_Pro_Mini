@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import fcntl
+import struct
 import subprocess
 import time
 
@@ -67,17 +69,39 @@ _setup_ap_cached = (False, 0.0)
 _wifi_site_cached = (False, 0.0)
 
 
+def _get_wlan_ip(ifname: str = 'wlan0') -> Optional[str]:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        return socket.inet_ntoa(fcntl.ioctl(
+            s.fileno(),
+            0x8915,  # SIOCGIFADDR
+            struct.pack('256s', ifname[:15].encode('utf-8'))
+        )[20:24])
+    except Exception:
+        return None
+
+
 def _setup_ap_active() -> bool:
-    """True only if nmcli reports the setup hotspot connection actually up —
-    mirrors status_display_node.py's _setup_ap_really_up(). Cached 15s to save CPU."""
+    """True only if setup hotspot is active. Fast non-blocking path via ioctl."""
     global _setup_ap_cached
     now = time.monotonic()
     if now - _setup_ap_cached[1] < 15.0:
         return _setup_ap_cached[0]
+
+    # Fast path: check wlan0 IP without spawning subprocess
+    ip = _get_wlan_ip('wlan0')
+    if ip and not ip.startswith('10.42.') and not ip.startswith('127.'):
+        _setup_ap_cached = (False, now)
+        return False
+    if ip and ip.startswith('10.42.'):
+        _setup_ap_cached = (True, now)
+        return True
+
+    # Fallback to nmcli only if IP cannot be determined directly
     result = False
     try:
         r = subprocess.run(['nmcli', '-t', '-f', 'NAME,STATE', 'connection', 'show', '--active'],
-                           capture_output=True, text=True, timeout=3)
+                           capture_output=True, text=True, timeout=2)
         for line in (r.stdout or '').splitlines():
             if line.startswith(f'{_SETUP_AP_CONN}:') and 'activated' in line.lower():
                 result = True
@@ -89,19 +113,26 @@ def _setup_ap_active() -> bool:
 
 
 def _wifi_site_online() -> bool:
-    """True if a Wi-Fi device is connected to a real (non-setup-AP) network
-    with an IP — mirrors status_display_node.py's _wifi_site_online(). Cached 4s."""
+    """True if Wi-Fi is connected to a real network with an IP. Fast non-blocking path."""
     global _wifi_site_cached
     now = time.monotonic()
+    if now - _wifi_site_cached[1] < 10.0:
+        return _wifi_site_cached[0]
+
+    # Fast path: if wlan0 has a non-AP IP, we are connected and online
+    ip = _get_wlan_ip('wlan0')
+    if ip and not ip.startswith('10.42.') and not ip.startswith('127.'):
+        _wifi_site_cached = (True, now)
+        return True
+
     if _setup_ap_active():
         _wifi_site_cached = (False, now)
         return False
-    if now - _wifi_site_cached[1] < 4.0:
-        return _wifi_site_cached[0]
+
     result = False
     try:
         r = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
-                           capture_output=True, text=True, timeout=3)
+                           capture_output=True, text=True, timeout=2)
         for line in (r.stdout or '').splitlines():
             parts = line.split(':')
             if len(parts) < 4:
@@ -109,13 +140,8 @@ def _wifi_site_online() -> bool:
             _dev, dtype, state, conn = parts[0], parts[1], parts[2], parts[3]
             if dtype != 'wifi' or state != 'connected' or not conn or conn == _SETUP_AP_CONN:
                 continue
-            ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2)
-            if ip.returncode == 0:
-                raw_ips = (ip.stdout or '').strip().split()
-                non_ap_ips = [a for a in raw_ips if not a.startswith('10.42.') and not a.startswith('127.')]
-                if non_ap_ips:
-                    result = True
-                    break
+            result = True
+            break
     except Exception:  # noqa: BLE001
         pass
     _wifi_site_cached = (result, now)

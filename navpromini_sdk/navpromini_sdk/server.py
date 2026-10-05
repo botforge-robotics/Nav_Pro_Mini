@@ -285,7 +285,7 @@ def main(args=None) -> None:
     rosbridge_url = str(bridge.get_parameter('rosbridge_url').value)
 
     # Spin ROS on its own thread; tornado owns the main thread.
-    executor = MultiThreadedExecutor(num_threads=6)
+    executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(bridge)
     ros_thread = threading.Thread(target=executor.spin, daemon=True)
     ros_thread.start()
@@ -326,6 +326,11 @@ def main(args=None) -> None:
     # See schedules.check_schedules's own doc for exactly what "fires" means
     # (and does not mean — no catch-up, no queueing) here.
     bridge.create_timer(20.0, lambda: schedules.check_schedules(bridge, opts))
+
+    # Auto-release idle video stream subscriptions every 3s so camera frames don't starve CPU/GIL
+    bridge.create_timer(3.0, lambda: bridge.check_video_lease(
+        is_docking_active=(docking.TRACKER.state in ('docking', 'undocking'))
+    ))
 
     _start_boot_autonav(bridge, opts)
 

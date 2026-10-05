@@ -69,6 +69,11 @@ class BaseHandler(tornado.web.RequestHandler):
         self.finish(json.dumps({'error': {
             'code': code, 'message': message, 'detail': detail or {}}}))
 
+    def log_exception(self, typ, value, tb) -> None:
+        if isinstance(value, ApiError):
+            return
+        super().log_exception(typ, value, tb)
+
     def write_error(self, status_code: int, **kwargs) -> None:
         exc = kwargs.get('exc_info', (None, None, None))[1]
         if isinstance(exc, ApiError):

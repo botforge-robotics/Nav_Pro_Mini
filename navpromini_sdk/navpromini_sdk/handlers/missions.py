@@ -1872,14 +1872,14 @@ class UiResponseHandler(BaseHandler):
         data = self.body(('interaction_id',))
         interaction_id = str(data.get('interaction_id', '')).strip()
         if not RUNNER.active_interaction or RUNNER.active_interaction.get('interaction_id') != interaction_id:
-            raise ApiError(404, 'no_matching_interaction',
-                           f'No active interaction matching id {interaction_id!r}')
+            self.send({'accepted': False, 'message': 'Interaction not active or already closed', 'interaction_id': interaction_id})
+            return
 
         if RUNNER.interaction_future and not RUNNER.interaction_future.done():
             RUNNER.interaction_future.set_result(data)
             self.send({'accepted': True, 'interaction_id': interaction_id})
         else:
-            raise ApiError(409, 'interaction_closed', 'Interaction has already completed or timed out')
+            self.send({'accepted': False, 'message': 'Interaction already completed or timed out', 'interaction_id': interaction_id})
 
 
 class NodeTypesHandler(BaseHandler):

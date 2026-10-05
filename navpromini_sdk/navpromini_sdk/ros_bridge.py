@@ -145,6 +145,7 @@ class RosBridge(Node):
         # Video streams (camera & dock_debug) are subscribed on-demand when active
         # clients connect to avoid continuous 15/30 FPS JPEG processing when idle.
         self._video_stream_refcount = 0
+        self._last_video_read_time = 0.0
         self._sub_camera_img: Optional[Any] = None
         self._sub_dock_debug_img: Optional[Any] = None
         self._video_sub_lock = threading.Lock()
@@ -203,6 +204,8 @@ class RosBridge(Node):
 
     def get_with_age(self, key: str) -> tuple[Optional[Any], Optional[float]]:
         """Value plus seconds since it arrived, so callers can judge staleness."""
+        if key in ('camera_image', 'dock_debug_image'):
+            self._last_video_read_time = time.monotonic()
         with self._lock:
             entry = self._cache.get(key)
         if entry is None:
@@ -418,10 +421,36 @@ class RosBridge(Node):
     def _on_map(self, m: OccupancyGrid) -> None:
         self._put('map_msg', m)
 
+    def touch_video_stream(self) -> None:
+        """Keep video subscription lease alive when a frame is read."""
+        self._last_video_read_time = time.monotonic()
+
+    def check_video_lease(self, is_docking_active: bool = False) -> None:
+        """Auto-release subscriptions if no client has read frames recently and docking is not active."""
+        with self._video_sub_lock:
+            if self._sub_camera_img is not None or self._sub_dock_debug_img is not None:
+                idle = (time.monotonic() - getattr(self, '_last_video_read_time', 0.0)) > 6.0
+                if idle and not is_docking_active:
+                    self._video_stream_refcount = 0
+                    if self._sub_dock_debug_img is not None:
+                        try:
+                            self.destroy_subscription(self._sub_dock_debug_img)
+                        except Exception:
+                            pass
+                        self._sub_dock_debug_img = None
+                    if self._sub_camera_img is not None:
+                        try:
+                            self.destroy_subscription(self._sub_camera_img)
+                        except Exception:
+                            pass
+                        self._sub_camera_img = None
+                    self.get_logger().info('RosBridge: Auto-unsubscribed idle video streams (lease expired)')
+
     def acquire_video_stream(self) -> None:
         """Subscribe to camera/dock video streams on demand when an active streaming client connects."""
         with self._video_sub_lock:
             self._video_stream_refcount += 1
+            self._last_video_read_time = time.monotonic()
             if self._video_stream_refcount == 1:
                 cb = self._cb
                 if self._sub_dock_debug_img is None:
@@ -442,10 +471,16 @@ class RosBridge(Node):
             self._video_stream_refcount = max(0, self._video_stream_refcount - 1)
             if self._video_stream_refcount == 0:
                 if self._sub_dock_debug_img is not None:
-                    self.destroy_subscription(self._sub_dock_debug_img)
+                    try:
+                        self.destroy_subscription(self._sub_dock_debug_img)
+                    except Exception:
+                        pass
                     self._sub_dock_debug_img = None
                 if self._sub_camera_img is not None:
-                    self.destroy_subscription(self._sub_camera_img)
+                    try:
+                        self.destroy_subscription(self._sub_camera_img)
+                    except Exception:
+                        pass
                     self._sub_camera_img = None
                 self.get_logger().info('RosBridge: Unsubscribed from video streams (no active clients)')
 

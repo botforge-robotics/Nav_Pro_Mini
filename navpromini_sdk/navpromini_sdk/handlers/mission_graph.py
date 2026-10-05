@@ -125,6 +125,20 @@ NODE_CATALOG = {
             "sound": {"type": "string", "default": "success_chime"},
         },
     },
+    "dock_and_end": {
+        "type": "dock_and_end",
+        "category": "flow",
+        "title": "Dock & Finish",
+        "description": "Docks the robot at the charging station and completes the mission.",
+        "inputs": [{"id": "in", "label": "In"}],
+        "outputs": [],  # Terminal node (no outgoing ports)
+        "params_schema": {
+            "status": {"type": "string", "enum": ["success", "failed", "aborted"], "default": "success"},
+            "message": {"type": "string", "default": "Mission completed. Docked at charger."},
+            "dock_on_end": {"type": "boolean", "default": True, "description": "Auto-dock robot after finishing"},
+            "sound": {"type": "string", "default": "success_chime"},
+        },
+    },
     "loop": {
         "type": "loop",
         "category": "flow",
@@ -565,6 +579,10 @@ def validate_graph_mission(data: dict) -> Tuple[List[dict], List[dict], str]:
                 "browser": "ui_browser",
                 "web": "ui_browser",
                 "web_page": "ui_browser",
+                "mission_end": "end",
+                "finish": "end",
+                "abort": "end",
+                "abort_and_end": "end",
             }
             if ntype in aliases:
                 node["type"] = aliases[ntype]
