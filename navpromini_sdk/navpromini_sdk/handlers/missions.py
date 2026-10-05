@@ -1070,20 +1070,20 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
     if ntype == 'relocalize':
         mode = params.get('mode', 'global_scan')
+        spin = bool(params.get('spin', True))
         try:
-            from rclpy.action import ActionClient
-            from rclpy.task import Future
-            from action_msgs.msg import GoalStatus
-            from botforge_interfaces.srv import Relocalize
-            
-            # Try to find a service first (assuming a Relocalize service might exist, otherwise just fake it for now)
-            # Actually, standard Nav2 has amcl global localization service
-            if mode == 'global_scan':
+            from .navigation import run_relocalize_spin
+            if spin or mode in ('global_scan', 'spin_recover'):
+                angular_vel = float(params.get('angular_vel', 0.35))
+                dur = float(params.get('duration_sec', 20.0))
+                res = await run_relocalize_spin(bridge, angular_vel=angular_vel, timeout_sec=dur)
+                converged = res.get('converged', False)
+                return True, 'done', f"Relocalization completed (converged={converged})"
+            else:
                 client, srv_cls = _get_service_client(bridge, 'std_srvs/srv/Empty', '/reinitialize_global_localization')
                 request = srv_cls.Request()
                 await call_service(client, request, '/reinitialize_global_localization', timeout=10.0)
-            
-            return True, 'done', f"Relocalization ({mode}) completed"
+                return True, 'done', f"Relocalization ({mode}) completed"
         except Exception as e:
             bridge.get_logger().error(f"Relocalize failed: {e}")
             return False, 'failed', str(e)

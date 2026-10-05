@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 
@@ -208,14 +209,88 @@ class CancelHandler(BaseHandler):
         self.send({'canceled': True})
 
 
+async def run_relocalize_spin(
+    bridge,
+    angular_vel: float = 0.35,
+    timeout_sec: float = 22.0,
+    target_cov: float = 0.15,
+    target_cov_yaw: float = 0.12,
+) -> dict:
+    """Disperse AMCL particles and smoothly rotate in place to let laser scans converge."""
+    from std_srvs.srv import Empty
+    req = Empty.Request()
+    await call_service(bridge.cli_global_loc, req, 'reinitialize_global_localization', timeout=5.0)
+    await asyncio.sleep(0.4)
+
+    start_time = time.time()
+    converged = False
+    last_cov = {}
+
+    try:
+        while (time.time() - start_time) < timeout_sec:
+            bridge.publish_cmd_vel(0.0, angular_vel)
+            await asyncio.sleep(0.1)
+
+            pose_map = bridge.cached('pose_map')
+            if pose_map:
+                cx = pose_map.get('cov_x', 999.0)
+                cy = pose_map.get('cov_y', 999.0)
+                cyaw = pose_map.get('cov_yaw', 999.0)
+                last_cov = {'cov_x': cx, 'cov_y': cy, 'cov_yaw': cyaw}
+
+                elapsed = time.time() - start_time
+                if elapsed > 2.5 and cx < target_cov and cy < target_cov and cyaw < target_cov_yaw:
+                    converged = True
+                    break
+    finally:
+        bridge.publish_cmd_vel(0.0, 0.0)
+
+    elapsed = round(time.time() - start_time, 2)
+    return {
+        'status': 'ok' if converged else 'timeout',
+        'converged': converged,
+        'elapsed_sec': elapsed,
+        'covariance': last_cov,
+        'message': 'Relocalization converged successfully' if converged else '360° spin finished, particles converging',
+    }
+
+
 class GlobalRelocalizeHandler(BaseHandler):
     """Disperse AMCL particles across the map for global relocalization."""
 
     async def post(self) -> None:
+        data = self.json_body() or {}
+        spin = bool(data.get('spin', False))
+        if spin:
+            angular_vel = float(data.get('angular_vel', 0.35))
+            timeout_sec = float(data.get('timeout_sec', 22.0))
+            result = await run_relocalize_spin(self.bridge, angular_vel=angular_vel, timeout_sec=timeout_sec)
+            self.send(result)
+            return
+
         from std_srvs.srv import Empty
         req = Empty.Request()
         await call_service(self.bridge.cli_global_loc, req, 'reinitialize_global_localization', timeout=5.0)
         self.send({'status': 'ok', 'message': 'AMCL particles dispersed across map'})
+
+
+class RelocalizeRecoverHandler(BaseHandler):
+    """Autonomous 360° relocalization recovery with active particle convergence."""
+
+    async def post(self) -> None:
+        data = self.json_body() or {}
+        angular_vel = float(data.get('angular_vel', 0.35))
+        timeout_sec = float(data.get('timeout_sec', 22.0))
+        target_cov = float(data.get('target_cov', 0.15))
+        target_cov_yaw = float(data.get('target_cov_yaw', 0.12))
+        result = await run_relocalize_spin(
+            self.bridge,
+            angular_vel=angular_vel,
+            timeout_sec=timeout_sec,
+            target_cov=target_cov,
+            target_cov_yaw=target_cov_yaw,
+        )
+        self.send(result)
 
 
 class LocalizeHandler(BaseHandler):

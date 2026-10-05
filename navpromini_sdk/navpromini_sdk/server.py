@@ -131,6 +131,7 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/navigation/goal', navigation.CancelHandler, opts),
         (rf'{API}/navigation/localize', navigation.LocalizeHandler, opts),
         (rf'{API}/navigation/relocalize/global', navigation.GlobalRelocalizeHandler, opts),
+        (rf'{API}/navigation/relocalize/recover', navigation.RelocalizeRecoverHandler, opts),
         (rf'{API}/navigation/path', navigation.PathHandler, opts),
         # docking
         (rf'{API}/dock', docking.DockHandler, opts),
