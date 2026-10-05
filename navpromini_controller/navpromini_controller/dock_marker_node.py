@@ -151,7 +151,7 @@ class DockMarkerNode(Node):
         if self._pub_debug_img.get_subscription_count() > 0 or self._pub_debug_raw.get_subscription_count() > 0:
             return True
         active_docking_states = {
-            'searching', 'servo', 'approaching', 'aligning', 'centering',
+            'staging', 'searching', 'servo', 'approaching', 'aligning', 'centering',
             'docking', 'blind_creep', 'retry', 'dock'
         }
         if self._dock_status in active_docking_states:

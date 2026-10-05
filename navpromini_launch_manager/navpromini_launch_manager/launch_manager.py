@@ -241,12 +241,7 @@ class LaunchManager(Node):
                     self.get_logger().info(
                         f"Stopping existing launch {existing_id} ({request.launch_file}) before starting new instance")
                     try:
-                        p = existing_info['process']
-                        os.killpg(os.getpgid(p.pid), signal.SIGINT)
-                        try:
-                            p.wait(timeout=3.0)
-                        except subprocess.TimeoutExpired:
-                            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                        self._terminate_process(existing_info['process'], existing_info.get('cmd', ''))
                     except Exception as err:
                         self.get_logger().warning(f"Error stopping prior launch: {err}")
                     self.active_launches.pop(existing_id, None)

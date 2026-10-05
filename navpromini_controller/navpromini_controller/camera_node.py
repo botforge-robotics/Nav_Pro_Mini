@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Optional
 
 import cv2
@@ -159,9 +160,14 @@ class CameraNode(Node):
     def _activate(self) -> bool:
         if self._active:
             return True
-        cap = cv2.VideoCapture(self._device, cv2.CAP_V4L2)
-        if not cap.isOpened():
+        cap = None
+        for attempt in range(4):
+            cap = cv2.VideoCapture(self._device, cv2.CAP_V4L2)
+            if cap.isOpened():
+                break
             cap.release()
+            time.sleep(0.4)
+        else:
             self.get_logger().error(f'cannot open video device {self._device}')
             return False
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))

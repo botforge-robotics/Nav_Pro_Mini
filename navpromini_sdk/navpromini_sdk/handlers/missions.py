@@ -50,7 +50,7 @@ import subprocess
 import uuid
 import requests
 from .base import ApiError, BaseHandler
-from .docking import dock_robot, undock_robot
+from .docking import cancel_active_dock, dock_robot, undock_robot
 from .mission_graph import (
     NODE_CATALOG,
     evaluate_condition_safely,
@@ -1233,8 +1233,9 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             except:
                 pass
             bridge.emit_event('motion.estop')
-        # Cancel any active navigation
+        # Cancel any active navigation or docking
         await cancel_active_goal(bridge, "Emergency stop")
+        await cancel_active_dock(bridge, "Emergency stop")
         return True, 'stopped', "Emergency stop executed"
 
     if ntype == 'cancel_navigation':
@@ -1816,9 +1817,14 @@ class MissionControlHandler(BaseHandler):
             self.send({'accepted': True, 'mission_id': mission_id}, status=202)
             return
 
-        if RUNNER.mission_id != mission_id or RUNNER.state not in ('running', 'waiting_for_user', 'paused', 'charging_paused'):
+        if RUNNER.state not in ('running', 'waiting_for_user', 'paused', 'charging_paused'):
+            raise ApiError(409, 'mission_not_active',
+                           f'No mission is currently active (state: {RUNNER.state!r})')
+        if mission_id not in ('active', 'current', '*', RUNNER.mission_id):
             raise ApiError(409, 'mission_not_active',
                            f'Mission {mission_id!r} is not currently active')
+        target_mission_id = RUNNER.mission_id or mission_id
+
         if action == 'pause':
             RUNNER.pause_requested = True
             RUNNER.pause_reason = 'user_requested'
@@ -1827,18 +1833,28 @@ class MissionControlHandler(BaseHandler):
             RUNNER.pause_reason = None
         elif action == 'cancel':
             RUNNER.cancel_requested = True
+            RUNNER.state = 'canceled'
+            RUNNER.message = 'Mission cancelled by user'
+            RUNNER.active_nodes.clear()
+            RUNNER.active_node_id = None
             if RUNNER.interaction_future and not RUNNER.interaction_future.done():
                 try:
                     RUNNER.interaction_future.cancel()
                 except Exception:
                     pass
             RUNNER.active_interaction = None
-            if RUNNER.state == 'waiting_for_user':
-                RUNNER.state = 'canceled'
-            self.bridge.emit_event('mission.ui_interaction_dismissed', {'mission_id': mission_id, 'action': 'cancelled'})
-            self.bridge.emit_event('mission.canceled', {'mission_id': mission_id})
+            self.bridge.emit_event('mission.ui_interaction_dismissed', {'mission_id': target_mission_id, 'action': 'cancelled'})
+            self.bridge.emit_event('mission.canceled', {'mission_id': target_mission_id})
             try:
                 await cancel_active_goal(self.bridge, "Mission cancelled by user")
+            except Exception:
+                pass
+            try:
+                await cancel_active_dock(self.bridge, "Mission cancelled by user")
+            except Exception:
+                pass
+            try:
+                self.bridge.publish_cmd_vel(0.0, 0.0)
             except Exception:
                 pass
         else:

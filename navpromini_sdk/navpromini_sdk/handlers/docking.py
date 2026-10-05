@@ -209,6 +209,22 @@ class UndockHandler(BaseHandler):
         self.send({'accepted': True}, status=202)
 
 
+async def cancel_active_dock(bridge, reason: str = 'canceled') -> bool:
+    if TRACKER.state not in ('docking', 'undocking') or TRACKER.handle is None:
+        return False
+    try:
+        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+    except Exception:
+        pass
+    TRACKER.finish('failed', reason)
+    if hasattr(bridge, 'release_video_stream'):
+        bridge.release_video_stream()
+    if hasattr(bridge, 'publish_display_state'):
+        bridge.publish_display_state('ready')
+    bridge.emit_event('dock.cancelled', {'reason': reason})
+    return True
+
+
 class DockCancelHandler(BaseHandler):
     """Cancel an in-progress dock/undock goal. Mirrors navigation.py's own
     CancelHandler exactly, against this module's own TRACKER — dock/undock
@@ -216,15 +232,10 @@ class DockCancelHandler(BaseHandler):
     _DockTracker above), so navigation's cancel route can't reach these."""
 
     async def delete(self) -> None:
-        if TRACKER.state not in ('docking', 'undocking') or TRACKER.handle is None:
+        canceled = await cancel_active_dock(self.bridge, 'Canceled by API request')
+        if not canceled:
             self.send({'canceled': False, 'reason': 'no active dock operation'})
             return
-        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
-        TRACKER.finish('failed', 'Canceled by API request')
-        if hasattr(self.bridge, 'release_video_stream'):
-            self.bridge.release_video_stream()
-        if hasattr(self.bridge, 'publish_display_state'):
-            self.bridge.publish_display_state('ready')
         self.send({'canceled': True})
 
 
