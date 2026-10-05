@@ -122,20 +122,20 @@ class BatteryNode(Node):
         msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LION
         msg.present = True
 
+        charger_connected = getattr(snap, 'charger_connected', False)
         is_charging = (
             snap.charge_state == 1 or
-            snap.pack_current_a > 0.05 or
-            getattr(snap, 'charger_connected', False)
+            charger_connected or
+            snap.pack_current_a > 0.3
         )
         is_discharging = (
             snap.charge_state == 2 or
             snap.pack_current_a < -0.15
         )
 
-        # Hysteresis and saturation logic for 4S LiFePO4 / Li-ion top-of-charge:
-        # At 100% SOC (or >= 99.5%), current tapers to <= 0.25A (often oscillating
-        # between 0.0A and 0.1A on Daly 0.1A shunt ADCs). Latch into FULL state
-        # so it remains rock-steady and does not flip-flop between CHARGING and FULL.
+        if not is_charging and not charger_connected:
+            self._is_full_latched = False
+
         if is_charging:
             if (snap.soc_percent >= 99.5 and snap.pack_current_a <= 0.25) or self._is_full_latched:
                 if snap.soc_percent >= 98.0 and not is_discharging:
@@ -150,7 +150,7 @@ class BatteryNode(Node):
         elif is_discharging:
             self._is_full_latched = False
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
-        elif snap.soc_percent >= 99.5:
+        elif snap.soc_percent >= 99.5 and charger_connected:
             self._is_full_latched = True
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_FULL
         else:

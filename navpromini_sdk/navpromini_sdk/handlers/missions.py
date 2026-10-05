@@ -925,24 +925,26 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         if is_local_media and target_filename:
             target_filename = os.path.basename(target_filename)
             from navpromini_sdk.handlers.media import get_media_dir
+            try:
+                m_dir = get_media_dir()
+            except Exception:
+                m_dir = Path('/home/navpromini/.navpromini/media')
             candidate_dirs = [
-                get_media_dir(),
-                Path('/home/navpromini/media'),
+                m_dir,
                 Path('/home/navpromini/.navpromini/media'),
-                Path('/root/.navpromini/media'),
-                Path.home() / 'media',
-                Path.home() / '.navpromini' / 'media',
+                Path('/home/navpromini/media'),
             ]
             file_exists = False
             for c_dir in candidate_dirs:
                 try:
-                    if c_dir.exists() and (c_dir / target_filename).is_file():
+                    p = c_dir / target_filename
+                    if p.is_file():
                         file_exists = True
                         break
                 except Exception:
                     pass
 
-            if not file_exists:
+            if not file_exists and not (url.startswith('http://') or url.startswith('https://')):
                 bridge.get_logger().warn(
                     f"[ui_media] Node '{node.get('id', 'unknown')}': Media file '{target_filename}' not found on robot "
                     f"(file was deleted from robot screen or missing). Safely closing media node and continuing mission."
@@ -962,6 +964,8 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             'mission_id': RUNNER.mission_id,
             'node_id': node['id'],
             'subtype': 'media_display',
+            'type': 'media_display',
+            'node_type': 'ui_media',
             'target': target,
             'title': resolve_template_value(params.get('title', 'Media Display'), context),
             'media_url': url,

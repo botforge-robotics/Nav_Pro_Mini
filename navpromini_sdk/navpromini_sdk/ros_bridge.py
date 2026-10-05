@@ -332,7 +332,9 @@ class RosBridge(Node):
         pct = m.percentage
         if pct == pct and pct <= 1.0:      # some stacks report 0-1, others 0-100
             pct *= 100.0
-        charging = m.power_supply_status in (1, 4)
+        info = self.get('battery_info') or {}
+        charger_conn = bool(info.get('charger_connected'))
+        charging = (m.power_supply_status == 1) or (charger_conn and m.power_supply_status in (1, 4)) or (m.current is not None and m.current > 0.3)
         self._put('battery', {
             'percentage': round(float(pct), 2) if pct == pct else None,
             'voltage': round(float(m.voltage), 2) if m.voltage == m.voltage else None,
