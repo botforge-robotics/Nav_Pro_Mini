@@ -217,9 +217,9 @@ async def run_relocalize_spin(
     target_cov_yaw: float = 0.12,
 ) -> dict:
     """Disperse AMCL particles and smoothly rotate in place to let laser scans converge."""
-    from std_srvs.srv import Empty
-    req = Empty.Request()
-    await call_service(bridge.cli_global_loc, req, 'reinitialize_global_localization', timeout=5.0)
+    ok = bridge.reinitialize_global_localization(timeout_sec=3.0)
+    if not ok:
+        raise ApiError(503, 'service_unavailable', 'AMCL /reinitialize_global_localization service unavailable')
     await asyncio.sleep(0.4)
 
     start_time = time.time()
@@ -268,9 +268,9 @@ class GlobalRelocalizeHandler(BaseHandler):
             self.send(result)
             return
 
-        from std_srvs.srv import Empty
-        req = Empty.Request()
-        await call_service(self.bridge.cli_global_loc, req, 'reinitialize_global_localization', timeout=5.0)
+        ok = self.bridge.reinitialize_global_localization(timeout_sec=3.0)
+        if not ok:
+            raise ApiError(503, 'service_unavailable', 'AMCL /reinitialize_global_localization service unavailable')
         self.send({'status': 'ok', 'message': 'AMCL particles dispersed across map'})
 
 
