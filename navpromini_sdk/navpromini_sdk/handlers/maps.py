@@ -58,6 +58,83 @@ def list_maps_from_disk() -> list[str]:
     return sorted(list(found))
 
 
+def _sync_map_files(name: str) -> None:
+    """Ensure map files exist in both src and install share directories."""
+    import shutil
+    dirs = []
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = os.path.join(get_package_share_directory('navpromini_mapping'), 'maps')
+        if os.path.isdir(share):
+            dirs.append(share)
+    except Exception:
+        pass
+    dirs.extend([
+        os.path.join(os.path.expanduser('~'), 'NavProMini_ws', 'install', 'navpromini_mapping', 'share', 'navpromini_mapping', 'maps'),
+        os.path.join(os.path.expanduser('~'), 'NavProMini_ws', 'src', 'navpromini_mapping', 'maps'),
+        '/home/navpromini/NavProMini_ws/install/navpromini_mapping/share/navpromini_mapping/maps',
+        '/home/navpromini/NavProMini_ws/src/navpromini_mapping/maps',
+    ])
+    unique_dirs = []
+    for d in dirs:
+        ad = os.path.abspath(d)
+        if os.path.isdir(ad) and ad not in unique_dirs:
+            unique_dirs.append(ad)
+
+    for ext in ('.yaml', '.pgm', '.posegraph', '.data'):
+        source_file = None
+        for d in unique_dirs:
+            candidate = os.path.join(d, f'{name}{ext}')
+            if os.path.isfile(candidate):
+                if source_file is None or os.path.getmtime(candidate) > os.path.getmtime(source_file):
+                    source_file = candidate
+        if source_file:
+            for d in unique_dirs:
+                dest = os.path.join(d, f'{name}{ext}')
+                if os.path.abspath(dest) != os.path.abspath(source_file):
+                    try:
+                        shutil.copy2(source_file, dest)
+                    except Exception:
+                        pass
+
+
+async def save_map(bridge, store, name: str, overwrite: bool) -> dict:
+    """Save the current map under a name. Shared by MapsHandler.post and
+    mode.FinishMappingHandler (doc §12's atomic FINISH_MAPPING).
+
+    launch_manager verifies a save by diffing the map list, and returns
+    success=False with "already exist" when the name was already present —
+    even though the save itself ran. That is ambiguous for an API, so an
+    existing name is a 409 unless the caller passes overwrite=True.
+    """
+    name = str(name).strip()
+    if not name or '/' in name or name.startswith('.'):
+        raise ApiError(400, 'invalid_name',
+                       'name must be a simple file name without "/"')
+
+    req = LaunchWithArgs.Request()
+    req.package = MAP_PACKAGE
+    req.launch_file = 'map_saver.launch.py'
+    req.arguments = f'map_name:={name}'
+    resp = await call_service(bridge.cli_launch, req, 'save_map', timeout=120.0)
+
+    already = 'already exist' in (resp.message or '').lower()
+    if resp.success:
+        _sync_map_files(name)
+        bridge.emit_event('map.saved', {'name': name})
+        return {'saved': True, 'name': name}
+    if already and overwrite:
+        # The save ran; only the "is this new?" check failed.
+        _sync_map_files(name)
+        bridge.emit_event('map.saved', {'name': name, 'overwritten': True})
+        return {'saved': True, 'name': name, 'overwritten': True}
+    if already:
+        raise ApiError(409, 'map_exists',
+                       f'A map named {name!r} already exists. Resend with '
+                       '{"overwrite": true} to replace it.', {'name': name})
+    raise ApiError(500, 'save_failed', resp.message or 'map save failed')
+
+
 class MapsHandler(BaseHandler):
     async def get(self) -> None:
         maps = []
