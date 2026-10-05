@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import subprocess
 from pathlib import Path
 
 from navpromini_sdk.handlers.base import BaseHandler, ApiError
@@ -102,6 +103,20 @@ class MediaUploadHandler(BaseHandler):
                 os.chmod(dest_path, 0o666)
             except Exception:
                 pass
+
+            if ext in ('.mp4', '.mov', '.m4v'):
+                # Optimize video container for smooth streaming & instant playback on robot screen
+                tmp_opt = dest_path.with_suffix('.faststart.mp4')
+                try:
+                    res = subprocess.run(
+                        ['ffmpeg', '-y', '-i', str(dest_path), '-c', 'copy', '-movflags', '+faststart', str(tmp_opt)],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
+                    )
+                    if res.returncode == 0 and tmp_opt.exists() and tmp_opt.stat().st_size > 0:
+                        tmp_opt.replace(dest_path)
+                except Exception:
+                    if tmp_opt.exists():
+                        tmp_opt.unlink(missing_ok=True)
 
             media_type = _get_media_type(ext)
             media_url = f"http://{host}/media/{final_filename}"
