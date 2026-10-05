@@ -48,7 +48,7 @@ STATE_FX: dict[str, tuple[str, str]] = {
     'setup': ('Setup WiFi - pass: navprosetup', 'blink,255,160,0,400'),
     'joining': ('Connecting WiFi...', 'solid,0,200,220'),
     'ready': ('', 'solid,0,200,40'),
-    'mapping': ('Mapping...', 'chase,0,120,255,80'),
+    'mapping': ('Mapping...', 'breathe,0,120,255,1500'),
     'nav': ('Nav ready', 'solid,0,200,40'),
     'docking': ('Docking...', 'solid,255,255,255'),
     'error': ('Error', 'blink,255,0,0,300'),
@@ -503,7 +503,7 @@ class StatusDisplayNode(Node):
             self._pending_text = self._oled_ascii(self._compose_text(display_state, text))[:192]
             # Priority is strictly based on lifecycle (Doc §1 & §6):
             # Lifecycle takes top priority: boot (solid red), setup (amber), joining (cyan),
-            # mapping (cyan chase), error (blink red), offline (grey).
+            # mapping (blue breathe), error (blink red), offline (grey).
             # ONLY after fully set up (ready/nav) does battery animation have priority when docked & charging.
             if display_state in ('boot', 'setup', 'joining', 'mapping', 'error', 'offline'):
                 self._pending_led = led
