@@ -987,16 +987,21 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         future: asyncio.Future = loop.create_future()
         RUNNER.interaction_future = future
 
+        effective_timeout = (duration_sec + 5.0) if (media_type == 'video' and duration_sec > 0) else duration_sec
+
         try:
-            if duration_sec > 0:
-                resp_data = await asyncio.wait_for(future, timeout=duration_sec)
+            if effective_timeout > 0:
+                resp_data = await asyncio.wait_for(future, timeout=effective_timeout)
                 action = resp_data.get('action', 'skip')
                 port = 'skipped' if action in ('skip', 'cancel') else 'completed'
+                bridge.get_logger().info(f"[ui_media] node '{node.get('id')}' interaction response: {resp_data!r} -> port: {port}")
             else:
                 resp_data = await future
                 port = 'completed'
+                bridge.get_logger().info(f"[ui_media] node '{node.get('id')}' interaction future done: {resp_data!r}")
             return True, port, f"Media display: {port}"
         except asyncio.TimeoutError:
+            bridge.get_logger().info(f"[ui_media] node '{node.get('id')}' duration {duration_sec}s timeout elapsed -> completed")
             return True, 'completed', "Media display completed"
         finally:
             RUNNER.active_interaction = None
@@ -1886,6 +1891,7 @@ class UiResponseHandler(BaseHandler):
 
     def post(self) -> None:
         data = self.body(('interaction_id',))
+        self.bridge.get_logger().info(f"[ui_response] received from {self.request.remote_ip}: data={data!r}")
         interaction_id = str(data.get('interaction_id', '')).strip()
         if not RUNNER.active_interaction or RUNNER.active_interaction.get('interaction_id') != interaction_id:
             self.send({'accepted': False, 'message': 'Interaction not active or already closed', 'interaction_id': interaction_id})
