@@ -45,6 +45,7 @@ from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.utilities import get_action, get_service
 
 import os
+from pathlib import Path
 import subprocess
 import uuid
 import requests
@@ -887,13 +888,73 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             bridge.emit_event('mission.ui_interaction_dismissed', {'interaction_id': interaction_id})
 
     if ntype == 'ui_media':
-        url = resolve_template_value(params.get('url', ''), context)
+        url = resolve_template_value(params.get('url', ''), context).strip()
         media_type = params.get('media_type', 'image')
         duration_sec = float(params.get('duration_sec', 15.0))
         target = str(params.get('target', 'robot_screen')).lower()
         if target not in ('robot_screen', 'operator_app', 'both'):
             target = 'robot_screen'
         show_skip = bool(params.get('show_skip', True))
+
+        # Safe handle 1: Empty URL / file specification
+        if not url:
+            bridge.get_logger().warn(
+                f"[ui_media] Node '{node.get('id', 'unknown')}': No media URL or file provided. "
+                "Safely skipping media node and continuing mission."
+            )
+            bridge.emit_event('mission.media_missing', {
+                'mission_id': RUNNER.mission_id,
+                'node_id': node.get('id'),
+                'warning': 'No media URL or file specified; node safely bypassed.',
+            })
+            return True, 'completed', 'Empty media URL; safely skipped'
+
+        # Safe handle 2: Check if file was deleted or missing from robot local media storage
+        is_local_media = False
+        target_filename = None
+        if params.get('filename'):
+            target_filename = str(params.get('filename')).strip()
+            is_local_media = True
+        elif '/media/' in url:
+            target_filename = url.split('/media/')[-1].split('?')[0].split('#')[0]
+            is_local_media = True
+        elif not url.startswith('http://') and not url.startswith('https://'):
+            target_filename = os.path.basename(url)
+            is_local_media = True
+
+        if is_local_media and target_filename:
+            target_filename = os.path.basename(target_filename)
+            from navpromini_sdk.handlers.media import get_media_dir
+            candidate_dirs = [
+                get_media_dir(),
+                Path('/home/navpromini/media'),
+                Path('/home/navpromini/.navpromini/media'),
+                Path('/root/.navpromini/media'),
+                Path.home() / 'media',
+                Path.home() / '.navpromini' / 'media',
+            ]
+            file_exists = False
+            for c_dir in candidate_dirs:
+                try:
+                    if c_dir.exists() and (c_dir / target_filename).is_file():
+                        file_exists = True
+                        break
+                except Exception:
+                    pass
+
+            if not file_exists:
+                bridge.get_logger().warn(
+                    f"[ui_media] Node '{node.get('id', 'unknown')}': Media file '{target_filename}' not found on robot "
+                    f"(file was deleted from robot screen or missing). Safely closing media node and continuing mission."
+                )
+                bridge.emit_event('mission.media_missing', {
+                    'mission_id': RUNNER.mission_id,
+                    'node_id': node.get('id'),
+                    'filename': target_filename,
+                    'warning': f"Media file '{target_filename}' deleted or missing; safely bypassed.",
+                })
+                # Safely complete the node so the mission transitions cleanly via 'completed'
+                return True, 'completed', f"Media file '{target_filename}' deleted or missing; safely bypassed"
 
         interaction_id = f"media_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
         interaction_data = {
@@ -904,6 +965,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
             'target': target,
             'title': resolve_template_value(params.get('title', 'Media Display'), context),
             'media_url': url,
+            'filename': target_filename or os.path.basename(url),
             'media_type': media_type,
             'duration_sec': duration_sec,
             'show_skip': show_skip,
