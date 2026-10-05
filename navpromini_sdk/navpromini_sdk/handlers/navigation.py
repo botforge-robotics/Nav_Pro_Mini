@@ -231,7 +231,7 @@ async def run_relocalize_spin(
             bridge.publish_cmd_vel(0.0, angular_vel)
             await asyncio.sleep(0.1)
 
-            pose_map = bridge.cached('pose_map')
+            pose_map = bridge.get('pose_map')
             if pose_map:
                 cx = pose_map.get('cov_x', 999.0)
                 cy = pose_map.get('cov_y', 999.0)
