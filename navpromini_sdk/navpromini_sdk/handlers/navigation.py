@@ -259,7 +259,7 @@ class GlobalRelocalizeHandler(BaseHandler):
     """Disperse AMCL particles across the map for global relocalization."""
 
     async def post(self) -> None:
-        data = self.json_body() or {}
+        data = self.body()
         spin = bool(data.get('spin', False))
         if spin:
             angular_vel = float(data.get('angular_vel', 0.35))
@@ -278,7 +278,7 @@ class RelocalizeRecoverHandler(BaseHandler):
     """Autonomous 360° relocalization recovery with active particle convergence."""
 
     async def post(self) -> None:
-        data = self.json_body() or {}
+        data = self.body()
         angular_vel = float(data.get('angular_vel', 0.35))
         timeout_sec = float(data.get('timeout_sec', 22.0))
         target_cov = float(data.get('target_cov', 0.15))
