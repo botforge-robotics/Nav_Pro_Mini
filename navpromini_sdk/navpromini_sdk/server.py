@@ -287,7 +287,16 @@ def main(args=None) -> None:
     # Spin ROS on its own thread; tornado owns the main thread.
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(bridge)
-    ros_thread = threading.Thread(target=executor.spin, daemon=True)
+
+    def _spin_loop():
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.2)
+            except Exception as e:
+                bridge.get_logger().error(f"ROS executor error in spin loop (recovering): {e}")
+                time.sleep(0.05)
+
+    ros_thread = threading.Thread(target=_spin_loop, daemon=True)
     ros_thread.start()
 
     store = Store()

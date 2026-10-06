@@ -240,7 +240,7 @@ class DockManagerNode(Node):
     def _charging(self) -> bool:
         if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
             return True
-        if hasattr(self, '_batt_current') and self._batt_current is not None and self._batt_current > 0.3:
+        if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL and self._docked:
             return True
         return False
 

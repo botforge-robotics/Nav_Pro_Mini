@@ -334,7 +334,7 @@ class RosBridge(Node):
             pct *= 100.0
         info = self.get('battery_info') or {}
         charger_conn = bool(info.get('charger_connected'))
-        charging = (m.power_supply_status == 1) or (charger_conn and m.power_supply_status in (1, 4)) or (m.current is not None and m.current > 0.3)
+        charging = (m.power_supply_status == 1) or (charger_conn and m.power_supply_status in (1, 4))
         self._put('battery', {
             'percentage': round(float(pct), 2) if pct == pct else None,
             'voltage': round(float(m.voltage), 2) if m.voltage == m.voltage else None,
@@ -468,29 +468,20 @@ class RosBridge(Node):
                 self.get_logger().info('RosBridge: Subscribed to camera/dock video streams on demand')
 
     def release_video_stream(self) -> None:
-        """Unsubscribe from video streams when no clients are viewing video streams."""
+        """Unsubscribe/deactivate video streams when no clients are viewing video streams."""
         with self._video_sub_lock:
+            prev = self._video_stream_refcount
             self._video_stream_refcount = max(0, self._video_stream_refcount - 1)
-            if self._video_stream_refcount == 0:
-                if self._sub_dock_debug_img is not None:
-                    try:
-                        self.destroy_subscription(self._sub_dock_debug_img)
-                    except Exception:
-                        pass
-                    self._sub_dock_debug_img = None
-                if self._sub_camera_img is not None:
-                    try:
-                        self.destroy_subscription(self._sub_camera_img)
-                    except Exception:
-                        pass
-                    self._sub_camera_img = None
-                self.get_logger().info('RosBridge: Unsubscribed from video streams (no active clients)')
+            if prev > 0 and self._video_stream_refcount == 0:
+                self.get_logger().info('RosBridge: Deactivated video stream processing (no active clients)')
 
     def _on_dock_debug(self, m: CompressedImage) -> None:
-        self._put('dock_debug_image', bytes(m.data))
+        if self._video_stream_refcount > 0:
+            self._put('dock_debug_image', bytes(m.data))
 
     def _on_camera_image(self, m: CompressedImage) -> None:
-        self._put('camera_image', bytes(m.data))
+        if self._video_stream_refcount > 0:
+            self._put('camera_image', bytes(m.data))
 
     def _on_dock_tag(self, m: Float32MultiArray) -> None:
         d = list(m.data)

@@ -1047,6 +1047,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         RUNNER.active_interaction = interaction_data
         RUNNER.state = 'waiting_for_user'
         bridge.emit_event('mission.ui_interaction', interaction_data)
+        bridge.get_logger().info(f"[ui_browser] Node '{node.get('id')}': Displaying URL '{url}' ({title}). Holding mission until user taps Close.")
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
@@ -1057,8 +1058,10 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 resp_data = await asyncio.wait_for(future, timeout=timeout_sec)
             else:
                 resp_data = await future
+            bridge.get_logger().info(f"[ui_browser] Node '{node.get('id')}': User closed browser -> proceeding to next step.")
             return True, 'closed', "Browser closed by user; proceeding to next mission step."
         except asyncio.TimeoutError:
+            bridge.get_logger().info(f"[ui_browser] Node '{node.get('id')}': Browser auto-closed by timeout ({timeout_sec}s) -> proceeding to next step.")
             return True, 'closed', "Browser timed out; proceeding to next mission step."
         finally:
             RUNNER.active_interaction = None

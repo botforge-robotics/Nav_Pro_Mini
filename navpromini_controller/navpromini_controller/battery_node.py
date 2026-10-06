@@ -122,15 +122,16 @@ class BatteryNode(Node):
         msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LION
         msg.present = True
 
-        charger_connected = getattr(snap, 'charger_connected', False)
+        charger_connected = bool(getattr(snap, 'charger_connected', False))
+        charge_state = getattr(snap, 'charge_state', 0)
         is_charging = (
-            snap.charge_state == 1 or
-            charger_connected or
-            snap.pack_current_a > 0.3
+            charge_state == 1 or
+            (charger_connected and snap.pack_current_a > 0.05) or
+            (charger_connected and charge_state != 2)
         )
         is_discharging = (
-            snap.charge_state == 2 or
-            snap.pack_current_a < -0.15
+            charge_state == 2 or
+            (not charger_connected and snap.pack_current_a < -0.15)
         )
 
         if not is_charging and not charger_connected:
