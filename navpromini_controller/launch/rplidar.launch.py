@@ -47,6 +47,8 @@ def _setup(context, *args, **kwargs):
             package='rplidar_ros',
             executable='rplidar_composition',
             output='screen',
+            respawn=True,
+            respawn_delay=2.0,
             parameters=[{
                 'serial_port': port,
                 'serial_baudrate': int(
