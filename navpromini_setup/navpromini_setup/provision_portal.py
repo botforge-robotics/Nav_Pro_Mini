@@ -234,9 +234,6 @@ window.addEventListener('DOMContentLoaded', function() {{
         <input name="wifi_password" type="password" required autocomplete="off" placeholder="Wi‑Fi password"/>
         <label>Robot name</label>
         <input name="robot_name" required placeholder="bot-1" autocomplete="off"/>
-        <label>Wi‑Fi country code</label>
-        <input name="country_code" id="wifi_country_code" maxlength="2" placeholder="e.g. IN, US, GB" autocomplete="off" style="text-transform:uppercase"/>
-        <span class="hint" style="margin:0">Two-letter regulatory domain (e.g. IN, US, GB) to enable local 2.4/5GHz Wi‑Fi channels.</span>
         <label>Time zone</label>
         <select id="wifi_timezone" name="timezone">
           {timezone_options}
@@ -921,11 +918,6 @@ def make_handler(state: PortalState):  # noqa: ANN201
 
             def worker() -> None:
                 try:
-                    if country_code:
-                        try:
-                            apply_country_code(country_code)
-                        except Exception as exc:
-                            sys.stderr.write(f'[provision] apply_country_code ignored: {exc}\n')
                     try:
                         apply_timezone(timezone)
                     except Exception as exc:
