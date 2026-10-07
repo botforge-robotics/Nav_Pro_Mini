@@ -10,14 +10,19 @@ else
   source "${SCRIPT_DIR}/env.sh"
 fi
 
-# Clean serial buffers and reset DTR/RTS on RPLidar to prevent handshake hang on restart
+# Ensure RPLidar hardware is stopped and reset to IDLE state.
+# If previous driver died while lidar was actively scanning, the hardware continuously dumps
+# scan packets and ignores all initialization commands unless a STOP (0xA5 0x25) is sent.
 if [[ -e /dev/rplidar ]]; then
   python3 -c "import serial, time
 try:
-    s = serial.Serial('/dev/rplidar', 115200, timeout=0.1)
-    s.dtr = False
-    s.rts = False
-    time.sleep(0.05)
+    s = serial.Serial('/dev/rplidar', 115200, timeout=0.2)
+    s.write(b'\xa5\x25')
+    time.sleep(0.08)
+    s.reset_input_buffer()
+    s.reset_output_buffer()
+    s.write(b'\xa5\x40')
+    time.sleep(0.1)
     s.reset_input_buffer()
     s.reset_output_buffer()
     s.close()
