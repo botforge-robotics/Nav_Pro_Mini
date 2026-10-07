@@ -654,6 +654,9 @@ def connect_site_wifi(ssid: str, password: str) -> None:
     if r.returncode != 0:
         _nmcli('connection', 'up', CONN_AP)
         raise RuntimeError(f'Wi‑Fi join failed: {r.stderr or r.stdout}')
+    # Disable Wi-Fi power save for lowest latency and zero jitter (essential for ROS 2 & WebSockets)
+    _nmcli('connection', 'modify', CONN_SITE, '802-11-wireless.powersave', '2')
+    _run(['iw', 'dev', AP_IFACE, 'set', 'power_save', 'off'])
     for _ in range(30):
         time.sleep(1.0)
         ip = _run(['hostname', '-I'])
