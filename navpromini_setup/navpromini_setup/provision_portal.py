@@ -739,7 +739,7 @@ def apply_timezone(tz: str) -> None:
 def maybe_restart_robot_units() -> None:
     time.sleep(2.0)
     _run(['systemctl', 'stop', 'navpro-provision'], check=False)
-    for unit in ('navpro-robot', 'navpro-display'):
+    for unit in ('navpro-robot', 'navpro-display', 'navpro-sdk', 'navpro-mission-planner'):
         _run(['systemctl', 'start', unit], check=False)
         _run(['systemctl', 'restart', unit], check=False)
 
