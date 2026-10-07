@@ -25,6 +25,7 @@ import html
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import threading
@@ -374,7 +375,12 @@ STATUS_HTML = """<!DOCTYPE html>
 
 
 def _run(cmd: list[str], check: bool = False, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=check, text=True, capture_output=True, timeout=timeout)
+    try:
+        return subprocess.run(cmd, check=check, text=True, capture_output=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        if check:
+            raise
+        return subprocess.CompletedProcess(cmd, returncode=127, stdout='', stderr=str(exc))
 
 
 def _nmcli(*args: str, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -672,11 +678,21 @@ def apply_country_code(cc: str) -> None:
         return
 
     sys.stderr.write(f'[provision] applying Wi-Fi country code {cc!r}\n')
-    # 1. Apply via iw directly
-    _run(['iw', 'reg', 'set', cc], check=False)
+    # 1. Apply via iw directly (if available)
+    if shutil.which('iw'):
+        try:
+            _run(['iw', 'reg', 'set', cc], check=False)
+        except Exception as exc:
+            sys.stderr.write(f'[provision] iw reg set failed: {exc}\n')
 
     # 2. Apply via raspi-config nonint if available (Raspberry Pi OS)
-    _run(['raspi-config', 'nonint', 'do_wifi_country', cc], check=False)
+    if shutil.which('raspi-config'):
+        try:
+            _run(['raspi-config', 'nonint', 'do_wifi_country', cc], check=False)
+        except Exception as exc:
+            sys.stderr.write(f'[provision] raspi-config failed: {exc}\n')
+    else:
+        sys.stderr.write('[provision] raspi-config not found — skipping regulatory country setting\n')
 
     # 3. Update /etc/default/crda if present
     crda_path = Path('/etc/default/crda')
@@ -906,8 +922,14 @@ def make_handler(state: PortalState):  # noqa: ANN201
             def worker() -> None:
                 try:
                     if country_code:
-                        apply_country_code(country_code)
-                    apply_timezone(timezone)
+                        try:
+                            apply_country_code(country_code)
+                        except Exception as exc:
+                            sys.stderr.write(f'[provision] apply_country_code ignored: {exc}\n')
+                    try:
+                        apply_timezone(timezone)
+                    except Exception as exc:
+                        sys.stderr.write(f'[provision] apply_timezone ignored: {exc}\n')
                     state.set_phase('joining_wifi')
                     write_display_hint('joining', robot_name)
                     connect_site_wifi(wifi_ssid, wifi_password)
