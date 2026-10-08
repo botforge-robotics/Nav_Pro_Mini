@@ -105,6 +105,13 @@ JS_QOS = QoSProfile(
     durability=DurabilityPolicy.VOLATILE,
 )
 
+LATCHED_STR_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
+
 
 class StatusDisplayNode(Node):
     def __init__(self) -> None:
@@ -124,7 +131,7 @@ class StatusDisplayNode(Node):
         # Liveness-only (see _hardware_ready) — not processed for anything
         # else, so best-effort/shallow queue is fine, same as joint_states.
         self.create_subscription(LaserScan, 'scan', self._on_scan, JS_QOS)
-        self.create_subscription(String, 'dock_status', self._on_dock_status, 10)
+        self.create_subscription(String, 'dock_status', self._on_dock_status, LATCHED_STR_QOS)
         self._dock_status: Optional[str] = None
         # What the battery currently says, and what we have committed to
         # showing — separated so the debounce can hold the LED steady while

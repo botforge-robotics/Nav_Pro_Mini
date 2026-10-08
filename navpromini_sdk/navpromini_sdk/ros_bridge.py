@@ -126,7 +126,7 @@ class RosBridge(Node):
                                  callback_group=cb)
         self.create_subscription(Float32, 'system/cpu_temperature', self._on_cpu_temp, 10,
                                  callback_group=cb)
-        self.create_subscription(String, 'dock_status', self._on_dock_status, 10,
+        self.create_subscription(String, 'dock_status', self._on_dock_status, LATCHED_QOS,
                                  callback_group=cb)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self._on_amcl, 10,
                                  callback_group=cb)

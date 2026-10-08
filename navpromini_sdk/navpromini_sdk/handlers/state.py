@@ -143,7 +143,14 @@ class RobotStateHandler(BaseHandler):
 
         lifecycle = system.lifecycle_snapshot()
         health = system.health_sources(bridge)
-        battery = bridge.get('battery') or {}
+        battery_data, bat_age = bridge.get_with_age('battery')
+        battery = battery_data or {}
+        battery_fresh = (battery_data is not None) and (bat_age < 5.0)
+        is_charging = bool(battery.get('charging')) and battery_fresh
+        dock_status_data, dock_age = bridge.get_with_age('dock_status')
+        dock_status_val = dock_status_data or 'undocked'
+        if not is_charging and dock_status_val in ('charging', 'full'):
+            dock_status_val = 'undocked' 
 
         pose, age = bridge.get_with_age('pose_map')
         cov_x = pose.get('cov_x', 0.0) if pose else 0.0
@@ -170,7 +177,7 @@ class RobotStateHandler(BaseHandler):
             'hardware': {label: ('OK' if s['ok'] else 'FAULT')
                         for label, s in health.items()},
             'battery': {'percentage': battery.get('percentage'),
-                       'charging': bool(battery.get('charging'))},
+                       'charging': is_charging},
             'map': {'id': map_name, 'name': map_name} if map_name else None,
             'is_localized': localized,
             'localization': {
@@ -190,7 +197,7 @@ class RobotStateHandler(BaseHandler):
                        'mission_id': mission_runner.mission_id,
                        'pause_reason': mission_runner.pause_reason},
             'dock': {'configured': bridge.get('dock_pose') is not None,
-                    'status': bridge.get('dock_status'),
+                    'status': dock_status_val,
                     'operation': dock_tracker.state},
             'system': {
                 'cpu_load_pct': _get_cpu_load_pct(),

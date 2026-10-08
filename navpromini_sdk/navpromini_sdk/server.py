@@ -16,6 +16,7 @@ import asyncio
 import os
 import signal
 import threading
+import time
 from typing import Any
 
 import rclpy
@@ -294,12 +295,26 @@ def main(args=None) -> None:
         while rclpy.ok():
             try:
                 executor.spin_once(timeout_sec=0.2)
-            except Exception as e:
+            except BaseException as e:
+                if not rclpy.ok():
+                    break
                 bridge.get_logger().error(f"ROS executor error in spin loop (recovering): {e}")
-                time.sleep(0.05)
+                try:
+                    time.sleep(0.05)
+                except Exception:
+                    pass
 
     ros_thread = threading.Thread(target=_spin_loop, daemon=True)
     ros_thread.start()
+
+    def _check_ros_liveness():
+        nonlocal ros_thread
+        if not ros_thread.is_alive() and rclpy.ok():
+            bridge.get_logger().error("ROS spin thread died unexpectedly! Resurrecting executor thread...")
+            ros_thread = threading.Thread(target=_spin_loop, daemon=True)
+            ros_thread.start()
+
+    tornado.ioloop.PeriodicCallback(_check_ros_liveness, 2000).start()
 
     store = Store()
     loop = tornado.ioloop.IOLoop.current()
