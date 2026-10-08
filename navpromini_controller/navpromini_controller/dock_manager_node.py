@@ -73,7 +73,7 @@ class DockManagerNode(Node):
         p('omega_slew', 1.0)
         p('servo_filter_weight', 0.65)
         p('blind_min_r', 0.28)
-        p('blind_fallback_r', 0.24)
+        p('blind_fallback_r', 0.35)
         p('blind_creep_m', 0.25)
         p('blind_creep_speed', 0.023)
         p('blind_push_max_scale', 3.5)
@@ -89,7 +89,7 @@ class DockManagerNode(Node):
         p('dock_origin_offset_m', 0.13)
         p('standoff_m', 0.90)
         p('staging_timeout_sec', 300.0)
-        p('marker_wait_timeout', 0.4)
+        p('marker_wait_timeout', 0.6)
         p('max_run_timeout', 600.0)
         p('settle_sec', 0.4)
 
@@ -633,6 +633,7 @@ class DockManagerNode(Node):
             last_seen_z: Optional[float] = None
             filt_alpha = filt_beta = filt_r = None
             servo_loss_count = 0
+            sweep_step = 0
 
             while True:
                 if goal_handle.is_cancel_requested:
@@ -663,46 +664,57 @@ class DockManagerNode(Node):
                         self._stop()
                         omega_cmd = 0.0
                         filt_alpha = filt_beta = filt_r = None
+                        sweep_step = 0
                         self._set_status('servo')
                     else:
                         # Close to dock: never execute in-place rotational sweep; creep straight into funnel
-                        if last_seen_z is not None and last_seen_z < self._blind_fallback_r:
+                        if (last_seen_z is not None and last_seen_z < self._blind_fallback_r) or (filt_r is not None and filt_r < self._blind_fallback_r):
                             self._stop()
                             self.get_logger().info(
-                                f'searching: close to dock (z={last_seen_z*100:.1f}cm < {self._blind_fallback_r*100:.0f}cm) — creeping straight without sweeping')
+                                f'searching: close to dock (z={last_seen_z*100 if last_seen_z else 0:.1f}cm < {self._blind_fallback_r*100:.0f}cm) — creeping straight without sweeping')
                             self._set_status('blind_creep')
                             continue
-                        turn_angle = -self._turn_radians if (last_seen_tag_x is None or last_seen_tag_x < 0) else self._turn_radians
+
+                        # Alternating oscillating sweep (+ - + -) with bounded angles
+                        sweep_step += 1
+                        sign = -1.0 if (last_seen_tag_x is None or last_seen_tag_x < 0) else 1.0
+                        step_sign = sign if (sweep_step % 2 == 1) else -sign
+                        sweep_mag = min(0.35, 0.18 * ((sweep_step + 1) // 2))
+                        turn_angle = step_sign * sweep_mag
+                        self.get_logger().info(
+                            f'searching: sweep step {sweep_step} -> turning {math.degrees(turn_angle):+.1f} deg (alternating)')
                         await self._turn(turn_angle, stop_when=self._in_view)
                     continue
 
                 if self._status == 'servo':
                     if not self._in_view():
                         servo_loss_count += 1
-                        if servo_loss_count < 6:
+                        if servo_loss_count < 14:
                             # Transient frame drop or detection jitter: hold heading and crawl gently
                             self._drive(-0.010, 0.0)
                             await self._tick()
                             continue
 
-                        # Confirmed tag loss after 6 consecutive ticks (~200ms)
+                        # Confirmed tag loss after 14 consecutive ticks (~1.4s)
                         servo_loss_count = 0
                         # If we were already close to the dock / entering the funnel,
                         # do NOT rotate in place (sweep)! Creep straight back instead.
-                        if filt_r is not None and filt_r < self._blind_fallback_r:
+                        if (filt_r is not None and filt_r < self._blind_fallback_r) or (last_seen_z is not None and last_seen_z < self._blind_fallback_r):
                             self._stop()
-                            blind_yaw = filt_beta - filt_alpha
+                            blind_yaw = (filt_beta - filt_alpha) if (filt_beta is not None and filt_alpha is not None) else 0.0
                             self.get_logger().info(
-                                f'servo: tag lost at close range (r={filt_r:.3f}m < {self._blind_fallback_r:.2f}m) '
+                                f'servo: tag lost at close range (r={filt_r if filt_r else last_seen_z:.3f}m < {self._blind_fallback_r:.2f}m) '
                                 'inside funnel — creeping blind directly without in-place sweep')
                             self._set_status('blind_creep')
                             continue
                         self._stop()
+                        sweep_step = 0
                         self._set_status('searching')
                         continue
 
-                    # Reset debounce counter when tag is visible
+                    # Reset debounce counter and sweep counter when tag is visible
                     servo_loss_count = 0
+                    sweep_step = 0
 
                     raw_alpha, raw_beta, raw_r = self._fid2pos()
                     if filt_alpha is None:
