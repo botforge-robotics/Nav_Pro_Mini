@@ -197,6 +197,7 @@ class _MissionRunner:
         # a separate flag.
         self.loop_index = 0
         self.loop_total: int | None = None
+        self.step_total: int = 1
         self.message = ''
         self.started_at: float | None = None
         self.cancel_requested = False
@@ -213,6 +214,8 @@ class _MissionRunner:
             'state': self.state,
             'status': self.state,
             'step_index': self.step_index,
+            'step_total': self.step_total,
+            'step_count': self.step_total,
             'active_node_id': self.active_node_id if is_active else None,
             'active_node_type': self.active_node_type if is_active else None,
             'active_node_label': self.active_node_label if is_active else None,
@@ -551,9 +554,13 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         if curr_iter < count and curr_iter < max_iter and cond_ok:
             loop_state[node['id']] = curr_iter + 1
             context['variables'][var_name] = curr_iter
+            RUNNER.loop_index = curr_iter
+            RUNNER.loop_total = count
             return True, 'loop_body', f"Loop iteration {curr_iter + 1}/{count}"
         else:
             loop_state[node['id']] = 0
+            RUNNER.loop_index = max(0, count - 1)
+            RUNNER.loop_total = count
             return True, 'completed', f"Loop completed ({count} iterations)"
 
     if ntype == 'patrol_loop':
@@ -1290,8 +1297,26 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
     if not entrypoint or entrypoint not in nodes_by_id:
         entrypoint = nodes[0]['id']
 
+    actionable_types = {
+        'navigate', 'navigate_waypoint', 'navigate_coordinates', 'patrol_loop',
+        'dock', 'undock', 'wait', 'wait_timer', 'delay',
+        'ui_interaction', 'ui_choice', 'ui_form', 'ui_input',
+        'ui_speech', 'speech', 'ui_notification', 'jog_motion',
+    }
+    actionable_nodes = [n for n in nodes if n.get('type') in actionable_types]
+    actionable_ids = [n['id'] for n in actionable_nodes]
+    loop_nodes = [n for n in nodes if n.get('type') in ('loop', 'loop_counter')]
+
     RUNNER.mission_id = mission['id']
     RUNNER.mission_name = mission.get('name') or mission.get('id')
+    RUNNER.step_total = len(actionable_nodes) if actionable_nodes else max(1, len(nodes))
+    RUNNER.step_index = 0
+    if loop_nodes:
+        RUNNER.loop_total = int(loop_nodes[0].get('params', {}).get('count', 1))
+        RUNNER.loop_index = 0
+    else:
+        RUNNER.loop_total = 1
+        RUNNER.loop_index = 0
     RUNNER.progress_pct = 0
     RUNNER.active_node_label = None
     RUNNER.state = 'running'
@@ -1428,9 +1453,20 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                 RUNNER.active_node_type = node.get('type')
                 RUNNER.active_node_label = node_label
                 RUNNER.context['history'].append(curr_id)
-                total_nodes = len(nodes) if nodes else 1
-                history_len = len(RUNNER.context.get('history', []))
-                RUNNER.progress_pct = min(99, int((history_len / max(1, total_nodes)) * 100))
+
+                if curr_id in actionable_ids:
+                    RUNNER.step_index = actionable_ids.index(curr_id)
+
+                if RUNNER.loop_total and RUNNER.loop_total > 1 and RUNNER.step_total > 0:
+                    total_steps = RUNNER.loop_total * RUNNER.step_total
+                    completed_steps = RUNNER.loop_index * RUNNER.step_total + RUNNER.step_index
+                    RUNNER.progress_pct = min(99, max(1, int((completed_steps / total_steps) * 100)))
+                elif RUNNER.step_total > 1:
+                    RUNNER.progress_pct = min(99, max(1, int(((RUNNER.step_index + 1) / RUNNER.step_total) * 100)))
+                else:
+                    total_nodes = len(nodes) if nodes else 1
+                    history_len = len(RUNNER.context.get('history', []))
+                    RUNNER.progress_pct = min(99, int((history_len / max(1, total_nodes)) * 100))
 
                 batt = bridge.get('battery') or {}
                 RUNNER.context['system']['battery_pct'] = batt.get('percentage', 0.0)
@@ -1510,7 +1546,7 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                         await _run_mission(bridge, opts, target_m, initial_context=new_context)
                         return
 
-                if node.get('type') in ('end', 'mission_end'):
+                if node.get('type') in ('end', 'mission_end', 'dock_and_end'):
                     status = str(node.get('params', {}).get('status', 'success')).lower()
                     if status in ('failed', 'aborted'):
                         RUNNER.state = 'failed'
@@ -1538,6 +1574,11 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                         ]
 
                 if not matching_edges:
+                    if not ok and output_port not in ('completed', 'next', 'done', 'arrived'):
+                        RUNNER.state = 'failed'
+                        RUNNER.message = message or f"Step {curr_id} failed ({output_port})"
+                        bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message, 'node_id': curr_id})
+                        return
                     bridge.get_logger().info(f"Mission {mission['id']}: terminal branch reached at {curr_id} (port: {output_port})")
                     break
 
@@ -1605,6 +1646,7 @@ async def _run_mission(bridge, opts, mission: dict, initial_context: Optional[di
     RUNNER.mission_name = mission.get('name') or mission.get('id')
     RUNNER.state = 'running'
     RUNNER.step_index = 0
+    RUNNER.step_total = len(steps) if steps else 1
     RUNNER.loop_index = 0
     RUNNER.loop_total = None if loop_forever else loop_count
     RUNNER.message = ''
