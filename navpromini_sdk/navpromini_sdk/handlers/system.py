@@ -837,20 +837,32 @@ class SystemPlaySoundHandler(BaseHandler):
             raise ApiError(500, 'sound_failed', str(exc))
 
 
-def _exec_reboot() -> None:
+def _exec_reboot(logger=None) -> None:
     """Trigger system reboot via systemctl, reboot, or sudo reboot."""
-    for cmd in [
+    cmds = [
+        ['systemctl', 'reboot', '-i'],
+        ['/bin/systemctl', 'reboot', '-i'],
         ['systemctl', 'reboot'],
+        ['/bin/systemctl', 'reboot'],
+        ['reboot', '-f'],
+        ['/sbin/reboot', '-f'],
         ['reboot'],
+        ['sudo', '-n', 'systemctl', 'reboot', '-i'],
         ['sudo', '-n', 'systemctl', 'reboot'],
         ['sudo', 'reboot'],
-    ]:
+    ]
+    for cmd in cmds:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             if r.returncode == 0:
+                if logger:
+                    logger.info(f"Reboot executed successfully via {' '.join(cmd)}")
                 return
-        except Exception:
-            pass
+            if logger:
+                logger.warn(f"Reboot cmd {' '.join(cmd)} returned {r.returncode}: {r.stderr.strip()}")
+        except Exception as exc:
+            if logger:
+                logger.warn(f"Reboot cmd {' '.join(cmd)} failed: {exc}")
 
 
 class SystemRebootHandler(BaseHandler):
@@ -862,36 +874,50 @@ class SystemRebootHandler(BaseHandler):
         except Exception:
             body = {}
         delay = float(body.get('delay', 1.5))
-        self.bridge.get_logger().warn(f"System reboot requested via API (delay={delay}s)")
+        logger = self.bridge.get_logger()
+        logger.warn(f"System reboot requested via API (delay={delay}s)")
         self.bridge.emit_event('system.rebooting', {'delay': delay})
 
         import threading
 
         def do_reboot() -> None:
             time.sleep(max(0.5, delay))
-            _exec_reboot()
+            _exec_reboot(logger)
 
         t = threading.Thread(target=do_reboot, daemon=True)
         t.start()
         self.send({'success': True, 'message': 'Robot system reboot initiated.', 'delay': delay})
 
 
-def _exec_shutdown() -> None:
+def _exec_shutdown(logger=None) -> None:
     """Trigger system poweroff/shutdown via systemctl, poweroff, shutdown, or sudo."""
-    for cmd in [
+    cmds = [
+        ['systemctl', 'poweroff', '-i'],
+        ['/bin/systemctl', 'poweroff', '-i'],
         ['systemctl', 'poweroff'],
+        ['/bin/systemctl', 'poweroff'],
+        ['poweroff', '-f'],
+        ['/sbin/poweroff', '-f'],
         ['poweroff'],
         ['shutdown', '-h', 'now'],
+        ['/sbin/shutdown', '-h', 'now'],
+        ['sudo', '-n', 'systemctl', 'poweroff', '-i'],
         ['sudo', '-n', 'systemctl', 'poweroff'],
         ['sudo', 'poweroff'],
         ['sudo', 'shutdown', '-h', 'now'],
-    ]:
+    ]
+    for cmd in cmds:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             if r.returncode == 0:
+                if logger:
+                    logger.info(f"Poweroff executed successfully via {' '.join(cmd)}")
                 return
-        except Exception:
-            pass
+            if logger:
+                logger.warn(f"Poweroff cmd {' '.join(cmd)} returned {r.returncode}: {r.stderr.strip()}")
+        except Exception as exc:
+            if logger:
+                logger.warn(f"Poweroff cmd {' '.join(cmd)} failed: {exc}")
 
 
 class SystemShutdownHandler(BaseHandler):
@@ -903,14 +929,15 @@ class SystemShutdownHandler(BaseHandler):
         except Exception:
             body = {}
         delay = float(body.get('delay', 1.5))
-        self.bridge.get_logger().warn(f"System shutdown / poweroff requested via API (delay={delay}s)")
+        logger = self.bridge.get_logger()
+        logger.warn(f"System shutdown / poweroff requested via API (delay={delay}s)")
         self.bridge.emit_event('system.shutting_down', {'delay': delay})
 
         import threading
 
         def do_shutdown() -> None:
             time.sleep(max(0.5, delay))
-            _exec_shutdown()
+            _exec_shutdown(logger)
 
         t = threading.Thread(target=do_shutdown, daemon=True)
         t.start()
