@@ -876,6 +876,47 @@ class SystemRebootHandler(BaseHandler):
         self.send({'success': True, 'message': 'Robot system reboot initiated.', 'delay': delay})
 
 
+def _exec_shutdown() -> None:
+    """Trigger system poweroff/shutdown via systemctl, poweroff, shutdown, or sudo."""
+    for cmd in [
+        ['systemctl', 'poweroff'],
+        ['poweroff'],
+        ['shutdown', '-h', 'now'],
+        ['sudo', '-n', 'systemctl', 'poweroff'],
+        ['sudo', 'poweroff'],
+        ['sudo', 'shutdown', '-h', 'now'],
+    ]:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                return
+        except Exception:
+            pass
+
+
+class SystemShutdownHandler(BaseHandler):
+    """POST /api/v1/system/shutdown or /api/v1/system/poweroff - shut down / power off the robot host system."""
+
+    def post(self) -> None:
+        try:
+            body = json.loads(self.request.body.decode('utf-8') or '{}')
+        except Exception:
+            body = {}
+        delay = float(body.get('delay', 1.5))
+        self.bridge.get_logger().warn(f"System shutdown / poweroff requested via API (delay={delay}s)")
+        self.bridge.emit_event('system.shutting_down', {'delay': delay})
+
+        import threading
+
+        def do_shutdown() -> None:
+            time.sleep(max(0.5, delay))
+            _exec_shutdown()
+
+        t = threading.Thread(target=do_shutdown, daemon=True)
+        t.start()
+        self.send({'success': True, 'message': 'Robot system shutdown initiated.', 'delay': delay})
+
+
 def _clean_map_directories() -> None:
     """Remove all saved maps (.yaml, .pgm, .data, .posegraph) from package share and workspace paths."""
     candidate_dirs: set[Path] = set()

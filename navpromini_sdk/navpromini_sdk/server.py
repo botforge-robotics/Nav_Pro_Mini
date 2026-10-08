@@ -96,6 +96,8 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/system/speak', system.SystemSpeakHandler, opts),
         (rf'{API}/system/play_sound', system.SystemPlaySoundHandler, opts),
         (rf'{API}/system/reboot', system.SystemRebootHandler, opts),
+        (rf'{API}/system/shutdown', system.SystemShutdownHandler, opts),
+        (rf'{API}/system/poweroff', system.SystemShutdownHandler, opts),
         (rf'{API}/system/reset', system.SystemResetHandler, opts),
         (rf'{API}/system/factory_reset', system.SystemResetHandler, opts),
         # state
