@@ -10,7 +10,7 @@ from typing import Optional
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point, PoseStamped, Quaternion, Twist
+from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped, Quaternion, Twist
 from nav2_msgs.action import DockRobot, NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
@@ -140,6 +140,7 @@ class DockManagerNode(Node):
         self._tag_stamp = 0.0
         self._power: Optional[int] = None
         self._odom: Optional[Odometry] = None
+        self._amcl_pose: Optional[PoseWithCovarianceStamped] = None
 
         self._cmd = self.create_publisher(Twist, 'cmd_vel_dock', 10)
         self._status_pub = self.create_publisher(String, 'dock_status', _LATCHED_QOS)
@@ -154,6 +155,8 @@ class DockManagerNode(Node):
                                  self._on_batt, 10, callback_group=cb)
         self.create_subscription(Odometry, 'odom',
                                  self._on_odom, _SENSOR_QOS, callback_group=cb)
+        self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose',
+                                 self._on_amcl_pose, _SENSOR_QOS, callback_group=cb)
 
         self._camera_client = self.create_client(
             SetBool, 'camera/set_active', callback_group=cb)
@@ -236,6 +239,9 @@ class DockManagerNode(Node):
 
     def _on_odom(self, msg: Odometry) -> None:
         self._odom = msg
+
+    def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        self._amcl_pose = msg
 
     def _charging(self) -> bool:
         if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
@@ -401,6 +407,26 @@ class DockManagerNode(Node):
         q = self._odom.pose.pose.orientation
         return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                           1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    def _amcl_yaw(self) -> Optional[float]:
+        if self._amcl_pose is None:
+            return None
+        q = self._amcl_pose.pose.pose.orientation
+        return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    async def _turn_to_map_heading(self, target_map_yaw: float) -> bool:
+        current_map_yaw = self._amcl_yaw()
+        if current_map_yaw is None:
+            self.get_logger().warn('dock: amcl_pose unavailable — skipping map heading alignment')
+            return False
+        yaw_diff = (target_map_yaw - current_map_yaw + math.pi) % (2.0 * math.pi) - math.pi
+        self.get_logger().info(
+            f'dock: staging reached — aligning heading to dock: current {math.degrees(current_map_yaw):.1f} deg, '
+            f'target {math.degrees(target_map_yaw):.1f} deg (turning {math.degrees(yaw_diff):+.1f} deg)')
+        if abs(yaw_diff) < 0.05:
+            return True
+        return await self._turn(yaw_diff)
 
     async def _drive_straight(self, distance: float,
                               speed: Optional[float] = None) -> bool:
@@ -579,7 +605,17 @@ class DockManagerNode(Node):
                 return False
             await self._tick()
         res = result_fut.result()
-        return res.status == GoalStatus.STATUS_SUCCEEDED
+        if res.status != GoalStatus.STATUS_SUCCEEDED:
+            return False
+
+        # RPP with use_rotate_to_heading: false reaches XY tolerance without rotating
+        # to the goal orientation. Explicitly align robot heading to standoff orientation
+        # so the rear camera directly faces the dock marker.
+        q = staging.pose.orientation
+        target_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        await self._turn_to_map_heading(target_yaw)
+        return True
 
     async def _execute_dock(self, goal_handle):
         self._busy = True
