@@ -183,8 +183,8 @@ def watch_localization(bridge, state) -> None:
     if state.mode != 'navigation':
         state.localization_lost = False
         return
-    _value, age = bridge.get_with_age('pose_map')
-    lost = age is None or age > _LOCALIZATION_LOST_SEC
+    pose, _age = bridge.get_with_age('pose_map')
+    lost = (pose is None) or (float(pose.get('cov_x', 0.0)) > 0.45 or float(pose.get('cov_y', 0.0)) > 0.45)
     if lost == state.localization_lost:
         return
     state.localization_lost = lost

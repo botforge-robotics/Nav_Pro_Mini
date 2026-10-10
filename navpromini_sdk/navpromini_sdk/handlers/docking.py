@@ -74,6 +74,8 @@ async def send_dock_goal(bridge, navigate_to_staging: bool = True):
             bridge.release_video_stream()
         if hasattr(bridge, 'publish_display_state'):
             bridge.publish_display_state('ready')
+        if hasattr(bridge, 'publish_empty_plan'):
+            bridge.publish_empty_plan()
         raise
 
 
@@ -87,6 +89,12 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
         TRACKER.finish('docked' if ok else 'failed', message)
         bridge.emit_event('dock.completed' if ok else 'dock.failed',
                           {'message': message} if not ok else {})
+        if ok:
+            try:
+                from .navigation import relocalize_at_dock
+                await relocalize_at_dock(bridge)
+            except Exception as e:
+                bridge.get_logger().warn(f'Post-dock relocalize note: {e}')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
         TRACKER.finish('failed', str(exc))

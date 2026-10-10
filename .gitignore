@@ -12,3 +12,8 @@ navpromini_mapping/maps/*.data
 navpromini_mapping/maps/*.posegraph
 !navpromini_mapping/maps/README.md
 !navpromini_mapping/maps/.gitkeep
+build/
+install/
+log/
+__pycache__/
+*.pyc

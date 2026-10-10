@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
+import os
 import time
 
 from geometry_msgs.msg import PoseStamped
@@ -75,6 +77,108 @@ def resolve_target(store, data: dict) -> dict:
     x, y = float(data['x']), float(data['y'])
     theta = float(data.get('theta', 0.0))
     return {'x': x, 'y': y, 'theta': theta}
+
+
+def load_saved_dock_config() -> dict | None:
+    for path in ['/home/navpromini/.navpromini_dock_pose.json',
+                 os.path.expanduser('~/.navpromini_dock_pose.json')]:
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return None
+
+
+def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict]:
+    """Check if the robot is currently docked/charging or inside the docking standoff zone."""
+    # 1. Check if physically on charger / docked
+    battery = bridge.get('battery')
+    is_charging = bool(battery and battery.get('charging'))
+    dock_status = str(bridge.get('dock_status') or '').lower()
+    is_docked_status = dock_status in ('docked', 'charging', 'full')
+    info = bridge.get('battery_info') or {}
+    charger_conn = bool(info.get('charger_connected'))
+
+    is_docked = is_charging or is_docked_status or charger_conn
+
+    # 2. Get dock pose coordinates
+    dock_cfg = load_saved_dock_config()
+    dock_pose = bridge.get('dock_pose')
+    dx = dy = dtheta = None
+
+    if dock_cfg and 'x' in dock_cfg and 'y' in dock_cfg:
+        dx = float(dock_cfg['x'])
+        dy = float(dock_cfg['y'])
+        dtheta = float(dock_cfg.get('theta', 0.0))
+    elif dock_pose and 'x' in dock_pose and 'y' in dock_pose:
+        dx = float(dock_pose['x'])
+        dy = float(dock_pose['y'])
+        dtheta = float(dock_pose.get('theta', 0.0))
+
+    dock_info = {
+        'x': dx,
+        'y': dy,
+        'theta': dtheta,
+        'standoff_x': float(dock_cfg.get('standoff_x', dx + 0.70 * math.cos(dtheta))) if dock_cfg and dx is not None else None,
+        'standoff_y': float(dock_cfg.get('standoff_y', dy + 0.70 * math.sin(dtheta))) if dock_cfg and dy is not None else None,
+        'standoff_theta': float(dock_cfg.get('standoff_theta', dtheta)) if dock_cfg and dtheta is not None else None,
+        'is_docked': is_docked,
+    }
+
+    if is_docked:
+        return True, dock_info
+
+    # 3. Check distance to dock if coordinates and pose are known
+    if dx is not None and dy is not None:
+        pose_map = bridge.get('pose_map')
+        if pose_map and 'x' in pose_map and 'y' in pose_map:
+            rx = float(pose_map['x'])
+            ry = float(pose_map['y'])
+            dist_to_dock = math.hypot(rx - dx, ry - dy)
+            dock_info['dist_to_dock'] = dist_to_dock
+            if dist_to_dock <= max_dist_m:
+                return True, dock_info
+
+        # Also check tag visibility: if dock tag is in view, robot is facing dock directly
+        dock_tag = bridge.get('dock_tag')
+        if dock_tag and dock_tag.get('z', 99.0) < 1.30:
+            dock_info['dist_to_dock'] = float(dock_tag.get('z', 0.5))
+            return True, dock_info
+
+    return False, dock_info
+
+
+async def relocalize_at_dock(bridge, dock_info: dict | None = None) -> bool:
+    """Relocalize AMCL directly at the dock or standoff pose without any spinning."""
+    if dock_info is None:
+        _, dock_info = is_near_dock_or_docked(bridge)
+    if not dock_info or dock_info.get('x') is None:
+        return False
+
+    is_docked = bool(dock_info.get('is_docked'))
+    dist = dock_info.get('dist_to_dock')
+
+    if is_docked or (dist is not None and dist < 0.35):
+        # On charger / in contacts: seed exact dock pose
+        x = dock_info['x']
+        y = dock_info['y']
+        theta = dock_info.get('theta', 0.0)
+        target_name = 'dock'
+    else:
+        # In standoff zone: seed standoff pose
+        x = dock_info.get('standoff_x') or dock_info['x']
+        y = dock_info.get('standoff_y') or dock_info['y']
+        theta = dock_info.get('standoff_theta') or dock_info.get('theta', 0.0)
+        target_name = 'standoff'
+
+    bridge.get_logger().info(f'Relocalizing directly at {target_name} ({x:.3f}, {y:.3f}, th={theta:.3f}) WITHOUT spinning')
+    bridge.publish_initial_pose(x, y, theta)
+    await asyncio.sleep(0.4)
+    return True
+
+
 async def send_navigate_goal(bridge, target: dict):
     """Build and send the nav goal, returning the accepted handle.
 
@@ -89,6 +193,22 @@ async def send_navigate_goal(bridge, target: dict):
     background task. See navigate_to() for the awaited-result counterpart.
     """
     x, y, theta = target['x'], target['y'], target.get('theta', 0.0)
+    # Check if robot is docked or inside docking standoff
+    near_dock, dock_info = is_near_dock_or_docked(bridge)
+    pose_map, _ = bridge.get_with_age('pose_map')
+    is_unlocalized = (pose_map is None) or (float(pose_map.get('cov_x', 0.0)) > 0.45 or float(pose_map.get('cov_y', 0.0)) > 0.45)
+    if is_unlocalized:
+        if near_dock:
+            bridge.get_logger().info('Robot near dock/standoff and delocalized: relocalizing at dock WITHOUT spinning...')
+            await relocalize_at_dock(bridge, dock_info)
+        else:
+            bridge.get_logger().info('Robot delocalized before navigation goal; auto-running relocalization recovery...')
+            bridge.emit_event('localization.recovering', {'target': target})
+            try:
+                await run_relocalize_spin(bridge, angular_vel=0.35, timeout_sec=22.0)
+            except Exception as exc:
+                bridge.get_logger().warn(f'Pre-navigation relocalization recovery note: {exc}')
+
     goal = NavigateToPose.Goal()
     pose = PoseStamped()
     pose.header.frame_id = 'map'
@@ -217,6 +337,18 @@ async def run_relocalize_spin(
     target_cov_yaw: float = 0.12,
 ) -> dict:
     """Disperse AMCL particles and smoothly rotate in place to let laser scans converge."""
+    near_dock, dock_info = is_near_dock_or_docked(bridge)
+    if near_dock:
+        bridge.get_logger().info('run_relocalize_spin requested while near dock/standoff: PREVENTING SPIN and relocalizing directly at dock')
+        await relocalize_at_dock(bridge, dock_info)
+        return {
+            'status': 'ok',
+            'converged': True,
+            'elapsed_sec': 0.0,
+            'covariance': {'cov_x': 0.05, 'cov_y': 0.05, 'cov_yaw': 0.02},
+            'message': 'Robot is at dock/standoff: relocalized directly at dock without spinning.',
+        }
+
     ok = bridge.reinitialize_global_localization(timeout_sec=3.0)
     if not ok:
         raise ApiError(503, 'service_unavailable', 'AMCL /reinitialize_global_localization service unavailable')

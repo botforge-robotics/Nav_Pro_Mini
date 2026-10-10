@@ -73,7 +73,7 @@ class DockManagerNode(Node):
         p('omega_slew', 1.0)
         p('servo_filter_weight', 0.65)
         p('blind_min_r', 0.28)
-        p('blind_fallback_r', 0.24)
+        p('blind_fallback_r', 0.35)
         p('blind_creep_m', 0.25)
         p('blind_creep_speed', 0.023)
         p('blind_push_max_scale', 3.5)
@@ -84,12 +84,12 @@ class DockManagerNode(Node):
         p('straight_kp', 1.5)
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
-        p('undock_distance', 0.20)
+        p('undock_distance', 0.35)
         p('undock_speed', 0.065)
         p('dock_origin_offset_m', 0.13)
-        p('standoff_m', 0.90)
+        p('standoff_m', 0.68)
         p('staging_timeout_sec', 300.0)
-        p('marker_wait_timeout', 0.4)
+        p('marker_wait_timeout', 0.6)
         p('max_run_timeout', 600.0)
         p('settle_sec', 0.4)
 
@@ -515,6 +515,12 @@ class DockManagerNode(Node):
         return pose
 
     def _staging_pose_for(self, dock_pose: PoseStamped) -> PoseStamped:
+        if getattr(self, '_saved_standoff_pose', None) is not None:
+            self.get_logger().info(
+                f'dock: using explicit saved standoff pose ({self._saved_standoff_pose.pose.position.x:.2f}, '
+                f'{self._saved_standoff_pose.pose.position.y:.2f})')
+            return self._saved_standoff_pose
+
         q = dock_pose.pose.orientation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
@@ -633,6 +639,7 @@ class DockManagerNode(Node):
             last_seen_z: Optional[float] = None
             filt_alpha = filt_beta = filt_r = None
             servo_loss_count = 0
+            sweep_step = 0
 
             while True:
                 if goal_handle.is_cancel_requested:
@@ -663,46 +670,57 @@ class DockManagerNode(Node):
                         self._stop()
                         omega_cmd = 0.0
                         filt_alpha = filt_beta = filt_r = None
+                        sweep_step = 0
                         self._set_status('servo')
                     else:
                         # Close to dock: never execute in-place rotational sweep; creep straight into funnel
-                        if last_seen_z is not None and last_seen_z < self._blind_fallback_r:
+                        if (last_seen_z is not None and last_seen_z < self._blind_fallback_r) or (filt_r is not None and filt_r < self._blind_fallback_r):
                             self._stop()
                             self.get_logger().info(
-                                f'searching: close to dock (z={last_seen_z*100:.1f}cm < {self._blind_fallback_r*100:.0f}cm) — creeping straight without sweeping')
+                                f'searching: close to dock (z={last_seen_z*100 if last_seen_z else 0:.1f}cm < {self._blind_fallback_r*100:.0f}cm) — creeping straight without sweeping')
                             self._set_status('blind_creep')
                             continue
-                        turn_angle = -self._turn_radians if (last_seen_tag_x is None or last_seen_tag_x < 0) else self._turn_radians
+
+                        # Alternating oscillating sweep (+ - + -) with bounded angles
+                        sweep_step += 1
+                        sign = -1.0 if (last_seen_tag_x is None or last_seen_tag_x < 0) else 1.0
+                        step_sign = sign if (sweep_step % 2 == 1) else -sign
+                        sweep_mag = min(0.35, 0.18 * ((sweep_step + 1) // 2))
+                        turn_angle = step_sign * sweep_mag
+                        self.get_logger().info(
+                            f'searching: sweep step {sweep_step} -> turning {math.degrees(turn_angle):+.1f} deg (alternating)')
                         await self._turn(turn_angle, stop_when=self._in_view)
                     continue
 
                 if self._status == 'servo':
                     if not self._in_view():
                         servo_loss_count += 1
-                        if servo_loss_count < 6:
+                        if servo_loss_count < 14:
                             # Transient frame drop or detection jitter: hold heading and crawl gently
                             self._drive(-0.010, 0.0)
                             await self._tick()
                             continue
 
-                        # Confirmed tag loss after 6 consecutive ticks (~200ms)
+                        # Confirmed tag loss after 14 consecutive ticks (~1.4s)
                         servo_loss_count = 0
                         # If we were already close to the dock / entering the funnel,
                         # do NOT rotate in place (sweep)! Creep straight back instead.
-                        if filt_r is not None and filt_r < self._blind_fallback_r:
+                        if (filt_r is not None and filt_r < self._blind_fallback_r) or (last_seen_z is not None and last_seen_z < self._blind_fallback_r):
                             self._stop()
-                            blind_yaw = filt_beta - filt_alpha
+                            blind_yaw = (filt_beta - filt_alpha) if (filt_beta is not None and filt_alpha is not None) else 0.0
                             self.get_logger().info(
-                                f'servo: tag lost at close range (r={filt_r:.3f}m < {self._blind_fallback_r:.2f}m) '
+                                f'servo: tag lost at close range (r={filt_r if filt_r else last_seen_z:.3f}m < {self._blind_fallback_r:.2f}m) '
                                 'inside funnel — creeping blind directly without in-place sweep')
                             self._set_status('blind_creep')
                             continue
                         self._stop()
+                        sweep_step = 0
                         self._set_status('searching')
                         continue
 
-                    # Reset debounce counter when tag is visible
+                    # Reset debounce counter and sweep counter when tag is visible
                     servo_loss_count = 0
+                    sweep_step = 0
 
                     raw_alpha, raw_beta, raw_r = self._fid2pos()
                     if filt_alpha is None:
@@ -825,8 +843,8 @@ class DockManagerNode(Node):
         self._busy = True
         try:
             goal: NavigateToPose.Goal = goal_handle.request
-            # Always drive forward off the dock when undock action is called
-            if True:
+            # Only drive forward off the dock if the robot is actually docked or charging
+            if self._docked or self._charging():
                 self._set_status('undocking')
                 ok = False
                 for attempt in range(3):
@@ -840,6 +858,10 @@ class DockManagerNode(Node):
                     self._set_status('undock_failed')
                     goal_handle.abort()
                     return NavigateToPose.Result()
+                self._docked = False
+                self._set_status('undocked')
+            else:
+                self.get_logger().info('undock: robot is already off the dock — proceeding directly to navigation')
                 self._docked = False
                 self._set_status('undocked')
 
@@ -936,6 +958,22 @@ class DockManagerNode(Node):
             pose.pose.position = Point(x=d['x'], y=d['y'], z=d['z'])
             pose.pose.orientation = Quaternion(
                 x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
+            
+            if 'standoff_x' in d and 'standoff_y' in d:
+                standoff = PoseStamped()
+                standoff.header.frame_id = d.get('frame_id', 'map')
+                standoff.pose.position = Point(x=d['standoff_x'], y=d['standoff_y'], z=0.0)
+                st_theta = d.get('standoff_theta')
+                if st_theta is not None:
+                    standoff.pose.orientation = Quaternion(
+                        x=0.0, y=0.0, z=math.sin(st_theta / 2.0), w=math.cos(st_theta / 2.0))
+                else:
+                    standoff.pose.orientation = Quaternion(
+                        x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
+                self._saved_standoff_pose = standoff
+                self.get_logger().info(
+                    f'Loaded saved standoff pose ({d["standoff_x"]:.3f}, {d["standoff_y"]:.3f}) from {DOCK_POSE_FILE}')
+
             self.get_logger().info(f'Loaded saved dock pose from {DOCK_POSE_FILE}')
             return pose
         except (OSError, ValueError, KeyError) as exc:
@@ -953,6 +991,13 @@ class DockManagerNode(Node):
             'qz': pose.pose.orientation.z,
             'qw': pose.pose.orientation.w,
         }
+        if getattr(self, '_saved_standoff_pose', None) is not None:
+            st = self._saved_standoff_pose
+            d['standoff_x'] = st.pose.position.x
+            d['standoff_y'] = st.pose.position.y
+            qz = st.pose.orientation.z
+            qw = st.pose.orientation.w
+            d['standoff_theta'] = 2.0 * math.atan2(qz, qw)
         try:
             tmp_path = DOCK_POSE_FILE + '.tmp'
             with open(tmp_path, 'w') as f:
