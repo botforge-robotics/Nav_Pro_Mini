@@ -800,19 +800,19 @@ class DockManagerNode(Node):
                     step = self._omega_slew * _TICK
                     omega_cmd += max(-step, min(step, target - omega_cmd))
 
-                    # Staged Approach Velocity (+30%):
-                    # Far (>0.60m): 0.052 m/s
-                    # Medium (0.35m - 0.60m): 0.028 m/s
-                    # Close (0.20m - 0.35m): 0.016 m/s
-                    # Final (<=0.20m): 0.010 m/s (micro-approach to contacts)
+                    # Staged Approach Velocity (boosted to swivel caster wheels into alignment):
+                    # Far (>0.60m): 0.065 m/s
+                    # Medium (0.35m - 0.60m): 0.040 m/s
+                    # Close (0.20m - 0.35m): 0.026 m/s
+                    # Final (<=0.20m): 0.018 m/s (enough momentum for caster wheel trailing alignment)
                     if tag_z > 0.60:
-                        v_stage = 0.052
+                        v_stage = 0.065
                     elif tag_z > 0.35:
-                        v_stage = 0.028
+                        v_stage = 0.040
                     elif tag_z > 0.20:
-                        v_stage = 0.016
+                        v_stage = 0.026
                     else:
-                        v_stage = 0.010
+                        v_stage = 0.018
 
                     # Slow down to gentle crawl during active angular turns to avoid compound motion blur
                     turn_fraction = abs(target) / max(1e-3, self._max_omega)
@@ -841,9 +841,9 @@ class DockManagerNode(Node):
                     creep_dist = min(0.30, max(0.06, z_target + 0.03))
                     self.get_logger().info(
                         f'blind_creep: last seen at {last_seen_z*100 if last_seen_z else 18:.1f}cm '
-                        f'— creeping {creep_dist*100:.1f}cm gently at 13mm/s into contacts with push_effort')
+                        f'— creeping {creep_dist*100:.1f}cm gently at 22mm/s into contacts with push_effort')
                     if await self._jog(creep_dist,
-                                       speed=0.013,
+                                       speed=0.022,
                                        angular=0.0,
                                        push_effort=True):
                         continue
