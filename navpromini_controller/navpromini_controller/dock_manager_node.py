@@ -879,27 +879,23 @@ class DockManagerNode(Node):
         self._busy = True
         try:
             goal: NavigateToPose.Goal = goal_handle.request
-            # Only drive forward off the dock if the robot is actually docked or charging
-            if self._docked or self._charging():
-                self._set_status('undocking')
-                ok = False
-                for attempt in range(3):
-                    ok = await self._drive_straight(self._undock_distance, speed=self._undock_speed)
-                    if ok:
-                        break
-                    self.get_logger().info(
-                        f'undock: stalled on attempt {attempt + 1} — pushing '
-                        'forward again (no in-place rotation)')
-                if not ok:
-                    self._set_status('undock_failed')
-                    goal_handle.abort()
-                    return NavigateToPose.Result()
-                self._docked = False
-                self._set_status('undocked')
-            else:
-                self.get_logger().info('undock: robot is already off the dock — proceeding directly to navigation')
-                self._docked = False
-                self._set_status('undocked')
+            # Always execute physical undock roll-off when commanded:
+            self._set_status('undocking')
+            self.get_logger().info(f'undock: driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s')
+            ok = False
+            for attempt in range(3):
+                ok = await self._drive_straight(self._undock_distance, speed=self._undock_speed)
+                if ok:
+                    break
+                self.get_logger().info(
+                    f'undock: stalled on attempt {attempt + 1} — pushing '
+                    'forward again (no in-place rotation)')
+            self._docked = False
+            self._set_status('undocked')
+            if not ok:
+                self._set_status('undock_failed')
+                goal_handle.abort()
+                return NavigateToPose.Result()
 
             # If no destination pose was provided (pure 'Undock' button press), finish here
             if not self._has_nav_goal(goal):
