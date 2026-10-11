@@ -101,16 +101,28 @@ controller_server:
       yaw_goal_tolerance: 0.20
 
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      angular_dist_threshold: 0.52
+      angular_disengage_threshold: 0.20
+      forward_sampling_distance: 0.30
+      rotate_to_heading_angular_vel: 0.32
+      max_angular_accel: 1.2
+      simulate_ahead_time: 0.8
+      rotate_to_heading_once: true
+      rotate_to_goal_heading: true
+      closed_loop: true
+      use_path_orientations: false
+
       desired_linear_vel: 0.105
       lookahead_dist: 0.28
       min_lookahead_dist: 0.10
       max_lookahead_dist: 0.40
       lookahead_time: 1.5
       use_velocity_scaled_lookahead_dist: true
-      use_rotate_to_heading: true
+      use_rotate_to_heading: false
       rotate_to_heading_angular_vel: 0.32
-      rotate_to_heading_min_angle: 0.35
+      rotate_to_heading_min_angle: 0.70
       max_angular_accel: 1.2
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.45
