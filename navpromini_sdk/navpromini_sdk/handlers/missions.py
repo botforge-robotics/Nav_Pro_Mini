@@ -835,6 +835,7 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 chosen = selected if (selected and selected.lower() != 'selected') else action
                 chosen_val = chosen
                 output_port = str(chosen).strip().lower()
+                bridge.get_logger().info(f"UI choice selected: node={node['id']} value={chosen!r} -> output_port={output_port!r}")
                 context['variables']['selected_choice'] = chosen
                 context['variables']['last_choice'] = chosen
                 context['variables']['choice'] = chosen
@@ -1935,16 +1936,28 @@ class UiResponseHandler(BaseHandler):
     """POST /api/v1/missions/ui_response"""
 
     def post(self) -> None:
-        data = self.body(('interaction_id',))
+        data = self.body()
         self.bridge.get_logger().info(f"[ui_response] received from {self.request.remote_ip}: data={data!r}")
+        active_inter = RUNNER.active_interaction
+        if not active_inter:
+            self.send({'accepted': False, 'message': 'No interaction currently active or already closed'})
+            return
+
         interaction_id = str(data.get('interaction_id', '')).strip()
-        if not RUNNER.active_interaction or RUNNER.active_interaction.get('interaction_id') != interaction_id:
-            self.send({'accepted': False, 'message': 'Interaction not active or already closed', 'interaction_id': interaction_id})
+        valid_ids = {
+            str(active_inter.get('interaction_id', '')).strip(),
+            str(active_inter.get('node_id', '')).strip(),
+            'active',
+            'current',
+            ''
+        }
+        if interaction_id and interaction_id not in valid_ids:
+            self.send({'accepted': False, 'message': f'Interaction ID mismatch (active: {active_inter.get("interaction_id")}, got {interaction_id})', 'interaction_id': interaction_id})
             return
 
         if RUNNER.interaction_future and not RUNNER.interaction_future.done():
             RUNNER.interaction_future.set_result(data)
-            self.send({'accepted': True, 'interaction_id': interaction_id})
+            self.send({'accepted': True, 'interaction_id': active_inter.get('interaction_id')})
         else:
             self.send({'accepted': False, 'message': 'Interaction already completed or timed out', 'interaction_id': interaction_id})
 
