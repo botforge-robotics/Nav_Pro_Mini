@@ -84,10 +84,10 @@ class DockManagerNode(Node):
         p('straight_kp', 1.5)
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
-        p('undock_distance', 0.20)
+        p('undock_distance', 0.35)
         p('undock_speed', 0.065)
         p('dock_origin_offset_m', 0.13)
-        p('standoff_m', 0.90)
+        p('standoff_m', 0.68)
         p('staging_timeout_sec', 300.0)
         p('marker_wait_timeout', 0.6)
         p('max_run_timeout', 600.0)
@@ -515,6 +515,12 @@ class DockManagerNode(Node):
         return pose
 
     def _staging_pose_for(self, dock_pose: PoseStamped) -> PoseStamped:
+        if getattr(self, '_saved_standoff_pose', None) is not None:
+            self.get_logger().info(
+                f'dock: using explicit saved standoff pose ({self._saved_standoff_pose.pose.position.x:.2f}, '
+                f'{self._saved_standoff_pose.pose.position.y:.2f})')
+            return self._saved_standoff_pose
+
         q = dock_pose.pose.orientation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
@@ -837,8 +843,8 @@ class DockManagerNode(Node):
         self._busy = True
         try:
             goal: NavigateToPose.Goal = goal_handle.request
-            # Always drive forward off the dock when undock action is called
-            if True:
+            # Only drive forward off the dock if the robot is actually docked or charging
+            if self._docked or self._charging():
                 self._set_status('undocking')
                 ok = False
                 for attempt in range(3):
@@ -852,6 +858,10 @@ class DockManagerNode(Node):
                     self._set_status('undock_failed')
                     goal_handle.abort()
                     return NavigateToPose.Result()
+                self._docked = False
+                self._set_status('undocked')
+            else:
+                self.get_logger().info('undock: robot is already off the dock — proceeding directly to navigation')
                 self._docked = False
                 self._set_status('undocked')
 
@@ -948,6 +958,22 @@ class DockManagerNode(Node):
             pose.pose.position = Point(x=d['x'], y=d['y'], z=d['z'])
             pose.pose.orientation = Quaternion(
                 x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
+            
+            if 'standoff_x' in d and 'standoff_y' in d:
+                standoff = PoseStamped()
+                standoff.header.frame_id = d.get('frame_id', 'map')
+                standoff.pose.position = Point(x=d['standoff_x'], y=d['standoff_y'], z=0.0)
+                st_theta = d.get('standoff_theta')
+                if st_theta is not None:
+                    standoff.pose.orientation = Quaternion(
+                        x=0.0, y=0.0, z=math.sin(st_theta / 2.0), w=math.cos(st_theta / 2.0))
+                else:
+                    standoff.pose.orientation = Quaternion(
+                        x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
+                self._saved_standoff_pose = standoff
+                self.get_logger().info(
+                    f'Loaded saved standoff pose ({d["standoff_x"]:.3f}, {d["standoff_y"]:.3f}) from {DOCK_POSE_FILE}')
+
             self.get_logger().info(f'Loaded saved dock pose from {DOCK_POSE_FILE}')
             return pose
         except (OSError, ValueError, KeyError) as exc:
@@ -965,6 +991,13 @@ class DockManagerNode(Node):
             'qz': pose.pose.orientation.z,
             'qw': pose.pose.orientation.w,
         }
+        if getattr(self, '_saved_standoff_pose', None) is not None:
+            st = self._saved_standoff_pose
+            d['standoff_x'] = st.pose.position.x
+            d['standoff_y'] = st.pose.position.y
+            qz = st.pose.orientation.z
+            qw = st.pose.orientation.w
+            d['standoff_theta'] = 2.0 * math.atan2(qz, qw)
         try:
             tmp_path = DOCK_POSE_FILE + '.tmp'
             with open(tmp_path, 'w') as f:
