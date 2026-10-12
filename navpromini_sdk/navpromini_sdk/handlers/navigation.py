@@ -195,6 +195,16 @@ async def send_navigate_goal(bridge, target: dict):
     x, y, theta = target['x'], target['y'], target.get('theta', 0.0)
     # Check if robot is docked or inside docking standoff
     near_dock, dock_info = is_near_dock_or_docked(bridge)
+    if dock_info.get('is_docked'):
+        bridge.get_logger().info('Robot is currently docked on charger; automatically undocking before sending navigation goal...')
+        try:
+            from .docking import undock_robot
+            undock_res = await undock_robot(bridge, timeout=60.0)
+            if not undock_res.get('ok'):
+                bridge.get_logger().warn(f"Auto-undock note: {undock_res.get('message')}")
+        except Exception as exc:
+            bridge.get_logger().warn(f"Auto-undock before nav goal encountered error: {exc}")
+
     pose_map, _ = bridge.get_with_age('pose_map')
     is_unlocalized = (pose_map is None) or (float(pose_map.get('cov_x', 0.0)) > 0.45 or float(pose_map.get('cov_y', 0.0)) > 0.45)
     if is_unlocalized:

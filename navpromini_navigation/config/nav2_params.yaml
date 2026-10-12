@@ -87,18 +87,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.12
-      # 0.17 -> 0.25 (upstream Nav2 example-config default, not a fresh
-      # guess): at rotate_to_heading_angular_vel's own floor (~0.178 rad/s,
-      # this robot's real wheel breakaway speed), the accel/decel ramp
-      # necessarily dwells on sub-floor commands the wheels can't actually
-      # produce, so the final heading lands via a stick-slip jump rather
-      # than a controlled approach. 0.17 rad was tighter than that jump size
-      # can reliably land inside, causing repeated correction attempts
-      # ("bump, stop, bump"). This is global (every FollowPath goal on the
-      # robot uses general_goal_checker, not just docking staging) because
-      # the same wheel-floor physics apply to every in-place rotation.
-      yaw_goal_tolerance: 0.20
+      xy_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.25
 
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
@@ -107,7 +97,7 @@ controller_server:
       angular_disengage_threshold: 0.20
       forward_sampling_distance: 0.30
       rotate_to_heading_angular_vel: 0.32
-      max_angular_accel: 1.2
+      max_angular_accel: 1.0
       simulate_ahead_time: 0.8
       rotate_to_heading_once: true
       rotate_to_goal_heading: true
@@ -115,27 +105,27 @@ controller_server:
       use_path_orientations: false
 
       desired_linear_vel: 0.105
-      lookahead_dist: 0.35
-      min_lookahead_dist: 0.30
-      max_lookahead_dist: 0.50
-      lookahead_time: 2.2
+      lookahead_dist: 0.26
+      min_lookahead_dist: 0.18
+      max_lookahead_dist: 0.38
+      lookahead_time: 1.8
       use_velocity_scaled_lookahead_dist: true
       use_rotate_to_heading: false
       rotate_to_heading_angular_vel: 0.32
       rotate_to_heading_min_angle: 0.70
       max_angular_accel: 1.0
       use_approach_linear_velocity_scaling: true
-      approach_velocity_scaling_dist: 0.45
-      min_approach_linear_velocity: 0.055
+      approach_velocity_scaling_dist: 0.35
+      min_approach_linear_velocity: 0.080
       use_collision_detection: false
       max_allowed_time_to_collision_up_to_carrot: 1.8
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.30
+      regulated_linear_scaling_min_radius: 0.25
       regulated_linear_scaling_min_speed: 0.075
-      use_cost_regulated_linear_velocity_scaling: false
-      cost_scaling_dist: 0.25
+      use_cost_regulated_linear_velocity_scaling: true
+      cost_scaling_dist: 0.30
       cost_scaling_gain: 1.0
-      inflation_cost_scaling_factor: 2.8
+      inflation_cost_scaling_factor: 2.5
       transform_tolerance: 2.5
       allow_reversing: false
 
@@ -217,8 +207,8 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.8
-        inflation_radius: 0.28
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.36
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -283,8 +273,8 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.8
-        inflation_radius: 0.28
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.36
       always_send_full_costmap: True
 
 map_saver:

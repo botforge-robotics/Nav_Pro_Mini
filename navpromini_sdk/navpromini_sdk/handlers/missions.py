@@ -832,9 +832,10 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
             chosen_val = None
             if subtype in ('choice', 'choices') or ntype == 'ui_choice':
-                chosen = selected if (selected and selected.lower() != 'selected') else action
+                raw_c = resp_data.get('choice') or (selected if (selected and selected.lower() != 'selected') else None) or action
+                chosen = str(raw_c).strip()
                 chosen_val = chosen
-                output_port = str(chosen).strip().lower()
+                output_port = chosen.lower()
                 bridge.get_logger().info(f"UI choice selected: node={node['id']} value={chosen!r} -> output_port={output_port!r}")
                 context['variables']['selected_choice'] = chosen
                 context['variables']['last_choice'] = chosen
@@ -1087,15 +1088,23 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 pass
             bridge.get_logger().info(f"[TTS Announcement]: {text}")
             bridge.emit_event('mission.speech', {'text': text, 'node_id': node['id']})
-            wait_done = bool(params.get('wait_completion', True))
-            loop = asyncio.get_running_loop()
-            try:
-                from ..audio import play_speech
-                await loop.run_in_executor(None, play_speech, text, wait_done)
-            except Exception as exc:
-                bridge.get_logger().warn(f"TTS synthesis execution error: {exc}")
+            raw_wait = params.get('wait_completion', True)
+            wait_done = raw_wait is True or str(raw_wait).lower() in ('true', '1', 'yes')
             if wait_done:
+                loop = asyncio.get_running_loop()
+                try:
+                    from ..audio import play_speech
+                    await loop.run_in_executor(None, play_speech, text, True)
+                except Exception as exc:
+                    bridge.get_logger().warn(f"TTS synthesis execution error: {exc}")
                 await asyncio.sleep(0.3)
+            else:
+                try:
+                    from ..audio import play_speech
+                    import threading
+                    threading.Thread(target=play_speech, args=(text, False), daemon=True).start()
+                except Exception as exc:
+                    bridge.get_logger().warn(f"Background TTS dispatch error: {exc}")
         return True, 'done', 'Speech completed'
 
     if ntype in ('ui_notification', 'notification', 'alert'):
@@ -1954,6 +1963,12 @@ class UiResponseHandler(BaseHandler):
         if interaction_id and interaction_id not in valid_ids:
             self.send({'accepted': False, 'message': f'Interaction ID mismatch (active: {active_inter.get("interaction_id")}, got {interaction_id})', 'interaction_id': interaction_id})
             return
+
+        try:
+            from ..audio import stop_active_speech
+            stop_active_speech()
+        except Exception:
+            pass
 
         if RUNNER.interaction_future and not RUNNER.interaction_future.done():
             RUNNER.interaction_future.set_result(data)

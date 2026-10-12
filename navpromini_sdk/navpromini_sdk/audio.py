@@ -202,10 +202,30 @@ def _get_piper_proc() -> Optional[subprocess.Popen]:
 
 _audio_busy_until = 0.0
 _audio_lock = threading.Lock()
+_current_speech_cancel = threading.Event()
+_current_speech_proc: Optional[subprocess.Popen] = None
 
 
-def _wait_audio_clear(max_wait: float = 1.5) -> None:
-    """Ensure any previous sound tone or speech finishes before starting new audio."""
+def stop_active_speech() -> None:
+    """Instantly interrupt and cancel any currently playing or queued speech synthesis."""
+    global _audio_busy_until, _current_speech_proc
+    _current_speech_cancel.set()
+    with _audio_lock:
+        _audio_busy_until = 0.0
+        if _current_speech_proc is not None:
+            try:
+                _current_speech_proc.terminate()
+            except Exception:
+                pass
+            _current_speech_proc = None
+    try:
+        subprocess.run(['pkill', '-f', 'paplay.*--raw'], check=False, timeout=1.0)
+    except Exception:
+        pass
+
+
+def _wait_audio_clear(max_wait: float = 0.3) -> None:
+    """Ensure any previous short chime finishes before starting new audio."""
     global _audio_busy_until
     now = time.time()
     wait_time = _audio_busy_until - now
@@ -213,101 +233,141 @@ def _wait_audio_clear(max_wait: float = 1.5) -> None:
         time.sleep(min(wait_time, max_wait))
 
 
-def play_speech(text: str, wait: bool = False) -> None:
-    """Pronounce text through robot hardware speakers with cute neural voice.
+def _split_into_utterances(text: str) -> list[str]:
+    """Split text into short sentences/phrases for instant real-time pipeline synthesis."""
+    import re
+    chunks = [s.strip() for s in re.split(r'([.!?;:\n]+)', text) if s.strip()]
+    if not chunks:
+        return [text.strip()] if text.strip() else []
+    sentences: list[str] = []
+    i = 0
+    while i < len(chunks):
+        s = chunks[i]
+        if i + 1 < len(chunks) and re.match(r'^[.!?;:\n]+$', chunks[i + 1]):
+            s += chunks[i + 1]
+            i += 1
+        if len(s) > 80:
+            sub = [p.strip() for p in re.split(r'(,)', s) if p.strip()]
+            j = 0
+            while j < len(sub):
+                chunk_j = sub[j]
+                if j + 1 < len(sub) and sub[j + 1] == ',':
+                    chunk_j += ','
+                    j += 1
+                sentences.append(chunk_j)
+                j += 1
+        else:
+            sentences.append(s)
+        i += 1
+    return [s for s in sentences if s]
 
-    Uses persistent piper process to keep the TTS model warm in RAM for
-    low-latency synthesis. Synthesizes directly to a temp WAV file and plays
-    via paplay, completely eliminating pipe buffering delays.
-    Falls back to navpro-speak → direct piper → espeak-ng if daemon setup fails.
-    """
+
+def _stream_sentence_pcm(sentence: str, cancel_event: threading.Event) -> None:
+    """Stream speech in memory: pipe piper PCM output directly to paplay without saving any files to disk."""
+    global _current_speech_proc
+    if cancel_event.is_set():
+        return
+
+    env = get_pulse_env()
+    piper_cmd = [
+        'piper',
+        '--model', _PIPER_MODEL,
+        '--length_scale', '1.18',
+        '--output-raw'
+    ]
+    pa_cmd = [
+        'paplay',
+        '--raw',
+        '--rate', str(_PIPER_RATE),
+        '--channels', '1',
+        '--format', 's16le'
+    ]
+
+    p_piper: Optional[subprocess.Popen] = None
+    p_pa: Optional[subprocess.Popen] = None
+    try:
+        p_piper = subprocess.Popen(
+            piper_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        p_pa = subprocess.Popen(
+            pa_cmd,
+            stdin=p_piper.stdout,
+            stderr=subprocess.DEVNULL,
+            env=env
+        )
+        p_piper.stdout.close()  # Allow p_pa to receive EOF when p_piper terminates
+        with _audio_lock:
+            _current_speech_proc = p_pa
+
+        p_piper.stdin.write(sentence.encode('utf-8') + b'\n')
+        p_piper.stdin.close()
+
+        while p_pa.poll() is None:
+            if cancel_event.is_set():
+                try:
+                    p_pa.terminate()
+                except Exception:
+                    pass
+                try:
+                    p_piper.terminate()
+                except Exception:
+                    pass
+                break
+            time.sleep(0.04)
+
+        try:
+            p_piper.wait(timeout=2.0)
+        except Exception:
+            try:
+                p_piper.kill()
+            except Exception:
+                pass
+    except Exception:
+        if shutil.which('espeak-ng') and not cancel_event.is_set():
+            cmd = ['espeak-ng', '-v', 'en+f4', '-p', '88', '-s', '135', sentence]
+            subprocess.run(cmd, env=env, check=False, timeout=8.0)
+    finally:
+        with _audio_lock:
+            if _current_speech_proc is not None:
+                _current_speech_proc = None
+
+
+def _synthesize_and_stream(sentences: list[str], cancel_event: threading.Event) -> None:
+    """Stream speech utterances in real time directly to the sound card in memory."""
+    for sentence in sentences:
+        if cancel_event.is_set():
+            break
+        _stream_sentence_pcm(sentence, cancel_event)
+
+
+def play_speech(text: str, wait: bool = False) -> None:
+    """Pronounce text in real-time in memory without disk writing/deleting."""
     if not text or not text.strip():
         return
     text = text.strip()
 
-    # Ensure previous notification tone (e.g. arrival chime or popup alert) finished cleanly
-    _wait_audio_clear(max_wait=1.5)
-    dur = len(text) / 12.0 + 0.6
+    global _current_speech_cancel
+    _current_speech_cancel.set()
+    _current_speech_cancel = threading.Event()
+    this_cancel = _current_speech_cancel
+
+    _wait_audio_clear(max_wait=0.25)
+    dur = len(text) / 13.0 + 0.4
     global _audio_busy_until
     with _audio_lock:
-        _audio_busy_until = time.time() + dur + 0.15
+        _audio_busy_until = time.time() + dur
 
-    env = get_pulse_env()
-
-    # ---- 1. Persistent Piper synthesis + direct paplay playback ----------
-    if shutil.which('piper') and os.path.isfile(_PIPER_MODEL) and shutil.which('paplay'):
-        wav_path = f'/tmp/speech_{os.getpid()}_{int(time.time() * 1000)}.wav'
-        req = _json.dumps({'text': text, 'output_file': wav_path}) + '\n'
-        synth_ok = False
-        with _piper_lock:
-            proc = _get_piper_proc()
-            if proc and proc.stdin and proc.stdout:
-                try:
-                    proc.stdin.write(req)
-                    proc.stdin.flush()
-                    out = proc.stdout.readline()
-                    if out and os.path.isfile(wav_path):
-                        synth_ok = True
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    global _piper_proc
-                    _piper_proc = None
-
-        if synth_ok and os.path.isfile(wav_path):
-            if wait:
-                try:
-                    _run_play_wav(wav_path, timeout=30.0)
-                finally:
-                    try:
-                        os.remove(wav_path)
-                    except OSError:
-                        pass
-                return
-            else:
-                def _bg_play(target_wav: str) -> None:
-                    try:
-                        _run_play_wav(target_wav, timeout=30.0)
-                    finally:
-                        try:
-                            os.remove(target_wav)
-                        except OSError:
-                            pass
-                threading.Thread(target=_bg_play, args=(wav_path,), daemon=True).start()
-                return
-
-    # ---- Fallback: navpro-speak script (legacy) ---------------------------
-    env = get_pulse_env()
-    cmd = None
-    if shutil.which('navpro-speak'):
-        cmd = ['navpro-speak', text]
-    elif shutil.which('piper') and os.path.isfile(_PIPER_MODEL):
-        if os.geteuid() == 0:
-            cmd = ['sudo', '-u', 'navpromini', 'bash', '-c',
-                   f'echo "{text}" | piper --model {_PIPER_MODEL} '
-                   f'--length_scale 1.20 --output-raw 2>/dev/null | '
-                   f'env XDG_RUNTIME_DIR=/run/user/1000 PULSE_SERVER=unix:/run/user/1000/pulse/native '
-                   f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null || true']
-        else:
-            cmd = ['bash', '-c',
-                   f'echo "{text}" | piper --model {_PIPER_MODEL} '
-                   f'--length_scale 1.20 --output-raw 2>/dev/null | '
-                   f'paplay --raw --rate {_PIPER_RATE} --channels 1 --format s16le 2>/dev/null || true']
-    elif shutil.which('espeak-ng'):
-        cmd = ['espeak-ng', '-v', 'en+f4', '-p', '88', '-s', '130', text]
-
-    if not cmd:
+    sentences = _split_into_utterances(text)
+    if not sentences:
         return
 
-    try:
-        if wait:
-            subprocess.run(cmd, env=env, check=False, timeout=30.0)
-        else:
-            subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    if wait:
+        _synthesize_and_stream(sentences, this_cancel)
+    else:
+        threading.Thread(target=_synthesize_and_stream, args=(sentences, this_cancel), daemon=True).start()
 
 
 
