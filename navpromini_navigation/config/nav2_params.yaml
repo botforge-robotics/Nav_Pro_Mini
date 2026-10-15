@@ -93,9 +93,9 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      angular_dist_threshold: 0.35
-      angular_disengage_threshold: 0.14
-      forward_sampling_distance: 0.18
+      angular_dist_threshold: 0.52
+      angular_disengage_threshold: 0.20
+      forward_sampling_distance: 0.28
       rotate_to_heading_angular_vel: 0.32
       max_angular_accel: 1.0
       simulate_ahead_time: 0.4
@@ -106,14 +106,14 @@ controller_server:
       use_path_orientations: false
 
       desired_linear_vel: 0.105
-      lookahead_dist: 0.26
-      min_lookahead_dist: 0.18
-      max_lookahead_dist: 0.38
-      lookahead_time: 1.8
+      lookahead_dist: 0.35
+      min_lookahead_dist: 0.28
+      max_lookahead_dist: 0.48
+      lookahead_time: 2.0
       use_velocity_scaled_lookahead_dist: true
       use_rotate_to_heading: true
       rotate_to_heading_angular_vel: 0.32
-      rotate_to_heading_min_angle: 0.26
+      rotate_to_heading_min_angle: 0.70
       max_angular_accel: 1.0
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.35
@@ -121,10 +121,10 @@ controller_server:
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.5
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.25
+      regulated_linear_scaling_min_radius: 0.30
       regulated_linear_scaling_min_speed: 0.075
-      use_cost_regulated_linear_velocity_scaling: true
-      cost_scaling_dist: 0.30
+      use_cost_regulated_linear_velocity_scaling: false
+      cost_scaling_dist: 0.25
       cost_scaling_gain: 1.0
       inflation_cost_scaling_factor: 2.5
       transform_tolerance: 2.5
