@@ -93,12 +93,13 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      angular_dist_threshold: 0.52
-      angular_disengage_threshold: 0.20
-      forward_sampling_distance: 0.30
+      angular_dist_threshold: 0.35
+      angular_disengage_threshold: 0.14
+      forward_sampling_distance: 0.18
       rotate_to_heading_angular_vel: 0.32
       max_angular_accel: 1.0
-      simulate_ahead_time: 0.8
+      simulate_ahead_time: 0.4
+      max_cost_threshold: 254.0
       rotate_to_heading_once: true
       rotate_to_goal_heading: true
       closed_loop: true
@@ -110,15 +111,15 @@ controller_server:
       max_lookahead_dist: 0.38
       lookahead_time: 1.8
       use_velocity_scaled_lookahead_dist: true
-      use_rotate_to_heading: false
+      use_rotate_to_heading: true
       rotate_to_heading_angular_vel: 0.32
-      rotate_to_heading_min_angle: 0.70
+      rotate_to_heading_min_angle: 0.26
       max_angular_accel: 1.0
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.35
       min_approach_linear_velocity: 0.080
-      use_collision_detection: false
-      max_allowed_time_to_collision_up_to_carrot: 1.8
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.5
       use_regulated_linear_velocity_scaling: true
       regulated_linear_scaling_min_radius: 0.25
       regulated_linear_scaling_min_speed: 0.075
@@ -414,9 +415,9 @@ collision_monitor:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
-      time_before_collision: 0.5
-      simulation_time_step: 0.1
-      min_points: 6
+      time_before_collision: 1.0
+      simulation_time_step: 0.05
+      min_points: 2
       visualize: False
       enabled: True
     SlowdownEarly:
