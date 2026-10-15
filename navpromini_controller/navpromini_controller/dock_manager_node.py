@@ -263,6 +263,83 @@ class DockManagerNode(Node):
         beta = theta + yaw
         return theta, beta, r
 
+    def _get_dock_relative_pose(self) -> tuple[Optional[float], Optional[float]]:
+        """Returns (x_rel, y_rel) of robot position relative to dock pose in dock's local frame.
+        x_rel: longitudinal distance in front of dock (positive is forward towards standoff).
+        y_rel: lateral distance perpendicular to dock centerline (positive is left)."""
+        if self._dock_pose is None:
+            return None, None
+
+        rx, ry = None, None
+        if self._amcl_pose is not None:
+            rx = float(self._amcl_pose.pose.pose.position.x)
+            ry = float(self._amcl_pose.pose.pose.position.y)
+        elif self._odom is not None:
+            rx = float(self._odom.pose.pose.position.x)
+            ry = float(self._odom.pose.pose.position.y)
+
+        if rx is None or ry is None:
+            return None, None
+
+        dx = rx - float(self._dock_pose.pose.position.x)
+        dy = ry - float(self._dock_pose.pose.position.y)
+
+        q = self._dock_pose.pose.orientation
+        dock_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+        x_rel = dx * math.cos(dock_yaw) + dy * math.sin(dock_yaw)
+        y_rel = -dx * math.sin(dock_yaw) + dy * math.cos(dock_yaw)
+        return x_rel, y_rel
+
+    def _is_in_dock_zone(self) -> bool:
+        """Determines if the robot is inside the docking zone bounding box
+        (extending from behind the dock charger up to the standoff position in front,
+        and within the lateral approach corridor), even if charging contacts are not engaged."""
+        if self._charging() or self._docked:
+            return True
+        if self._status in ('charging', 'full', 'docked'):
+            return True
+        if self._in_view() and self._tag:
+            try:
+                z = float(self._tag[4])
+                if z < (self._standoff + 0.35):
+                    return True
+            except Exception:
+                pass
+
+        x_rel, y_rel = self._get_dock_relative_pose()
+        if x_rel is not None and y_rel is not None:
+            # Box: from -0.30m behind dock to standoff + 0.25m in front, and +/- 0.50m left/right
+            if -0.30 <= x_rel <= (self._standoff + 0.25) and abs(y_rel) <= 0.50:
+                return True
+
+        return False
+
+    def _is_inside_dock_slot(self) -> bool:
+        """Determines if the robot is deep inside the dock slot / funnel
+        (near the charger contacts, where in-place rotation would strike the dock
+        or Nav2 would abort with 'Start occupied')."""
+        if self._charging():
+            return True
+        if self._docked and self._status in ('charging', 'full', 'docked'):
+            return True
+        if self._in_view() and self._tag:
+            try:
+                z = float(self._tag[4])
+                if z < (self._undock_distance + 0.10):
+                    return True
+            except Exception:
+                pass
+
+        x_rel, y_rel = self._get_dock_relative_pose()
+        if x_rel is not None and y_rel is not None:
+            # Slot: from -0.30m behind dock to +0.38m in front (inside undock roll-off distance), and +/- 0.35m left/right
+            if -0.30 <= x_rel <= (self._undock_distance + 0.05) and abs(y_rel) <= 0.35:
+                return True
+
+        return False
+
     def _set_status(self, status: str) -> None:
         if self._status != status:
             self.get_logger().info(f'dock state -> {status}')
@@ -645,9 +722,11 @@ class DockManagerNode(Node):
 
             self._set_status('docking')
 
-            # Only undock if the robot is physically on the charger
-            if self._charging():
-                self.get_logger().info('dock: currently charging on dock — undocking gently before redocking')
+            # If the robot is physically inside the dock slot (charging or uncharged),
+            # gently roll forward off the dock into the standoff area so it can see the marker
+            # and achieve clean alignment without colliding with dock funnel or failing with 'Start occupied':
+            if self._is_inside_dock_slot():
+                self.get_logger().info('dock: robot is inside dock slot — rolling forward to standoff before alignment')
                 self._set_status('undocking')
                 await self._drive_straight(
                     self._undock_distance,
@@ -662,20 +741,27 @@ class DockManagerNode(Node):
             else:
                 self._docked = False
 
-            # Navigate to the staging standoff pose in front of the dock via Nav2
+            # Navigate to the staging standoff pose in front of the dock via Nav2 ONLY IF NOT already in dock zone:
             if dock_pose is not None:
-                self._set_status('staging')
-                if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
-                    self._stop()
-                    if goal_handle.is_cancel_requested:
-                        goal_handle.canceled()
-                        self._set_status('undocked')
-                        return DockRobot.Result(success=False, error_msg='cancelled')
-                    self.get_logger().error('failed to reach staging pose via Nav2')
-                    self._set_status('docking_failed')
-                    goal_handle.abort()
-                    return DockRobot.Result(
-                        success=False, error_msg='failed to reach staging pose')
+                if not self._is_in_dock_zone():
+                    self._set_status('staging')
+                    if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
+                        self._stop()
+                        if goal_handle.is_cancel_requested:
+                            goal_handle.canceled()
+                            self._set_status('undocked')
+                            return DockRobot.Result(success=False, error_msg='cancelled')
+                        self.get_logger().error('failed to reach staging pose via Nav2')
+                        self._set_status('docking_failed')
+                        goal_handle.abort()
+                        return DockRobot.Result(
+                            success=False, error_msg='failed to reach staging pose')
+                else:
+                    self.get_logger().info('dock: robot already inside docking zone — aligning heading directly to dock')
+                    q = self._staging_pose_for(dock_pose).pose.orientation
+                    target_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                            1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+                    await self._turn_to_map_heading(target_yaw)
             else:
                 self.get_logger().warn(
                     'no dock pose configured — attempting visual servoing directly')
@@ -908,17 +994,11 @@ class DockManagerNode(Node):
         self._busy = True
         try:
             goal: NavigateToPose.Goal = goal_handle.request
-            is_on_dock = (
-                self._charging()
-                or self._docked
-                or self._status in ('charging', 'full', 'docked')
-            )
-
-            if is_on_dock:
-                # Only execute physical undock roll-off when physically on charger/dock:
+            if self._is_inside_dock_slot():
+                # Only execute physical undock roll-off when physically inside dock slot:
                 self._set_status('undocking')
                 self.get_logger().info(
-                    f'undock: robot is docked on charger — driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s')
+                    f'undock: robot is inside dock slot — driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s to clear dock')
                 ok = False
                 for attempt in range(3):
                     if goal_handle.is_cancel_requested:
@@ -943,7 +1023,7 @@ class DockManagerNode(Node):
                     return NavigateToPose.Result()
             else:
                 self.get_logger().info(
-                    'undock: robot is not docked/charging — skipping physical roll-off')
+                    'undock: robot is outside dock slot — skipping physical roll-off')
                 self._docked = False
                 self._set_status('undocked')
 
