@@ -429,11 +429,12 @@ class DockManagerNode(Node):
         return await self._turn(yaw_diff)
 
     async def _drive_straight(self, distance: float,
-                              speed: Optional[float] = None) -> bool:
+                              speed: Optional[float] = None,
+                              is_canceled=None) -> bool:
         """Closed-loop straight line: distance comes from odometry (not a
         timer) and heading is actively held to the starting yaw, so drift
         is corrected as it happens. Positive distance drives forward.
-        Returns False only on a genuine physical stall."""
+        Returns False only on a genuine physical stall or user cancellation."""
         rate = speed if speed is not None else self._v_rate
         lin = rate if distance > 0 else -rate
         target = abs(distance)
@@ -449,6 +450,11 @@ class DockManagerNode(Node):
         deadline = time.monotonic() + (target / rate) * 3.0 + 5.0
         stalled_since = None
         while time.monotonic() < deadline:
+            if is_canceled is not None and is_canceled():
+                self._stop()
+                self.get_logger().info('straight drive canceled by request')
+                await self._sleep(self._settle)
+                return False
             p = self._odom.pose.pose.position
             travelled = math.hypot(p.x - origin[0], p.y - origin[1])
             if travelled >= target:
@@ -561,7 +567,8 @@ class DockManagerNode(Node):
             x=0.0, y=0.0, z=math.sin(yaw / 2.0), w=math.cos(yaw / 2.0))
         return staging
 
-    async def _navigate_to_staging(self, dock_pose: PoseStamped) -> bool:
+    async def _navigate_to_staging(self, dock_pose: PoseStamped,
+                                    parent_goal_handle=None) -> bool:
         if not self._nav_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('navigate_to_pose action server not available')
             return False
@@ -572,11 +579,15 @@ class DockManagerNode(Node):
         deadline = time.monotonic() + self._staging_timeout
         goal_handle = None
         while time.monotonic() < deadline:
+            if parent_goal_handle is not None and parent_goal_handle.is_cancel_requested:
+                return False
             staging.header.stamp = self.get_clock().now().to_msg()
             nav_goal = NavigateToPose.Goal()
             nav_goal.pose = staging
             send_fut = self._nav_client.send_goal_async(nav_goal)
             while not send_fut.done():
+                if parent_goal_handle is not None and parent_goal_handle.is_cancel_requested:
+                    return False
                 if time.monotonic() > deadline:
                     return False
                 await self._tick()
@@ -592,6 +603,13 @@ class DockManagerNode(Node):
             return False
         result_fut = goal_handle.get_result_async()
         while not result_fut.done():
+            if parent_goal_handle is not None and parent_goal_handle.is_cancel_requested:
+                self.get_logger().info('staging navigation: dock canceled by user — canceling Nav2 staging goal')
+                try:
+                    await goal_handle.cancel_goal_async()
+                except Exception:
+                    pass
+                return False
             if self._charging():
                 self.get_logger().info('staging navigation: robot already on charger — skipping staging')
                 try:
@@ -631,18 +649,29 @@ class DockManagerNode(Node):
             if self._charging():
                 self.get_logger().info('dock: currently charging on dock — undocking gently before redocking')
                 self._set_status('undocking')
-                await self._drive_straight(self._undock_distance, speed=self._undock_speed)
+                await self._drive_straight(
+                    self._undock_distance,
+                    speed=self._undock_speed,
+                    is_canceled=lambda: goal_handle.is_cancel_requested)
                 self._docked = False
                 self._set_status('undocked')
+                if goal_handle.is_cancel_requested:
+                    self._stop()
+                    goal_handle.canceled()
+                    return DockRobot.Result(success=False, error_msg='cancelled')
             else:
                 self._docked = False
 
             # Navigate to the staging standoff pose in front of the dock via Nav2
             if dock_pose is not None:
                 self._set_status('staging')
-                if not await self._navigate_to_staging(dock_pose):
-                    self.get_logger().error('failed to reach staging pose via Nav2')
+                if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
                     self._stop()
+                    if goal_handle.is_cancel_requested:
+                        goal_handle.canceled()
+                        self._set_status('undocked')
+                        return DockRobot.Result(success=False, error_msg='cancelled')
+                    self.get_logger().error('failed to reach staging pose via Nav2')
                     self._set_status('docking_failed')
                     goal_handle.abort()
                     return DockRobot.Result(
@@ -879,23 +908,44 @@ class DockManagerNode(Node):
         self._busy = True
         try:
             goal: NavigateToPose.Goal = goal_handle.request
-            # Always execute physical undock roll-off when commanded:
-            self._set_status('undocking')
-            self.get_logger().info(f'undock: driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s')
-            ok = False
-            for attempt in range(3):
-                ok = await self._drive_straight(self._undock_distance, speed=self._undock_speed)
-                if ok:
-                    break
+            is_on_dock = (
+                self._charging()
+                or self._docked
+                or self._status in ('charging', 'full', 'docked')
+            )
+
+            if is_on_dock:
+                # Only execute physical undock roll-off when physically on charger/dock:
+                self._set_status('undocking')
                 self.get_logger().info(
-                    f'undock: stalled on attempt {attempt + 1} — pushing '
-                    'forward again (no in-place rotation)')
-            self._docked = False
-            self._set_status('undocked')
-            if not ok:
-                self._set_status('undock_failed')
-                goal_handle.abort()
-                return NavigateToPose.Result()
+                    f'undock: robot is docked on charger — driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s')
+                ok = False
+                for attempt in range(3):
+                    if goal_handle.is_cancel_requested:
+                        break
+                    ok = await self._drive_straight(
+                        self._undock_distance,
+                        speed=self._undock_speed,
+                        is_canceled=lambda: goal_handle.is_cancel_requested)
+                    if ok or goal_handle.is_cancel_requested:
+                        break
+                    self.get_logger().info(
+                        f'undock: stalled on attempt {attempt + 1} — pushing forward again')
+                self._docked = False
+                self._set_status('undocked')
+                if goal_handle.is_cancel_requested:
+                    self._stop()
+                    goal_handle.canceled()
+                    return NavigateToPose.Result()
+                if not ok:
+                    self._set_status('undock_failed')
+                    goal_handle.abort()
+                    return NavigateToPose.Result()
+            else:
+                self.get_logger().info(
+                    'undock: robot is not docked/charging — skipping physical roll-off')
+                self._docked = False
+                self._set_status('undocked')
 
             # If no destination pose was provided (pure 'Undock' button press), finish here
             if not self._has_nav_goal(goal):
@@ -926,12 +976,14 @@ class DockManagerNode(Node):
             child_goal_handle = None
             while time.monotonic() < nav_activate_deadline:
                 if goal_handle.is_cancel_requested:
+                    self._stop()
                     goal_handle.canceled()
                     self._set_status('undocked')
                     return NavigateToPose.Result()
                 child_nav_fut = self._nav_client.send_goal_async(goal, feedback_callback=on_feedback)
                 while not child_nav_fut.done():
                     if goal_handle.is_cancel_requested:
+                        self._stop()
                         goal_handle.canceled()
                         self._set_status('undocked')
                         return NavigateToPose.Result()
@@ -941,6 +993,11 @@ class DockManagerNode(Node):
                     child_goal_handle = candidate
                     break
                 remaining = nav_activate_deadline - time.monotonic()
+                if goal_handle.is_cancel_requested:
+                    self._stop()
+                    goal_handle.canceled()
+                    self._set_status('undocked')
+                    return NavigateToPose.Result()
                 self.get_logger().warn(
                     f'bt_navigator rejected goal (still inactive?) — retrying in 3s '
                     f'({remaining:.0f}s remaining)')
@@ -955,6 +1012,7 @@ class DockManagerNode(Node):
             result_fut = child_goal_handle.get_result_async()
             while not result_fut.done():
                 if goal_handle.is_cancel_requested:
+                    self._stop()
                     await child_goal_handle.cancel_goal_async()
                     goal_handle.canceled()
                     self._set_status('undocked')

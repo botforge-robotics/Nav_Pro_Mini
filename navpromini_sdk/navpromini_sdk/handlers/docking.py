@@ -224,7 +224,7 @@ async def cancel_active_dock(bridge, reason: str = 'canceled') -> bool:
         await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
     except Exception:
         pass
-    TRACKER.finish('failed', reason)
+    TRACKER.finish('canceled', reason)
     if hasattr(bridge, 'release_video_stream'):
         bridge.release_video_stream()
     if hasattr(bridge, 'publish_display_state'):
