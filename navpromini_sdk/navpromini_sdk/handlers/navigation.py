@@ -121,9 +121,9 @@ def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict
         'x': dx,
         'y': dy,
         'theta': dtheta,
-        'standoff_x': float(dock_cfg.get('standoff_x', dx + 0.70 * math.cos(dtheta))) if dock_cfg and dx is not None else None,
-        'standoff_y': float(dock_cfg.get('standoff_y', dy + 0.70 * math.sin(dtheta))) if dock_cfg and dy is not None else None,
-        'standoff_theta': float(dock_cfg.get('standoff_theta', dtheta)) if dock_cfg and dtheta is not None else None,
+        'standoff_x': (dx + 0.70 * math.cos(dtheta)) if dx is not None else None,
+        'standoff_y': (dy + 0.70 * math.sin(dtheta)) if dy is not None else None,
+        'standoff_theta': dtheta if dx is not None else None,
         'is_docked': is_docked,
     }
 

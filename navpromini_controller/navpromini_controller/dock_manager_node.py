@@ -87,7 +87,7 @@ class DockManagerNode(Node):
         p('undock_distance', 0.35)
         p('undock_speed', 0.065)
         p('dock_origin_offset_m', 0.13)
-        p('standoff_m', 0.68)
+        p('standoff_m', 0.70)
         p('staging_timeout_sec', 300.0)
         p('marker_wait_timeout', 0.6)
         p('max_run_timeout', 600.0)
@@ -624,17 +624,12 @@ class DockManagerNode(Node):
         return pose
 
     def _staging_pose_for(self, dock_pose: PoseStamped) -> PoseStamped:
-        if getattr(self, '_saved_standoff_pose', None) is not None:
-            self.get_logger().info(
-                f'dock: using explicit saved standoff pose ({self._saved_standoff_pose.pose.position.x:.2f}, '
-                f'{self._saved_standoff_pose.pose.position.y:.2f})')
-            return self._saved_standoff_pose
-
         q = dock_pose.pose.orientation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         staging = PoseStamped()
         staging.header.frame_id = dock_pose.header.frame_id or 'map'
+        staging.header.stamp = self.get_clock().now().to_msg()
         staging.pose.position = Point(
             x=dock_pose.pose.position.x + math.cos(yaw) * self._standoff,
             y=dock_pose.pose.position.y + math.sin(yaw) * self._standoff,
@@ -642,6 +637,7 @@ class DockManagerNode(Node):
         )
         staging.pose.orientation = Quaternion(
             x=0.0, y=0.0, z=math.sin(yaw / 2.0), w=math.cos(yaw / 2.0))
+        self._saved_standoff_pose = staging
         return staging
 
     async def _navigate_to_staging(self, dock_pose: PoseStamped,
@@ -1129,30 +1125,24 @@ class DockManagerNode(Node):
             pose.pose.orientation = Quaternion(
                 x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
             
-            if 'standoff_x' in d and 'standoff_y' in d:
-                standoff = PoseStamped()
-                standoff.header.frame_id = d.get('frame_id', 'map')
-                standoff.pose.position = Point(x=d['standoff_x'], y=d['standoff_y'], z=0.0)
-                st_theta = d.get('standoff_theta')
-                if st_theta is not None:
-                    standoff.pose.orientation = Quaternion(
-                        x=0.0, y=0.0, z=math.sin(st_theta / 2.0), w=math.cos(st_theta / 2.0))
-                else:
-                    standoff.pose.orientation = Quaternion(
-                        x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
-                self._saved_standoff_pose = standoff
-                self.get_logger().info(
-                    f'Loaded saved standoff pose ({d["standoff_x"]:.3f}, {d["standoff_y"]:.3f}) from {DOCK_POSE_FILE}')
-
-            self.get_logger().info(f'Loaded saved dock pose from {DOCK_POSE_FILE}')
+            self._saved_standoff_pose = self._staging_pose_for(pose)
+            self.get_logger().info(
+                f'Loaded dock pose ({d["x"]:.3f}, {d["y"]:.3f}) and auto standoff '
+                f'({self._saved_standoff_pose.pose.position.x:.3f}, {self._saved_standoff_pose.pose.position.y:.3f}) '
+                f'from {DOCK_POSE_FILE}')
             return pose
         except (OSError, ValueError, KeyError) as exc:
             self.get_logger().warn(f'Failed to load {DOCK_POSE_FILE}: {exc}')
             return None
 
     def _persist_dock_pose(self, pose: PoseStamped) -> None:
+        q = pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        st_x = pose.pose.position.x + math.cos(yaw) * self._standoff
+        st_y = pose.pose.position.y + math.sin(yaw) * self._standoff
         d = {
-            'frame_id': pose.header.frame_id,
+            'frame_id': pose.header.frame_id or 'map',
             'x': pose.pose.position.x,
             'y': pose.pose.position.y,
             'z': pose.pose.position.z,
@@ -1160,25 +1150,24 @@ class DockManagerNode(Node):
             'qy': pose.pose.orientation.y,
             'qz': pose.pose.orientation.z,
             'qw': pose.pose.orientation.w,
+            'theta': yaw,
+            'standoff_x': st_x,
+            'standoff_y': st_y,
+            'standoff_theta': yaw,
         }
-        if getattr(self, '_saved_standoff_pose', None) is not None:
-            st = self._saved_standoff_pose
-            d['standoff_x'] = st.pose.position.x
-            d['standoff_y'] = st.pose.position.y
-            qz = st.pose.orientation.z
-            qw = st.pose.orientation.w
-            d['standoff_theta'] = 2.0 * math.atan2(qz, qw)
-        try:
-            tmp_path = DOCK_POSE_FILE + '.tmp'
-            with open(tmp_path, 'w') as f:
-                json.dump(d, f)
-            os.replace(tmp_path, DOCK_POSE_FILE)
-        except OSError as exc:
-            self.get_logger().warn(
-                f'Failed to persist dock pose to {DOCK_POSE_FILE}: {exc}')
+        for file_path in [DOCK_POSE_FILE, '/home/navpromini/.navpromini_dock_pose.json']:
+            try:
+                tmp_path = file_path + '.tmp'
+                with open(tmp_path, 'w') as f:
+                    json.dump(d, f, indent=2)
+                os.replace(tmp_path, file_path)
+            except OSError as exc:
+                self.get_logger().warn(
+                    f'Failed to persist dock pose to {file_path}: {exc}')
 
     def _on_dock_pose_set(self, msg: PoseStamped) -> None:
         self._dock_pose = msg
+        self._saved_standoff_pose = self._staging_pose_for(msg)
         self._persist_dock_pose(msg)
 
 

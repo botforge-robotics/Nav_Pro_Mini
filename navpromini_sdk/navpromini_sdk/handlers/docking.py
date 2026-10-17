@@ -281,23 +281,42 @@ class DockStatusHandler(BaseHandler):
 class DockPoseHandler(BaseHandler):
     """Read or set where the robot believes its dock is."""
 
+    def _dock_files(self) -> list[str]:
+        files = [os.path.expanduser('~/.navpromini_dock_pose.json')]
+        if os.path.isdir('/home/navpromini') and '/home/navpromini/.navpromini_dock_pose.json' not in files:
+            files.append('/home/navpromini/.navpromini_dock_pose.json')
+        return files
+
     def get(self) -> None:
         value, age = self.bridge.get_with_age('dock_pose')
         if value is None:
-            dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
-            if os.path.isfile(dock_file):
-                try:
-                    with open(dock_file, 'r') as f:
-                        d = json.load(f)
-                    theta = d.get('theta')
-                    if theta is None:
-                        qz = d.get('qz', 0.0)
-                        qw = d.get('qw', 1.0)
-                        theta = 2.0 * math.atan2(qz, qw)
-                    value = {'x': d['x'], 'y': d['y'], 'theta': theta}
-                    age = 0.0
-                except Exception:
-                    pass
+            for dock_file in self._dock_files():
+                if os.path.isfile(dock_file):
+                    try:
+                        with open(dock_file, 'r') as f:
+                            d = json.load(f)
+                        theta = d.get('theta')
+                        if theta is None:
+                            qz = d.get('qz', 0.0)
+                            qw = d.get('qw', 1.0)
+                            theta = 2.0 * math.atan2(qz, qw)
+                        x = float(d['x'])
+                        y = float(d['y'])
+                        st_x = float(d.get('standoff_x', x + 0.70 * math.cos(theta)))
+                        st_y = float(d.get('standoff_y', y + 0.70 * math.sin(theta)))
+                        st_th = float(d.get('standoff_theta', theta))
+                        value = {
+                            'x': x,
+                            'y': y,
+                            'theta': theta,
+                            'standoff_x': st_x,
+                            'standoff_y': st_y,
+                            'standoff_theta': st_th,
+                        }
+                        age = 0.0
+                        break
+                    except Exception:
+                        pass
         if value is None:
             raise ApiError(404, 'no_dock_pose',
                            'No dock pose is known. Set one, or map the area with '
@@ -308,6 +327,11 @@ class DockPoseHandler(BaseHandler):
         data = self.body(('x', 'y'))
         x, y = float(data['x']), float(data['y'])
         theta = float(data.get('theta', 0.0))
+        standoff_dist = 0.70
+        standoff_x = x + standoff_dist * math.cos(theta)
+        standoff_y = y + standoff_dist * math.sin(theta)
+        standoff_theta = theta
+
         msg = PoseStamped()
         msg.header.frame_id = 'map'
         msg.header.stamp = self.bridge.get_clock().now().to_msg()
@@ -317,13 +341,22 @@ class DockPoseHandler(BaseHandler):
         msg.pose.orientation.w = math.cos(theta / 2.0)
         self.opts['dock_pose_pub'].publish(msg)
 
+        dock_data = {
+            'x': x,
+            'y': y,
+            'theta': theta,
+            'frame_id': 'map',
+            'standoff_x': standoff_x,
+            'standoff_y': standoff_y,
+            'standoff_theta': standoff_theta,
+        }
+
         with self.bridge._lock:
             self.bridge._cache['dock_pose'] = (
-            {'x': x, 'y': y, 'theta': theta, 'frame_id': 'map'},
-            self.bridge.get_clock().now().nanoseconds / 1e9,
-        )
+                dock_data,
+                self.bridge.get_clock().now().nanoseconds / 1e9,
+            )
 
-        dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
         dock_dict = {
             'frame_id': 'map',
             'x': x,
@@ -334,25 +367,29 @@ class DockPoseHandler(BaseHandler):
             'qz': math.sin(theta / 2.0),
             'qw': math.cos(theta / 2.0),
             'theta': theta,
+            'standoff_x': standoff_x,
+            'standoff_y': standoff_y,
+            'standoff_theta': standoff_theta,
         }
-        try:
-            tmp_path = dock_file + '.tmp'
-            with open(tmp_path, 'w') as f:
-                json.dump(dock_dict, f, indent=2)
-            os.replace(tmp_path, dock_file)
-        except Exception as exc:
-            pass
+        for dock_file in self._dock_files():
+            try:
+                tmp_path = dock_file + '.tmp'
+                with open(tmp_path, 'w') as f:
+                    json.dump(dock_dict, f, indent=2)
+                os.replace(tmp_path, dock_file)
+            except Exception:
+                pass
 
-        self.send({'x': x, 'y': y, 'theta': theta})
+        self.send(dock_data)
 
     def delete(self) -> None:
         self.bridge.invalidate('dock_pose')
-        dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
-        if os.path.isfile(dock_file):
-            try:
-                os.remove(dock_file)
-            except Exception:
-                pass
+        for dock_file in self._dock_files():
+            if os.path.isfile(dock_file):
+                try:
+                    os.remove(dock_file)
+                except Exception:
+                    pass
         self.send({'deleted': True})
 
 
