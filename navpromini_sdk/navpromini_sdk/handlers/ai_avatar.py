@@ -51,6 +51,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "starbucks": "Ground Floor East entrance, coffee, pastries, and seating.",
         "food_court": "Level 3 with multi-cuisine dining options and family seating.",
         "restrooms": "Ground Floor Corridor B, next to elevator bank."
+    },
+    "educationalDirectory": {
+        "station_1_assembly": "Hardware assembly, motor drivers, and robotic arm test bench.",
+        "station_2_lidar": "Sensors, camera vision, and 2D LiDAR scanning calibration zone.",
+        "station_3_programming": "Software workstation for ROS 2 nodes, Python SDK, and Mission Planner.",
+        "arena": "Main autonomous testing arena and obstacle avoidance course.",
+        "dock": "Auto-docking station."
     }
 }
 
