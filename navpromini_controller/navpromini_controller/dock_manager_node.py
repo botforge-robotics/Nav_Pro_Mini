@@ -1114,6 +1114,52 @@ class DockManagerNode(Node):
             self._busy = False
 
     def _load_dock_pose(self) -> Optional[PoseStamped]:
+        # 1. Check shared SQLite storage for active map dock pose
+        db_candidates = [
+            os.path.expanduser('~/.navpromini_sdk.db'),
+            '/home/navpromini/.navpromini_sdk.db',
+            '/root/.navpromini_sdk.db',
+        ]
+        for db_path in set(db_candidates):
+            if not os.path.isfile(db_path):
+                continue
+            try:
+                import sqlite3
+                con = sqlite3.connect(db_path)
+                cur = con.cursor()
+                cur.execute("SELECT value FROM kv WHERE key = 'current_map'")
+                row = cur.fetchone()
+                current_map = row[0] if row else None
+                if current_map:
+                    cur.execute("SELECT data FROM waypoints WHERE map = ? AND name = 'Charging Dock'", (current_map,))
+                    wp_row = cur.fetchone()
+                    if not wp_row:
+                        cur.execute("SELECT data FROM waypoints WHERE map = ? AND json_extract(data, '$.type') = 'dock'", (current_map,))
+                        wp_row = cur.fetchone()
+                    if wp_row:
+                        d = json.loads(wp_row[0])
+                        x = float(d['x'])
+                        y = float(d['y'])
+                        theta = float(d.get('theta', 0.0))
+                        pose = PoseStamped()
+                        pose.header.frame_id = 'map'
+                        pose.pose.position = Point(x=x, y=y, z=0.0)
+                        pose.pose.orientation = Quaternion(
+                            x=0.0,
+                            y=0.0,
+                            z=math.sin(theta / 2.0),
+                            w=math.cos(theta / 2.0),
+                        )
+                        self._saved_standoff_pose = self._staging_pose_for(pose)
+                        self.get_logger().info(
+                            f'Loaded dock pose ({x:.3f}, {y:.3f}) from shared SQLite store ({db_path}) for map {current_map}')
+                        con.close()
+                        return pose
+                con.close()
+            except Exception as exc:
+                self.get_logger().debug(f'SQLite dock lookup: {exc}')
+
+        # 2. Check persistent dock pose JSON files
         candidate_files = [
             DOCK_POSE_FILE,
             '/home/navpromini/.navpromini_dock_pose.json',

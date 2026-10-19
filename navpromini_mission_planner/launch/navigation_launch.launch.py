@@ -62,6 +62,68 @@ ARGUMENTS = [
 ]
 
 
+def _get_dock_pose_for_map(base_map_name: str) -> dict | None:
+    """Retrieve authoritative saved dock pose from SQLite shared store or dock JSON."""
+    import json
+    import math
+    import sqlite3
+
+    db_candidates = [
+        os.path.expanduser('~/.navpromini_sdk.db'),
+        '/home/navpromini/.navpromini_sdk.db',
+        '/root/.navpromini_sdk.db',
+    ]
+    for db_path in set(db_candidates):
+        if not os.path.isfile(db_path):
+            continue
+        try:
+            con = sqlite3.connect(db_path)
+            cur = con.cursor()
+            cur.execute("SELECT data FROM waypoints WHERE map = ? AND name = 'Charging Dock'", (base_map_name,))
+            row = cur.fetchone()
+            if not row:
+                cur.execute("SELECT data FROM waypoints WHERE map = ? AND json_extract(data, '$.type') = 'dock'", (base_map_name,))
+                row = cur.fetchone()
+            con.close()
+            if row:
+                d = json.loads(row[0])
+                if 'x' in d and 'y' in d:
+                    return {
+                        'x': float(d['x']),
+                        'y': float(d['y']),
+                        'theta': float(d.get('theta', 0.0)),
+                    }
+        except Exception:
+            pass
+
+    json_candidates = [
+        os.path.expanduser('~/.navpromini_dock_pose.json'),
+        '/home/navpromini/.navpromini_dock_pose.json',
+        '/root/.navpromini_dock_pose.json',
+    ]
+    existing_json = [p for p in set(json_candidates) if os.path.isfile(p)]
+    existing_json.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    for json_path in existing_json:
+        try:
+            with open(json_path, 'r') as f:
+                d = json.load(f)
+            if 'x' in d and 'y' in d:
+                theta = d.get('theta')
+                if theta is None:
+                    qz = d.get('qz', 0.0)
+                    qw = d.get('qw', 1.0)
+                    theta = 2.0 * math.atan2(qz, qw)
+                return {
+                    'x': float(d['x']),
+                    'y': float(d['y']),
+                    'theta': float(theta),
+                }
+        except Exception:
+            pass
+
+    return None
+
+
 def launch_setup(context, *args, **kwargs):
     use_sim_time = LaunchConfiguration('use_sim_time')
     autostart = LaunchConfiguration('autostart')
@@ -85,6 +147,23 @@ def launch_setup(context, *args, **kwargs):
         keepout_yaml_path = generated_yaml
     except Exception as exc:
         print(f"[navigation_launch] generate_keepout_mask note: {exc}")
+
+    # Dynamically inject the map's saved dock pose as AMCL's initial_pose on boot / power-on
+    dock_pose = _get_dock_pose_for_map(base_map_name)
+    if dock_pose:
+        amcl_rewrites = {
+            'amcl.ros__parameters.initial_pose.x': str(dock_pose['x']),
+            'amcl.ros__parameters.initial_pose.y': str(dock_pose['y']),
+            'amcl.ros__parameters.initial_pose.yaw': str(dock_pose['theta']),
+        }
+        localization_params_to_use = RewrittenYaml(
+            source_file=localization_params,
+            param_rewrites=amcl_rewrites,
+            convert_types=True,
+        )
+        print(f"[navigation_launch] Setting AMCL initial_pose from saved dock for {base_map_name}: ({dock_pose['x']:.3f}, {dock_pose['y']:.3f}, yaw={dock_pose['theta']:.3f})")
+    else:
+        localization_params_to_use = localization_params
 
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
     launch_nav2 = PathJoinSubstitution(
@@ -110,7 +189,7 @@ def launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource(launch_localization),
         launch_arguments=[
             ('use_sim_time', use_sim_time),
-            ('params_file', localization_params),
+            ('params_file', localization_params_to_use),
             ('map', map_file),
             ('autostart', autostart),
         ],
