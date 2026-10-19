@@ -33,11 +33,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "silenceTimeoutSec": 8,
     "speedLimitMps": 0.35,
     "systemInstruction": (
-        "You are NavPro Assistant, an autonomous interactive robot guide for this luxury model apartment. "
+        "You are the AI Voice Assistant, a helpful and welcoming conversational assistant. "
         "You speak warmly, concisely, and naturally as if having an in-person conversation. "
-        "When visitors ask to see a room or go somewhere, use your navigate_to_place tool to escort them. "
-        "When they ask for specs, floor plans, or photos, use show_media. "
-        "Always be welcoming and helpful."
+        "When visitors ask to see a place or go somewhere, use your navigate_to_place tool to guide them. "
+        "When they ask for details, floor plans, or photos, use show_media. "
+        "Always be welcoming, polite, and helpful."
     ),
     "waypointsKnowledge": {
         "kitchen": "14x11 ft modular kitchen with Italian quartz countertops, soft-close Blum hardware, and integrated induction hob.",
