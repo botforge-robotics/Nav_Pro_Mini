@@ -59,6 +59,74 @@ class WaypointsHandler(BaseHandler):
 
         wp = {'name': name, 'type': wp_type, 'x': x, 'y': y, 'theta': theta}
         store.put_waypoint(wp, data.get('map'))
+
+        # If saving Charging Dock for the active map, sync to dock pose and topic
+        req_map = data.get('map')
+        if (name == 'Charging Dock' or (wp_type == 'dock' and 'standoff' not in name.lower())) and (not req_map or req_map == store.current_map()):
+            import json
+            import math
+            import os
+            from geometry_msgs.msg import PoseStamped
+            standoff_dist = 0.70
+            standoff_x = x + standoff_dist * math.cos(theta)
+            standoff_y = y + standoff_dist * math.sin(theta)
+            standoff_theta = theta
+            dock_data = {
+                'x': x,
+                'y': y,
+                'theta': theta,
+                'frame_id': 'map',
+                'standoff_x': standoff_x,
+                'standoff_y': standoff_y,
+                'standoff_theta': standoff_theta,
+            }
+            with self.bridge._lock:
+                self.bridge._cache['dock_pose'] = (
+                    dock_data,
+                    self.bridge.get_clock().now().nanoseconds / 1e9,
+                )
+            if 'dock_pose_pub' in self.opts:
+                msg = PoseStamped()
+                msg.header.frame_id = 'map'
+                msg.header.stamp = self.bridge.get_clock().now().to_msg()
+                msg.pose.position.x = x
+                msg.pose.position.y = y
+                msg.pose.orientation.z = math.sin(theta / 2.0)
+                msg.pose.orientation.w = math.cos(theta / 2.0)
+                self.opts['dock_pose_pub'].publish(msg)
+            dock_dict = {
+                'frame_id': 'map',
+                'x': x,
+                'y': y,
+                'z': 0.0,
+                'qx': 0.0,
+                'qy': 0.0,
+                'qz': math.sin(theta / 2.0),
+                'qw': math.cos(theta / 2.0),
+                'theta': theta,
+                'standoff_x': standoff_x,
+                'standoff_y': standoff_y,
+                'standoff_theta': standoff_theta,
+            }
+            pid = os.getpid()
+            for dock_file in [os.path.expanduser('~/.navpromini_dock_pose.json'),
+                              '/home/navpromini/.navpromini_dock_pose.json',
+                              '/root/.navpromini_dock_pose.json']:
+                dir_name = os.path.dirname(dock_file)
+                if not os.path.isdir(dir_name):
+                    continue
+                try:
+                    tmp_path = f"{dock_file}.tmp.{pid}"
+                    with open(tmp_path, 'w') as f:
+                        json.dump(dock_dict, f, indent=2)
+                    try:
+                        os.chmod(tmp_path, 0o666)
+                    except OSError:
+                        pass
+                    os.replace(tmp_path, dock_file)
+                except Exception:
+                    pass
+
         self.send({'waypoint': wp, 'source': source}, status=201)
 
 

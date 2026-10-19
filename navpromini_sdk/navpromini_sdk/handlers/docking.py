@@ -283,40 +283,85 @@ class DockPoseHandler(BaseHandler):
 
     def _dock_files(self) -> list[str]:
         files = [os.path.expanduser('~/.navpromini_dock_pose.json')]
-        if os.path.isdir('/home/navpromini') and '/home/navpromini/.navpromini_dock_pose.json' not in files:
-            files.append('/home/navpromini/.navpromini_dock_pose.json')
+        for candidate in ('/home/navpromini/.navpromini_dock_pose.json', '/root/.navpromini_dock_pose.json'):
+            if candidate not in files and os.path.isdir(os.path.dirname(candidate)):
+                files.append(candidate)
         return files
 
     def get(self) -> None:
-        value, age = self.bridge.get_with_age('dock_pose')
+        value = None
+        age = 0.0
+
+        # 1. Authoritative check: active map's 'Charging Dock' waypoint from SQLite store
+        store = self.opts.get('store')
+        current_map = store.current_map() if store else None
+        if store and current_map:
+            dock_wp = store.get_waypoint('Charging Dock', current_map)
+            if dock_wp and 'x' in dock_wp and 'y' in dock_wp:
+                x = float(dock_wp['x'])
+                y = float(dock_wp['y'])
+                theta = float(dock_wp.get('theta', 0.0))
+                value = {
+                    'x': x,
+                    'y': y,
+                    'theta': theta,
+                    'standoff_x': x + 0.70 * math.cos(theta),
+                    'standoff_y': y + 0.70 * math.sin(theta),
+                    'standoff_theta': theta,
+                    'frame': 'map',
+                }
+                age = 0.0
+
+        # 2. Check persistent files (sorted by freshest mtime)
         if value is None:
-            for dock_file in self._dock_files():
-                if os.path.isfile(dock_file):
-                    try:
-                        with open(dock_file, 'r') as f:
-                            d = json.load(f)
-                        theta = d.get('theta')
-                        if theta is None:
-                            qz = d.get('qz', 0.0)
-                            qw = d.get('qw', 1.0)
-                            theta = 2.0 * math.atan2(qz, qw)
-                        x = float(d['x'])
-                        y = float(d['y'])
-                        st_x = float(d.get('standoff_x', x + 0.70 * math.cos(theta)))
-                        st_y = float(d.get('standoff_y', y + 0.70 * math.sin(theta)))
-                        st_th = float(d.get('standoff_theta', theta))
-                        value = {
-                            'x': x,
-                            'y': y,
-                            'theta': theta,
-                            'standoff_x': st_x,
-                            'standoff_y': st_y,
-                            'standoff_theta': st_th,
-                        }
-                        age = 0.0
-                        break
-                    except Exception:
-                        pass
+            existing = [p for p in self._dock_files() if os.path.isfile(p)]
+            existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for dock_file in existing:
+                try:
+                    with open(dock_file, 'r') as f:
+                        d = json.load(f)
+                    theta = d.get('theta')
+                    if theta is None:
+                        qz = d.get('qz', 0.0)
+                        qw = d.get('qw', 1.0)
+                        theta = 2.0 * math.atan2(qz, qw)
+                    x = float(d['x'])
+                    y = float(d['y'])
+                    st_x = float(d.get('standoff_x', x + 0.70 * math.cos(theta)))
+                    st_y = float(d.get('standoff_y', y + 0.70 * math.sin(theta)))
+                    st_th = float(d.get('standoff_theta', theta))
+                    value = {
+                        'x': x,
+                        'y': y,
+                        'theta': theta,
+                        'standoff_x': st_x,
+                        'standoff_y': st_y,
+                        'standoff_theta': st_th,
+                        'frame': d.get('frame_id', 'map') or 'map',
+                    }
+                    age = 0.0
+                    break
+                except Exception:
+                    pass
+
+        # 3. Fall back to ROS topic cache
+        if value is None:
+            cached, topic_age = self.bridge.get_with_age('dock_pose')
+            if cached is not None:
+                x = float(cached['x'])
+                y = float(cached['y'])
+                theta = float(cached.get('theta', 0.0))
+                value = {
+                    'x': x,
+                    'y': y,
+                    'theta': theta,
+                    'standoff_x': float(cached.get('standoff_x', x + 0.70 * math.cos(theta))),
+                    'standoff_y': float(cached.get('standoff_y', y + 0.70 * math.sin(theta))),
+                    'standoff_theta': float(cached.get('standoff_theta', theta)),
+                    'frame': cached.get('frame', 'map'),
+                }
+                age = topic_age
+
         if value is None:
             raise ApiError(404, 'no_dock_pose',
                            'No dock pose is known. Set one, or map the area with '
@@ -371,14 +416,46 @@ class DockPoseHandler(BaseHandler):
             'standoff_y': standoff_y,
             'standoff_theta': standoff_theta,
         }
+        pid = os.getpid()
         for dock_file in self._dock_files():
+            dir_name = os.path.dirname(dock_file)
+            if not os.path.isdir(dir_name):
+                continue
             try:
-                tmp_path = dock_file + '.tmp'
+                tmp_path = f"{dock_file}.tmp.{pid}"
                 with open(tmp_path, 'w') as f:
                     json.dump(dock_dict, f, indent=2)
+                try:
+                    os.chmod(tmp_path, 0o666)
+                except OSError:
+                    pass
                 os.replace(tmp_path, dock_file)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.bridge.get_logger().warn(
+                    f"Failed to persist dock pose to {dock_file}: {exc}")
+
+        # Sync to SQLite store for current map
+        store = self.opts.get('store')
+        if store:
+            current_map = store.current_map()
+            if current_map:
+                try:
+                    store.put_waypoint({
+                        'name': 'Charging Dock',
+                        'type': 'dock',
+                        'x': x,
+                        'y': y,
+                        'theta': theta,
+                    }, current_map)
+                    store.put_waypoint({
+                        'name': 'Dock Standoff',
+                        'type': 'dock',
+                        'x': standoff_x,
+                        'y': standoff_y,
+                        'theta': standoff_theta,
+                    }, current_map)
+                except Exception as exc:
+                    self.bridge.get_logger().warn(f"Failed to sync dock to waypoints store: {exc}")
 
         self.send(dock_data)
 
@@ -388,6 +465,15 @@ class DockPoseHandler(BaseHandler):
             if os.path.isfile(dock_file):
                 try:
                     os.remove(dock_file)
+                except Exception:
+                    pass
+        store = self.opts.get('store')
+        if store:
+            current_map = store.current_map()
+            if current_map:
+                try:
+                    store.delete_waypoint('Charging Dock', current_map)
+                    store.delete_waypoint('Dock Standoff', current_map)
                 except Exception:
                     pass
         self.send({'deleted': True})

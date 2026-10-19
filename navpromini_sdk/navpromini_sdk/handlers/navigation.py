@@ -80,14 +80,19 @@ def resolve_target(store, data: dict) -> dict:
 
 
 def load_saved_dock_config() -> dict | None:
-    for path in ['/home/navpromini/.navpromini_dock_pose.json',
-                 os.path.expanduser('~/.navpromini_dock_pose.json')]:
-        if os.path.isfile(path):
-            try:
-                with open(path, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
+    candidates = [
+        '/home/navpromini/.navpromini_dock_pose.json',
+        '/root/.navpromini_dock_pose.json',
+        os.path.expanduser('~/.navpromini_dock_pose.json'),
+    ]
+    existing = [p for p in set(candidates) if os.path.isfile(p)]
+    existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    for path in existing:
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
     return None
 
 

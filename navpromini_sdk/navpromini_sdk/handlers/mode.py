@@ -335,7 +335,39 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         bridge.emit_event(f'{mode}.started', {'map': map_name})
         if mode == 'navigation':
             if map_name:
-                opts['store'].set_current_map(map_name)
+                store = opts.get('store')
+                if store:
+                    store.set_current_map(map_name)
+                    dock_wp = store.get_waypoint('Charging Dock', map_name)
+                    if dock_wp and 'x' in dock_wp and 'y' in dock_wp:
+                        x = float(dock_wp['x'])
+                        y = float(dock_wp['y'])
+                        theta = float(dock_wp.get('theta', 0.0))
+                        st_x = x + 0.70 * math.cos(theta)
+                        st_y = y + 0.70 * math.sin(theta)
+                        dock_data = {
+                            'x': x,
+                            'y': y,
+                            'theta': theta,
+                            'frame_id': 'map',
+                            'standoff_x': st_x,
+                            'standoff_y': st_y,
+                            'standoff_theta': theta,
+                        }
+                        with bridge._lock:
+                            bridge._cache['dock_pose'] = (
+                                dock_data,
+                                bridge.get_clock().now().nanoseconds / 1e9,
+                            )
+                        if 'dock_pose_pub' in opts:
+                            msg = PoseStamped()
+                            msg.header.frame_id = 'map'
+                            msg.header.stamp = bridge.get_clock().now().to_msg()
+                            msg.pose.position.x = x
+                            msg.pose.position.y = y
+                            msg.pose.orientation.z = math.sin(theta / 2.0)
+                            msg.pose.orientation.w = math.cos(theta / 2.0)
+                            opts['dock_pose_pub'].publish(msg)
                 bridge.emit_event('map.loaded', {'name': map_name})
             _seed_pose_from_dock(bridge, state)
         return {'mode': mode, 'map': map_name, 'launch_id': resp.unique_id}

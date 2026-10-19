@@ -147,7 +147,7 @@ class DockManagerNode(Node):
         self._dock_pose_pub = self.create_publisher(
             PoseStamped, 'dock_pose', _LATCHED_QOS)
         self.create_subscription(PoseStamped, 'dock_pose',
-                                 self._on_dock_pose_set, _VOLATILE_QOS,
+                                 self._on_dock_pose_set, _LATCHED_QOS,
                                  callback_group=cb)
         self.create_subscription(Float32MultiArray, 'dock_tag',
                                  self._on_tag, 10, callback_group=cb)
@@ -1114,26 +1114,38 @@ class DockManagerNode(Node):
             self._busy = False
 
     def _load_dock_pose(self) -> Optional[PoseStamped]:
-        if not os.path.exists(DOCK_POSE_FILE):
+        candidate_files = [
+            DOCK_POSE_FILE,
+            '/home/navpromini/.navpromini_dock_pose.json',
+            '/root/.navpromini_dock_pose.json',
+        ]
+        existing = [p for p in candidate_files if os.path.isfile(p)]
+        if not existing:
             return None
-        try:
-            with open(DOCK_POSE_FILE, 'r') as f:
-                d = json.load(f)
-            pose = PoseStamped()
-            pose.header.frame_id = d['frame_id']
-            pose.pose.position = Point(x=d['x'], y=d['y'], z=d['z'])
-            pose.pose.orientation = Quaternion(
-                x=d['qx'], y=d['qy'], z=d['qz'], w=d['qw'])
-            
-            self._saved_standoff_pose = self._staging_pose_for(pose)
-            self.get_logger().info(
-                f'Loaded dock pose ({d["x"]:.3f}, {d["y"]:.3f}) and auto standoff '
-                f'({self._saved_standoff_pose.pose.position.x:.3f}, {self._saved_standoff_pose.pose.position.y:.3f}) '
-                f'from {DOCK_POSE_FILE}')
-            return pose
-        except (OSError, ValueError, KeyError) as exc:
-            self.get_logger().warn(f'Failed to load {DOCK_POSE_FILE}: {exc}')
-            return None
+        # Sort by mtime descending to load the freshest saved dock pose
+        existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for file_path in existing:
+            try:
+                with open(file_path, 'r') as f:
+                    d = json.load(f)
+                pose = PoseStamped()
+                pose.header.frame_id = d.get('frame_id', 'map') or 'map'
+                pose.pose.position = Point(x=float(d['x']), y=float(d['y']), z=float(d.get('z', 0.0)))
+                pose.pose.orientation = Quaternion(
+                    x=float(d.get('qx', 0.0)),
+                    y=float(d.get('qy', 0.0)),
+                    z=float(d.get('qz', 0.0)),
+                    w=float(d.get('qw', 1.0)),
+                )
+                self._saved_standoff_pose = self._staging_pose_for(pose)
+                self.get_logger().info(
+                    f'Loaded dock pose ({d["x"]:.3f}, {d["y"]:.3f}) and auto standoff '
+                    f'({self._saved_standoff_pose.pose.position.x:.3f}, {self._saved_standoff_pose.pose.position.y:.3f}) '
+                    f'from {file_path}')
+                return pose
+            except (OSError, ValueError, KeyError) as exc:
+                self.get_logger().warn(f'Failed to load {file_path}: {exc}')
+        return None
 
     def _persist_dock_pose(self, pose: PoseStamped) -> None:
         q = pose.pose.orientation
@@ -1155,17 +1167,39 @@ class DockManagerNode(Node):
             'standoff_y': st_y,
             'standoff_theta': yaw,
         }
-        for file_path in [DOCK_POSE_FILE, '/home/navpromini/.navpromini_dock_pose.json']:
+        pid = os.getpid()
+        target_files = [
+            DOCK_POSE_FILE,
+            '/home/navpromini/.navpromini_dock_pose.json',
+            '/root/.navpromini_dock_pose.json',
+        ]
+        for file_path in target_files:
+            dir_name = os.path.dirname(file_path)
+            if not os.path.isdir(dir_name):
+                continue
             try:
-                tmp_path = file_path + '.tmp'
+                tmp_path = f"{file_path}.tmp.{pid}"
                 with open(tmp_path, 'w') as f:
                     json.dump(d, f, indent=2)
+                try:
+                    os.chmod(tmp_path, 0o666)
+                except OSError:
+                    pass
                 os.replace(tmp_path, file_path)
             except OSError as exc:
                 self.get_logger().warn(
                     f'Failed to persist dock pose to {file_path}: {exc}')
 
     def _on_dock_pose_set(self, msg: PoseStamped) -> None:
+        if (self._dock_pose is not None and
+            abs(self._dock_pose.pose.position.x - msg.pose.position.x) < 1e-4 and
+            abs(self._dock_pose.pose.position.y - msg.pose.position.y) < 1e-4 and
+            abs(self._dock_pose.pose.orientation.z - msg.pose.orientation.z) < 1e-4 and
+            abs(self._dock_pose.pose.orientation.w - msg.pose.orientation.w) < 1e-4):
+            return
+        self.get_logger().info(
+            f'Received updated dock pose: ({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f}) '
+            f'frame={msg.header.frame_id}')
         self._dock_pose = msg
         self._saved_standoff_pose = self._staging_pose_for(msg)
         self._persist_dock_pose(msg)
