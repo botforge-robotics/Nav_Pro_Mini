@@ -27,7 +27,6 @@ from rclpy.executors import MultiThreadedExecutor
 
 from .client_hold import ClientHold, ModeState
 from .handlers import (
-    ai_avatar,
     docking,
     maps,
     media,
@@ -166,8 +165,6 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         # schedules
         (rf'{API}/schedules', schedules.SchedulesHandler, opts),
         (rf'{API}/schedules/([^/]+)', schedules.ScheduleHandler, opts),
-        # ai avatar & gemini live
-        (rf'{API}/ai/avatar/config', ai_avatar.AiAvatarConfigHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
         # media static files
