@@ -246,7 +246,13 @@ class DockManagerNode(Node):
     def _charging(self) -> bool:
         if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
             return True
-        if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL and self._docked:
+        if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL:
+            # Full battery parked on dock floats near 0A without discharging
+            if self._batt_current > -0.2:
+                return True
+        # Hardware current ground truth: positive current flowing into the pack (>50mA)
+        # proves physical electrical contact with the charging dock.
+        if self._batt_current > 0.05:
             return True
         return False
 
@@ -421,15 +427,22 @@ class DockManagerNode(Node):
         await self._sleep(self._settle)
         return True
 
-    async def _settle_and_check_charging(self) -> bool:
+    async def _settle_and_check_charging(self, maintain_push: bool = False, push_lin: float = 0.0) -> bool:
         """Give the battery controller's charging status time to catch up
         with real physical contact before reporting failure — contact can
-        precede the status update by several seconds."""
+        precede the status update by several seconds.
+        If maintain_push is True, keeps gentle contact pressure so spring-loaded
+        dock electrodes do not push the AMR away and break electrical connection."""
         end = time.monotonic() + self._settle + self._stall_charge_wait
         while time.monotonic() < end:
             if self._charging():
+                self._stop()
                 return True
+            if maintain_push and push_lin:
+                # Maintain minimal holding pressure against the contact springs
+                self._drive(push_lin * 0.75, 0.0, effort_boost=1.0)
             await self._tick()
+        self._stop()
         return self._charging()
 
     async def _jog(self, distance: float, speed: Optional[float] = None,
@@ -466,17 +479,19 @@ class DockManagerNode(Node):
                     now = time.monotonic()
                     stalled_since = stalled_since or now
                     if now - stalled_since > self._stall_confirm:
-                        self._stop()
+                        if not push_effort:
+                            self._stop()
                         self.get_logger().info(
                             'jog: stalled (odom speed near zero) — '
-                            'stopping instead of pushing further')
-                        return await self._settle_and_check_charging()
+                            'settling and verifying charging contact')
+                        return await self._settle_and_check_charging(maintain_push=push_effort, push_lin=lin)
                 else:
                     stalled_since = None
             self._drive(lin, angular, effort_boost=effort_boost if push_effort else 1.0)
             await self._tick()
-        self._stop()
-        return await self._settle_and_check_charging()
+        if not push_effort:
+            self._stop()
+        return await self._settle_and_check_charging(maintain_push=push_effort, push_lin=lin)
 
     def _odom_yaw(self) -> Optional[float]:
         if self._odom is None:

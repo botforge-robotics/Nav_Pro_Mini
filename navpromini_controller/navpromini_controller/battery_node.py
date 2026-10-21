@@ -124,14 +124,17 @@ class BatteryNode(Node):
 
         charger_connected = bool(getattr(snap, 'charger_connected', False))
         charge_state = getattr(snap, 'charge_state', 0)
+        # Positive current flowing into the pack is the unambiguous physical ground truth of charging.
+        # Do not require charger_connected for pack_current_a > 0.05 because Daly Smart BMS A5
+        # units on this robot do not have a dedicated hardware charger-detect pin and report charger_connected=False.
         is_charging = (
             charge_state == 1 or
-            (charger_connected and snap.pack_current_a > 0.05) or
+            snap.pack_current_a > 0.05 or
             (charger_connected and charge_state != 2)
         )
         is_discharging = (
-            charge_state == 2 or
-            (not charger_connected and snap.pack_current_a < -0.15)
+            (charge_state == 2 and snap.pack_current_a < -0.05) or
+            (not is_charging and snap.pack_current_a < -0.15)
         )
 
         if not is_charging and not charger_connected:
@@ -219,7 +222,7 @@ class BatteryNode(Node):
             'charge_state': charge_name,
             'charge_mos_on': snap.charge_mos_on,
             'discharge_mos_on': snap.discharge_mos_on,
-            'charger_connected': snap.charger_connected,
+            'charger_connected': bool(snap.charger_connected or is_charging),
             'load_connected': snap.load_connected,
             'bms_life': snap.bms_life,
             'failure_bits': snap.failure_bits,

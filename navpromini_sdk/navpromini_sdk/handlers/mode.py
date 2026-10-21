@@ -21,6 +21,8 @@ duplicating launch_manager's process handling.
 
 from __future__ import annotations
 
+import math
+
 from navpromini_launch_manager_interfaces.srv import LaunchWithArgs, StopLaunch
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
