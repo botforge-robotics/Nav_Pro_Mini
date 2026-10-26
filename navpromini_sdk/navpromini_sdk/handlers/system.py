@@ -1643,5 +1643,70 @@ class AppUpdateRollbackHandler(BaseHandler):
             raise ApiError(500, 'rollback_failed', str(e))
 
 
+# -----------------------------------------------------------------------------
+# Robot Setup Wizard / Onboarding Flow
+# -----------------------------------------------------------------------------
+
+class SetupHandler(BaseHandler):
+    """GET /api/v1/system/setup - read onboarding / setup state.
+       POST /api/v1/system/setup - update onboarding step or state."""
+
+    def get(self) -> None:
+        store = self.opts.get('store')
+        dismissed = False
+        completed = False
+        step = 1
+        if store:
+            dismissed = store.get_kv('setup_dismissed') == 'true'
+            completed = store.get_kv('setup_completed') == 'true'
+            try:
+                step = int(store.get_kv('setup_step') or '1')
+            except ValueError:
+                step = 1
+        self.send({
+            'dismissed': dismissed,
+            'completed': completed,
+            'step': step,
+        })
+
+    def post(self) -> None:
+        store = self.opts.get('store')
+        data = self.body()
+        dismissed = data.get('dismissed')
+        completed = data.get('completed')
+        step = data.get('step')
+
+        if store:
+            if dismissed is not None:
+                store.set_kv('setup_dismissed', 'true' if dismissed else 'false')
+            if completed is not None:
+                store.set_kv('setup_completed', 'true' if completed else 'false')
+            if step is not None:
+                store.set_kv('setup_step', str(step))
+
+        payload = {
+            'dismissed': store.get_kv('setup_dismissed') == 'true' if store else bool(dismissed),
+            'completed': store.get_kv('setup_completed') == 'true' if store else bool(completed),
+            'step': int(store.get_kv('setup_step') or '1') if store else (step or 1),
+        }
+        self.bridge.emit_event('setup.updated', payload)
+        if payload['dismissed']:
+            self.bridge.emit_event('setup.dismissed', payload)
+        self.send({'status': 'ok', **payload})
+
+
+class SetupDismissHandler(BaseHandler):
+    """POST /api/v1/system/setup/dismiss - dismiss setup wizard immediately."""
+
+    def post(self) -> None:
+        store = self.opts.get('store')
+        if store:
+            store.set_kv('setup_dismissed', 'true')
+            store.set_kv('setup_completed', 'true')
+        self.bridge.emit_event('setup.dismissed', {'dismissed': True, 'completed': True})
+        self.send({'status': 'ok', 'dismissed': True, 'completed': True})
+
+
+
 
 

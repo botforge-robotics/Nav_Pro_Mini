@@ -211,6 +211,11 @@ class RobotStateHandler(BaseHandler):
             'dock': {'configured': bridge.get('dock_pose') is not None,
                     'status': dock_status_val,
                     'operation': dock_tracker.state},
+            'setup': {
+                'dismissed': store.get_kv('setup_dismissed') == 'true' if store else False,
+                'completed': store.get_kv('setup_completed') == 'true' if store else False,
+                'step': int(store.get_kv('setup_step') or '1') if store else 1,
+            },
             'system': {
                 'cpu_load_pct': _get_cpu_load_pct(),
                 'cpu_temperature_c': bridge.get('cpu_temperature'),

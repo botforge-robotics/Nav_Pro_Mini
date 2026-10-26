@@ -247,6 +247,9 @@ def reconcile_mode(bridge, state) -> None:
     # what's still genuinely unknowable (launch_id).
     state.set(observed, None, None)
     bridge.publish_mode(observed)
+    bridge.emit_event('mode.changed', {'mode': observed, 'map': None})
+    if observed == 'mapping':
+        bridge.emit_event('mapping.started', {'map': None})
     bridge.get_logger().info(f'mode reconciled from ROS graph: {observed} '
                              '(started outside the SDK)')
     if observed == 'idle':
@@ -298,6 +301,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
             bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
         state.set('idle', None, None)
         bridge.publish_mode('idle')
+        bridge.emit_event('mode.changed', {'mode': 'idle', 'map': None})
         opts['client_hold'].release()
         bridge.invalidate('pose_map', 'dock_status')
 
@@ -335,6 +339,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         state.set(mode, map_name, resp.unique_id)
         bridge.publish_mode(mode, map_name)
         bridge.emit_event(f'{mode}.started', {'map': map_name})
+        bridge.emit_event('mode.changed', {'mode': mode, 'map': map_name})
         if mode == 'navigation':
             if map_name:
                 store = opts.get('store')

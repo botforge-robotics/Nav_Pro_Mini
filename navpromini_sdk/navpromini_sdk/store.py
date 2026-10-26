@@ -134,6 +134,20 @@ class Store:
                 'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
                 ('current_map', name))
 
+    # -- kv store -------------------------------------------------------------
+
+    def get_kv(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                'SELECT value FROM kv WHERE key = ?', (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_kv(self, key: str, value: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
+                (key, str(value)))
+
     # -- waypoints ---------------------------------------------------------
 
     def list_waypoints(self, map_name: Optional[str] = None) -> list[dict]:
