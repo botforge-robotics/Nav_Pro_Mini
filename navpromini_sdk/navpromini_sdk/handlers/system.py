@@ -1652,10 +1652,21 @@ class SetupHandler(BaseHandler):
        POST /api/v1/system/setup - update onboarding step or state."""
 
     def get(self) -> None:
+        if _setup_ap_active():
+            self.send({
+                'dismissed': False,
+                'completed': False,
+                'step': 1,
+                'hotspot_active': True,
+                'dismissed_at': 0.0,
+            })
+            return
+
         store = self.opts.get('store')
         dismissed = False
         completed = False
         step = 1
+        dismissed_at = 0.0
         if store:
             dismissed = store.get_kv('setup_dismissed') == 'true'
             completed = store.get_kv('setup_completed') == 'true'
@@ -1663,10 +1674,17 @@ class SetupHandler(BaseHandler):
                 step = int(store.get_kv('setup_step') or '1')
             except ValueError:
                 step = 1
+            try:
+                dismissed_at = float(store.get_kv('setup_dismissed_at') or '0')
+            except ValueError:
+                dismissed_at = 0.0
+
         self.send({
             'dismissed': dismissed,
             'completed': completed,
             'step': step,
+            'hotspot_active': False,
+            'dismissed_at': dismissed_at,
         })
 
     def post(self) -> None:
@@ -1683,6 +1701,8 @@ class SetupHandler(BaseHandler):
                 store.set_kv('setup_completed', 'true' if completed else 'false')
             if step is not None:
                 store.set_kv('setup_step', str(step))
+                if step < 3 and dismissed is None:
+                    store.set_kv('setup_dismissed', 'false')
 
         payload = {
             'dismissed': store.get_kv('setup_dismissed') == 'true' if store else bool(dismissed),
@@ -1700,11 +1720,13 @@ class SetupDismissHandler(BaseHandler):
 
     def post(self) -> None:
         store = self.opts.get('store')
+        now_ts = time.time()
         if store:
             store.set_kv('setup_dismissed', 'true')
             store.set_kv('setup_completed', 'true')
-        self.bridge.emit_event('setup.dismissed', {'dismissed': True, 'completed': True})
-        self.send({'status': 'ok', 'dismissed': True, 'completed': True})
+            store.set_kv('setup_dismissed_at', str(now_ts))
+        self.bridge.emit_event('setup.dismissed', {'dismissed': True, 'completed': True, 'dismissed_at': now_ts})
+        self.send({'status': 'ok', 'dismissed': True, 'completed': True, 'dismissed_at': now_ts})
 
 
 

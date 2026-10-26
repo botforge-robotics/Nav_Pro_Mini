@@ -164,11 +164,20 @@ class RobotStateHandler(BaseHandler):
             pose, age = bridge.get_with_age('pose_odom')
 
         map_name = mode_state.map_name if mode_state.mode == 'navigation' else None
+        is_ap_active = system._setup_ap_active()
+        setup_dismissed = False if is_ap_active else (store.get_kv('setup_dismissed') == 'true' if store else False)
+        setup_completed = False if is_ap_active else (store.get_kv('setup_completed') == 'true' if store else False)
+        setup_step = 1 if is_ap_active else int(store.get_kv('setup_step') or '1')
+        try:
+            setup_dismissed_at = float(store.get_kv('setup_dismissed_at') or '0') if not is_ap_active else 0.0
+        except ValueError:
+            setup_dismissed_at = 0.0
 
         self.send({
             'robot': system.robot_identity(),
             'lifecycle': lifecycle['lifecycle'],
             'mode': mode_state.mode,
+            'hotspot_active': is_ap_active,
             'connection': {'wifi': system.wifi_online()},
             # Doc's example keys (motor/encoder/...) don't map to distinct
             # topics this SDK actually observes — reporting the real signal
@@ -212,9 +221,11 @@ class RobotStateHandler(BaseHandler):
                     'status': dock_status_val,
                     'operation': dock_tracker.state},
             'setup': {
-                'dismissed': store.get_kv('setup_dismissed') == 'true' if store else False,
-                'completed': store.get_kv('setup_completed') == 'true' if store else False,
-                'step': int(store.get_kv('setup_step') or '1') if store else 1,
+                'dismissed': setup_dismissed,
+                'completed': setup_completed,
+                'step': setup_step,
+                'hotspot_active': is_ap_active,
+                'dismissed_at': setup_dismissed_at,
             },
             'system': {
                 'cpu_load_pct': _get_cpu_load_pct(),
