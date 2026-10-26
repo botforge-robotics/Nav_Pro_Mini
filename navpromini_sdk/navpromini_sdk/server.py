@@ -290,13 +290,13 @@ def main(args=None) -> None:
     rosbridge_url = str(bridge.get_parameter('rosbridge_url').value)
 
     # Spin ROS on its own thread; tornado owns the main thread.
-    executor = MultiThreadedExecutor(num_threads=2)
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(bridge)
 
     def _spin_loop():
         while rclpy.ok():
             try:
-                executor.spin_once(timeout_sec=0.2)
+                executor.spin()
             except BaseException as e:
                 if not rclpy.ok():
                     break

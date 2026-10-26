@@ -16,7 +16,7 @@ from typing import Any
 from .base import ApiError
 
 
-async def ros_future(rf, timeout: float = 15.0) -> Any:
+async def ros_future(rf, timeout: float = 30.0) -> Any:
     """Await an rclpy Future from tornado's event loop."""
     loop = asyncio.get_running_loop()
     fut: asyncio.Future = loop.create_future()
@@ -29,7 +29,10 @@ async def ros_future(rf, timeout: float = 15.0) -> Any:
         except Exception as exc:  # noqa: BLE001
             loop.call_soon_threadsafe(fut.set_exception, exc)
 
-    rf.add_done_callback(_done)
+    if rf.done():
+        _done(rf)
+    else:
+        rf.add_done_callback(_done)
     try:
         return await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
@@ -37,7 +40,7 @@ async def ros_future(rf, timeout: float = 15.0) -> Any:
                        f'ROS call did not complete within {timeout}s')
 
 
-async def call_service(client, request, name: str, timeout: float = 15.0) -> Any:
+async def call_service(client, request, name: str, timeout: float = 30.0) -> Any:
     """Call a ROS service without ever blocking tornado's event loop.
 
     Readiness is checked with non-blocking async polling to tolerate DDS discovery jitter.

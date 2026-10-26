@@ -288,17 +288,18 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
                            'navigation mode needs a map — pass {"map": "<name>"}')
 
     state.busy = True
+    state.target_mode = mode
+    bridge.emit_event('mode.transitioning', {'target': mode, 'map': map_name})
     try:
-        # Always stop what is running first. Mapping and navigation are
-        # mutually exclusive (both own map->odom), so overlapping them even
-        # briefly corrupts the transform tree.
-        stop_target_id = state.launch_id or 'all'
-        try:
-            req = StopLaunch.Request()
-            req.unique_id = stop_target_id
-            await call_service(bridge.cli_stop, req, 'stop_launch', timeout=15.0)
-        except Exception as e:
-            bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
+        # Always stop what is running first if not already idle.
+        if state.mode != 'idle' or state.launch_id is not None:
+            stop_target_id = state.launch_id or 'all'
+            try:
+                req = StopLaunch.Request()
+                req.unique_id = stop_target_id
+                await call_service(bridge.cli_stop, req, 'stop_launch', timeout=20.0)
+            except Exception as e:
+                bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
         state.set('idle', None, None)
         bridge.publish_mode('idle')
         bridge.emit_event('mode.changed', {'mode': 'idle', 'map': None})
@@ -380,6 +381,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         return {'mode': mode, 'map': map_name, 'launch_id': resp.unique_id}
     finally:
         state.busy = False
+        state.target_mode = None
 
 
 class ModeHandler(BaseHandler):

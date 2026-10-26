@@ -177,6 +177,8 @@ class RobotStateHandler(BaseHandler):
             'robot': system.robot_identity(),
             'lifecycle': lifecycle['lifecycle'],
             'mode': mode_state.mode,
+            'mode_busy': mode_state.busy,
+            'target_mode': getattr(mode_state, 'target_mode', None),
             'hotspot_active': is_ap_active,
             'connection': {'wifi': system.wifi_online()},
             # Doc's example keys (motor/encoder/...) don't map to distinct
