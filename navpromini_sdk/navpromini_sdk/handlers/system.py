@@ -780,6 +780,7 @@ class WifiConnectHandler(BaseHandler):
             cmd.extend(['password', password])
 
         try:
+            self.bridge.emit_event('wifi.connecting', {'ssid': ssid})
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
                 self.bridge.emit_event('wifi.connected', {'ssid': ssid})
