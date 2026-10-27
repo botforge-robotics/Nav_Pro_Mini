@@ -1292,10 +1292,10 @@ def _get_ui_git_info(ui_dir: Path, target_branch: str | None = None) -> dict:
         if r.returncode == 0 and r.stdout.strip():
             info['branch'] = r.stdout.strip()
 
-        tb = target_branch if target_branch == 'main' else 'main'
+        tb = target_branch or info.get('branch') or 'dev'
         info['target_branch'] = tb
         info['remote_branch'] = f'origin/{tb}'
-        info['branches_available'] = ['main']
+        info['branches_available'] = ['dev', 'main']
 
         r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'log', '-1', '--format=%H%n%h%n%s%n%ci'],
                            capture_output=True, text=True, timeout=3)
@@ -1364,7 +1364,7 @@ class AppUpdateCheckHandler(BaseHandler):
             'latest_version': cur_ver,
             'update_available': git_info['commits_behind'] > 0,
             'update_type': 'git' if git_info['has_git'] else 'appimage',
-            'branch': 'main',
+            'branch': git_info.get('target_branch', 'dev'),
             'current_branch': git_info['branch'],
             'current_commit': git_info['current_commit'],
             'current_commit_short': git_info['current_commit_short'],
@@ -1374,8 +1374,8 @@ class AppUpdateCheckHandler(BaseHandler):
             'latest_commit_short': git_info['latest_commit_short'],
             'commits_behind': git_info['commits_behind'],
             'changelog': git_info['changelog'],
-            'branches_available': ['main'],
-            'release_name': f"main ({git_info['latest_commit_short'] or cur_ver})",
+            'branches_available': git_info.get('branches_available', ['dev', 'main']),
+            'release_name': f"{git_info.get('target_branch', 'dev')} ({git_info['latest_commit_short'] or cur_ver})",
             'release_notes': "\n".join(git_info['changelog']) if git_info['changelog'] else '',
             'download_url': None,
             'asset_name': None,
