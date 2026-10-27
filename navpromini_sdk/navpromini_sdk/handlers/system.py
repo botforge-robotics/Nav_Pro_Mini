@@ -783,6 +783,11 @@ class WifiConnectHandler(BaseHandler):
             self.bridge.emit_event('wifi.connecting', {'ssid': ssid})
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
+                store = self.opts.get('store')
+                if store:
+                    store.set_kv('setup_dismissed', 'false')
+                    store.set_kv('setup_completed', 'false')
+                    store.set_kv('setup_step', '2')
                 self.bridge.emit_event('wifi.connected', {'ssid': ssid})
                 self.send({'success': True, 'ssid': ssid, 'output': r.stdout})
             else:
@@ -1704,6 +1709,7 @@ class SetupHandler(BaseHandler):
                 store.set_kv('setup_step', str(step))
                 if step < 3 and dismissed is None:
                     store.set_kv('setup_dismissed', 'false')
+                    store.set_kv('setup_completed', 'false')
 
         payload = {
             'dismissed': store.get_kv('setup_dismissed') == 'true' if store else bool(dismissed),
