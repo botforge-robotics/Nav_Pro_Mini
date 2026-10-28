@@ -160,7 +160,7 @@ class RobotStateHandler(BaseHandler):
         # The robot is truly unlocalized only if no pose_map exists or if covariance is dispersed (> 0.45m^2).
         is_high_cov = (cov_x > 0.45 or cov_y > 0.45)
         localized = (pose is not None) and (not is_high_cov)
-        if pose is None:
+        if pose is None and mode_state.mode != 'mapping':
             pose, age = bridge.get_with_age('pose_odom')
 
         map_name = mode_state.map_name if mode_state.mode == 'navigation' else None
