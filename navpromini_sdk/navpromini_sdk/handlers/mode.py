@@ -234,9 +234,15 @@ def reconcile_mode(bridge, state) -> None:
 
     if observed == state.mode:
         return
-    if (observed == 'idle' and state.mode != 'idle'
-            and state.age() < _RECONCILE_IDLE_SETTLE_SEC):
-        return  # ambiguous: genuinely idle, or still starting up? — see above
+    # Settle grace in both directions:
+    # 1. When newly set to navigation/mapping, don't drop to idle if nodes take a few seconds to register.
+    # 2. When newly set to idle (e.g. user canceled/finished mapping), don't resurrect mapping/navigation
+    #    if dying nodes take a few seconds to unregister from the ROS graph.
+    if state.age() < _RECONCILE_IDLE_SETTLE_SEC:
+        if observed == 'idle' and state.mode != 'idle':
+            return
+        if observed != 'idle' and state.mode == 'idle':
+            return
     # launch_id genuinely can't be recovered for a launch the SDK didn't
     # start itself — there's no ROS-level way to ask launch_manager "what's
     # the id of whatever's currently running" if we never issued it. map
