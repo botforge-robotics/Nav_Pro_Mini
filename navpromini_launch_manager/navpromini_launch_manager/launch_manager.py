@@ -235,11 +235,15 @@ class LaunchManager(Node):
 
                 return response
 
-            # For normal async launches - terminate existing duplicate launch first
+            # For normal async launches - terminate existing duplicate or conflicting launch first
+            is_nav_or_slam = request.launch_file in ('mapping_launch.launch.py', 'navigation_launch.launch.py')
             for existing_id, existing_info in list(self.active_launches.items()):
-                if existing_info.get('package') == request.package and existing_info.get('launch_file') == request.launch_file:
+                ex_file = existing_info.get('launch_file')
+                is_dup = (existing_info.get('package') == request.package and ex_file == request.launch_file)
+                is_conflict = is_nav_or_slam and ex_file in ('mapping_launch.launch.py', 'navigation_launch.launch.py')
+                if is_dup or is_conflict:
                     self.get_logger().info(
-                        f"Stopping existing launch {existing_id} ({request.launch_file}) before starting new instance")
+                        f"Stopping existing launch {existing_id} ({ex_file}) before starting new instance")
                     try:
                         self._terminate_process(existing_info['process'], existing_info.get('cmd', ''))
                     except Exception as err:
@@ -344,19 +348,19 @@ class LaunchManager(Node):
             pgid = os.getpgid(process.pid)
             os.killpg(pgid, signal.SIGINT)
             try:
-                process.wait(timeout=4.0)
+                process.wait(timeout=1.5)
                 return True, "Process stopped gracefully"
             except subprocess.TimeoutExpired:
                 self.get_logger().warning(f"Graceful SIGINT timed out for {cmd_str}, sending SIGTERM")
                 os.killpg(pgid, signal.SIGTERM)
                 try:
-                    process.wait(timeout=2.0)
+                    process.wait(timeout=1.0)
                     return True, "Process terminated with SIGTERM"
                 except subprocess.TimeoutExpired:
                     self.get_logger().error(f"SIGTERM timed out for {cmd_str}, killing with SIGKILL")
                     os.killpg(pgid, signal.SIGKILL)
                     try:
-                        process.wait(timeout=1.0)
+                        process.wait(timeout=0.5)
                     except Exception:
                         pass
                     return True, "Process killed with SIGKILL"

@@ -291,15 +291,14 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
     state.target_mode = mode
     bridge.emit_event('mode.transitioning', {'target': mode, 'map': map_name})
     try:
-        # Always stop what is running first if not already idle.
-        if state.mode != 'idle' or state.launch_id is not None:
-            stop_target_id = state.launch_id or 'all'
-            try:
-                req = StopLaunch.Request()
-                req.unique_id = stop_target_id
-                await call_service(bridge.cli_stop, req, 'stop_launch', timeout=20.0)
-            except Exception as e:
-                bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
+        # Always stop whatever is currently running first to ensure a clean slate.
+        stop_target_id = state.launch_id or 'all'
+        try:
+            req = StopLaunch.Request()
+            req.unique_id = stop_target_id
+            await call_service(bridge.cli_stop, req, 'stop_launch', timeout=10.0)
+        except Exception as e:
+            bridge.get_logger().warn(f"StopLaunch error for '{stop_target_id}': {e}")
         state.set('idle', None, None)
         bridge.publish_mode('idle')
         bridge.emit_event('mode.changed', {'mode': 'idle', 'map': None})
@@ -328,14 +327,26 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         # Hold the rosbridge client count up BEFORE launching, so there is no
         # window where a zero count could kill the launch we just made.
         opts['client_hold'].acquire()
-        resp = await call_service(bridge.cli_launch, req,
-                                  'launch_with_args', timeout=60.0)
-        if not resp.success:
+        try:
+            resp = await call_service(bridge.cli_launch, req,
+                                      'launch_with_args', timeout=60.0)
+            if not resp.success:
+                raise ApiError(500, 'launch_failed', resp.message or 'launch failed',
+                               {'package': package, 'launch_file': launch_file})
+        except Exception as exc:
             opts['client_hold'].release()
-            bridge.emit_event(f'{mode}.failed', {'message': resp.message or 'launch failed'})
+            state.set('idle', None, None)
             bridge.publish_mode('idle')
-            raise ApiError(500, 'launch_failed', resp.message or 'launch failed',
-                           {'package': package, 'launch_file': launch_file})
+            err_msg = getattr(exc, 'message', str(exc)) or 'launch failed'
+            bridge.emit_event(f'{mode}.failed', {'message': err_msg})
+            bridge.emit_event('mode.changed', {'mode': 'idle', 'map': None})
+            try:
+                stop_req = StopLaunch.Request()
+                stop_req.unique_id = 'all'
+                await call_service(bridge.cli_stop, stop_req, 'stop_launch', timeout=10.0)
+            except Exception:
+                pass
+            raise
 
         state.set(mode, map_name, resp.unique_id)
         bridge.publish_mode(mode, map_name)
