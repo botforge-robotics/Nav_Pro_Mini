@@ -296,7 +296,7 @@ async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
         pass
 
 
-async def send_route_goal(bridge, target: dict):
+async def send_route_goal(bridge, target: dict, store=None):
     """Send a Road Network goal: plans via RouteServer's ComputeRoute,
     then drives along the road network via NavigateThroughPoses."""
     # 1. Undock if docked
@@ -333,7 +333,15 @@ async def send_route_goal(bridge, target: dict):
     else:
         bridge.set_route_reroute_on_collision(False)
 
-    # 4. Plan the route along the road network using RouteServer's ComputeRoute
+    # 4. Ensure road network graph is loaded in RouteServer
+    try:
+        from .road_network import load_route_graph_into_route_server
+        cur_map = (store.current_map() if store else None) or 'f202'
+        await load_route_graph_into_route_server(bridge, cur_map, store)
+    except Exception as exc:
+        bridge.get_logger().warn(f'Ensure road graph before route: {exc}')
+
+    # 5. Plan the route along the road network using RouteServer's ComputeRoute
     if 'x' not in target or 'y' not in target:
         raise ApiError(400, 'missing_field', 'Road network navigation requires valid goal_id or destination coordinates (x, y)')
 
@@ -355,7 +363,9 @@ async def send_route_goal(bridge, target: dict):
         route_res = await ros_future(route_handle.get_result_async(), timeout=10.0)
     except Exception as exc:
         bridge.get_logger().warn(f'Road network ComputeRoute failed ({exc}); falling back to free space navigation.')
-        return await send_navigate_goal(bridge, target)
+        fb_target = dict(target)
+        fb_target['routing_mode'] = 'free_space'
+        return await send_navigate_goal(bridge, fb_target, store=store)
 
     if (not route_res or getattr(route_res, 'status', None) != 4 or
             getattr(route_res.result, 'error_code', 0) != 0 or
@@ -363,7 +373,9 @@ async def send_route_goal(bridge, target: dict):
             not route_res.result.path.poses):
         err_code = getattr(route_res.result, 'error_code', 'unknown') if (route_res and hasattr(route_res, 'result')) else 'no_result'
         bridge.get_logger().warn(f'Road network routing unavailable (error_code={err_code}); falling back to free space navigation.')
-        return await send_navigate_goal(bridge, target)
+        fb_target = dict(target)
+        fb_target['routing_mode'] = 'free_space'
+        return await send_navigate_goal(bridge, fb_target, store=store)
 
     # Publish computed road network path to /plan immediately for visualization
     try:
@@ -371,7 +383,7 @@ async def send_route_goal(bridge, target: dict):
     except Exception:
         pass
 
-    # 5. Extract waypoints along the route to traverse
+    # 6. Extract waypoints along the route to traverse
     pose_map, _ = bridge.get_with_age('pose_map')
     rx = float(pose_map['x']) if (pose_map and 'x' in pose_map) else float(route_res.result.path.poses[0].pose.position.x)
     ry = float(pose_map['y']) if (pose_map and 'y' in pose_map) else float(route_res.result.path.poses[0].pose.position.y)
@@ -408,7 +420,7 @@ async def send_route_goal(bridge, target: dict):
         p_final.pose.orientation.w = math.cos(target_theta / 2.0)
         poses.append(p_final)
 
-    # 6. Dispatch navigation through the waypoints
+    # 7. Dispatch navigation through the waypoints
     if len(poses) <= 1:
         single_pose = poses[0] if poses else compute_goal.goal
         goal = NavigateToPose.Goal()
@@ -434,7 +446,7 @@ async def send_route_goal(bridge, target: dict):
     return handle
 
 
-async def send_navigate_goal(bridge, target: dict):
+async def send_navigate_goal(bridge, target: dict, store=None):
     """Build and send the nav goal, returning the accepted handle.
 
     Routed through dock_manager's `undock` action rather than bt_navigator's
@@ -448,7 +460,7 @@ async def send_navigate_goal(bridge, target: dict):
     background task. See navigate_to() for the awaited-result counterpart.
     """
     if target.get('routing_mode') == 'road_network':
-        return await send_route_goal(bridge, target)
+        return await send_route_goal(bridge, target, store=store)
 
     x, y, theta = target['x'], target['y'], target.get('theta', 0.0)
     # Check if robot is docked or inside docking standoff
@@ -554,7 +566,7 @@ class GotoHandler(BaseHandler):
         if TRACKER.state == 'active' and TRACKER.handle is not None:
             await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
 
-        handle = await send_navigate_goal(self.bridge, target)
+        handle = await send_navigate_goal(self.bridge, target, store=self.opts['store'])
 
         # Resolve the result in the background so the HTTP call returns as soon
         # as the goal is accepted. Callers poll /navigation/status or watch the
@@ -580,7 +592,7 @@ class RouteHandler(BaseHandler):
         if TRACKER.state == 'active' and TRACKER.handle is not None:
             await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
 
-        handle = await send_route_goal(self.bridge, target)
+        handle = await send_route_goal(self.bridge, target, store=self.opts['store'])
         self.opts['spawn'](await_navigate_result(self.bridge, handle, target))
         self.send({'accepted': True, 'target': target, 'routing_mode': 'road_network'}, status=202)
 
