@@ -292,13 +292,20 @@ planner_server:
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 3.0
     GridBased:
-      plugin: "nav2_theta_star_planner::ThetaStarPlanner"
-      how_many_corners: 8
-      w_euc_cost: 1.0
-      w_traversal_cost: 2.0
-      use_final_approach_orientation: false
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.50
+      downsample_costmap: false
       allow_unknown: true
-      terminal_checking_interval: 5000
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      cost_travel_multiplier: 0.0
+      use_final_approach_orientation: false
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.4
+        w_data: 0.1
+        tolerance: 1.0e-10
 
     GridBasedNavFn:
       plugin: "nav2_smac_planner::SmacPlanner2D"
