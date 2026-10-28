@@ -57,6 +57,39 @@ class _GoalTracker:
 TRACKER = _GoalTracker()
 
 
+def find_nearest_road_node(store, x: float, y: float, max_distance: float = 50.0) -> int | None:
+    """Find the nearest road network node ID to (x, y) coordinates."""
+    try:
+        rn = store.get_road_network()
+        if not rn or not rn.get('features'):
+            from .road_network import read_roadnet_file
+            cur_map = store.current_map() or 'default'
+            rn = read_roadnet_file(cur_map)
+        if not rn or not rn.get('features'):
+            return None
+        best_id = None
+        best_dist = float('inf')
+        for f in rn.get('features', []):
+            if f.get('geometry', {}).get('type') == 'Point':
+                coords = f.get('geometry', {}).get('coordinates', [])
+                if len(coords) >= 2:
+                    props = f.get('properties', {})
+                    raw_id = props.get('id', f.get('id'))
+                    if raw_id is None:
+                        continue
+                    try:
+                        nid = int(str(raw_id).replace('node_', ''))
+                    except (ValueError, TypeError):
+                        continue
+                    dist = math.hypot(float(coords[0]) - x, float(coords[1]) - y)
+                    if dist < best_dist and dist <= max_distance:
+                        best_dist = dist
+                        best_id = nid
+        return best_id
+    except Exception:
+        return None
+
+
 def resolve_target(store, data: dict) -> dict:
     """Waypoint name, raw x/y/theta, or road network node ID -> a target dict. Shared by
     GotoHandler, RouteHandler, and the mission runner's navigate step (missions.py)."""
@@ -83,6 +116,10 @@ def resolve_target(store, data: dict) -> dict:
         target['x'] = float(wp['x'])
         target['y'] = float(wp['y'])
         target['theta'] = float(wp.get('theta', 0.0))
+        if target.get('routing_mode') == 'road_network' and target.get('goal_id') is None:
+            nearest_id = find_nearest_road_node(store, target['x'], target['y'])
+            if nearest_id is not None:
+                target['goal_id'] = nearest_id
         return target
 
     if target.get('routing_mode') == 'road_network' and target.get('goal_id') is not None:
@@ -114,6 +151,10 @@ def resolve_target(store, data: dict) -> dict:
     target['x'] = float(data['x'])
     target['y'] = float(data['y'])
     target['theta'] = float(data.get('theta', 0.0))
+    if target.get('routing_mode') == 'road_network' and target.get('goal_id') is None:
+        nearest_id = find_nearest_road_node(store, target['x'], target['y'])
+        if nearest_id is not None:
+            target['goal_id'] = nearest_id
     return target
 
 
@@ -313,7 +354,12 @@ async def send_route_goal(bridge, target: dict):
     else:
         raise ApiError(400, 'missing_field', 'Road network navigation requires valid goal_id or destination coordinates (x, y)')
 
-    handle = await send_goal(goal=goal, action_client=bridge.act_route, name='road_network')
+    try:
+        handle = await send_goal(goal=goal, action_client=bridge.act_route, name='road_network')
+    except Exception as exc:
+        bridge.get_logger().warn(f'Road network routing unavailable ({exc}); falling back to free space navigation.')
+        return await send_navigate_goal(bridge, target)
+
     TRACKER.begin(handle, target)
     bridge.emit_event('navigation.started', {'target': target, 'routing_mode': 'road_network', 'reroute_policy': policy})
 
