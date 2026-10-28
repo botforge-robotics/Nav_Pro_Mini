@@ -267,13 +267,15 @@ from PIL import Image
 
 class CurrentMapInfoHandler(BaseHandler):
     def get(self) -> None:
+        state = self.opts.get('mode_state')
         m = self.bridge.get('map_msg')
-        if not m:
-            self.send({'loaded': False, 'current': self.opts['store'].current_map()})
+        if not m or (state and state.mode == 'mapping' and not m):
+            self.send({'loaded': False, 'current': self.opts['store'].current_map(), 'mode': state.mode if state else 'unknown'})
             return
         resp = {
             'loaded': True,
             'current': self.opts['store'].current_map(),
+            'mode': state.mode if state else 'unknown',
             'width': m.info.width,
             'height': m.info.height,
             'resolution': float(m.info.resolution),

@@ -326,7 +326,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         bridge.publish_mode('idle')
         bridge.emit_event('mode.changed', {'mode': 'idle', 'map': None})
         opts['client_hold'].release()
-        bridge.invalidate('pose_map', 'dock_status')
+        bridge.invalidate('pose_map', 'dock_status', 'map_msg', 'dock_pose', 'plan', 'dock_tag')
 
         # Clean up any lingering or orphaned nav2/amcl/slam processes that may
         # have survived StopLaunch, preventing zombie nodes from blocking lifecycle transitions.

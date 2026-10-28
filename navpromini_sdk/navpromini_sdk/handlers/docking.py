@@ -292,6 +292,15 @@ class DockPoseHandler(BaseHandler):
         value = None
         age = 0.0
 
+        # If currently creating a new map in mapping mode, old map dock poses are invalid!
+        mode_state = self.opts.get('mode_state')
+        if mode_state and mode_state.mode == 'mapping':
+            cached, topic_age = self.bridge.get_with_age('dock_pose')
+            if cached is not None and cached.get('frame') == 'map':
+                self.send(cached)
+                return
+            raise ApiError(404, 'no_dock_pose', 'No dock pose in active mapping session')
+
         # 1. Authoritative check: active map's 'Charging Dock' waypoint from SQLite store
         store = self.opts.get('store')
         current_map = store.current_map() if store else None
