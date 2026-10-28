@@ -66,7 +66,11 @@ def resolve_target(store, data: dict) -> dict:
         'wait_timeout_sec': float(data.get('wait_timeout_sec', 5.0)),
     }
     if 'goal_id' in data and data['goal_id'] is not None:
-        target['goal_id'] = int(data['goal_id'])
+        raw_gid = str(data['goal_id']).replace('node_', '')
+        try:
+            target['goal_id'] = int(raw_gid)
+        except (ValueError, TypeError):
+            pass
 
     wp_name = data.get('waypoint') or data.get('target')
     if wp_name is not None and isinstance(wp_name, str):
@@ -81,7 +85,25 @@ def resolve_target(store, data: dict) -> dict:
         target['theta'] = float(wp.get('theta', 0.0))
         return target
 
-    if target.get('routing_mode') == 'road_network' and 'goal_id' in target:
+    if target.get('routing_mode') == 'road_network' and target.get('goal_id') is not None:
+        if 'x' not in target or 'y' not in target:
+            try:
+                rn = store.get_road_network()
+                if rn and 'features' in rn:
+                    for f in rn['features']:
+                        geom = f.get('geometry', {})
+                        props = f.get('properties', {})
+                        f_id = f.get('id')
+                        gid = target['goal_id']
+                        if (f_id == gid or f_id == f'node_{gid}' or props.get('name') == f'Node {gid}') and geom.get('type') == 'Point':
+                            coords = geom.get('coordinates', [])
+                            if len(coords) >= 2:
+                                target['x'] = float(coords[0])
+                                target['y'] = float(coords[1])
+                                target['theta'] = float(props.get('theta', 0.0))
+                                break
+            except Exception:
+                pass
         return target
 
     missing = [f for f in ('x', 'y') if f not in data]
@@ -272,11 +294,12 @@ async def send_route_goal(bridge, target: dict):
     # 4. Construct ComputeAndTrackRoute goal
     from nav2_msgs.action import ComputeAndTrackRoute
     goal = ComputeAndTrackRoute.Goal()
-    if 'goal_id' in target and target['goal_id'] is not None and int(target['goal_id']) > 0:
-        goal.goal_id = int(target['goal_id'])
+    gid = target.get('goal_id')
+    if gid is not None and isinstance(gid, int) and gid > 0:
+        goal.goal_id = gid
         goal.use_poses = False
         goal.use_start = False
-    else:
+    elif 'x' in target and 'y' in target:
         goal.use_poses = True
         goal.use_start = False
         x = float(target['x'])
@@ -287,6 +310,8 @@ async def send_route_goal(bridge, target: dict):
         goal.goal.pose.position.y = y
         goal.goal.pose.orientation.z = math.sin(theta / 2.0)
         goal.goal.pose.orientation.w = math.cos(theta / 2.0)
+    else:
+        raise ApiError(400, 'missing_field', 'Road network navigation requires valid goal_id or destination coordinates (x, y)')
 
     handle = await send_goal(goal=goal, action_client=bridge.act_route, name='road_network')
     TRACKER.begin(handle, target)

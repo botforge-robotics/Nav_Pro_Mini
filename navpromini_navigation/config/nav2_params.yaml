@@ -293,12 +293,12 @@ planner_server:
     costmap_update_timeout: 3.0
     GridBased:
       plugin: "nav2_smac_planner::SmacPlanner2D"
-      tolerance: 0.50
+      tolerance: 1.00
       downsample_costmap: false
       allow_unknown: true
       max_iterations: 1000000
-      max_on_approach_iterations: 1000
-      max_planning_time: 2.0
+      max_on_approach_iterations: 2000
+      max_planning_time: 5.0
       cost_travel_multiplier: 2.0
       use_final_approach_orientation: false
       smoother:
