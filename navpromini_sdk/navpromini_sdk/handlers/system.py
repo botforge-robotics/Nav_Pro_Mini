@@ -1123,6 +1123,10 @@ def _perform_factory_reset(bridge, store, reboot=True, forget_wifi=True, clear_d
         bridge.get_logger().info("[FACTORY RESET]: Wiping store tables (waypoints, missions, schedules)...")
         try:
             store.wipe_all()
+            store.set_kv('setup_dismissed', 'false')
+            store.set_kv('setup_completed', 'false')
+            store.set_kv('setup_step', '1')
+            store.set_kv('setup_dismissed_at', '0')
         except Exception as e:
             bridge.get_logger().error(f"[FACTORY RESET]: Failed wiping store: {e}")
 
