@@ -274,7 +274,7 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
+        cost_scaling_factor: 2.5
         inflation_radius: 0.36
       always_send_full_costmap: True
 
@@ -299,13 +299,14 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 2.0
-      cost_travel_multiplier: 0.0
+      cost_travel_multiplier: 2.0
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
-        w_smooth: 0.4
-        w_data: 0.1
+        w_smooth: 0.35
+        w_data: 0.18
         tolerance: 1.0e-10
+        do_refinement: true
 
     GridBasedNavFn:
       plugin: "nav2_smac_planner::SmacPlanner2D"
