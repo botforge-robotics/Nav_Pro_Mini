@@ -413,6 +413,15 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
                             msg.pose.orientation.w = math.cos(theta / 2.0)
                             opts['dock_pose_pub'].publish(msg)
                 bridge.emit_event('map.loaded', {'name': map_name})
+                try:
+                    from .road_network import load_route_graph_into_route_server
+                    def _load_rn(m=map_name, s=store):
+                        opts.get('spawn', asyncio.create_task)(
+                            load_route_graph_into_route_server(bridge, m, s)
+                        )
+                    _once(bridge, 3.0, _load_rn)
+                except Exception as exc:
+                    bridge.get_logger().warn(f'Auto-loading road network scheduled note: {exc}')
             _seed_pose_from_dock(bridge, state)
         return {'mode': mode, 'map': map_name, 'launch_id': resp.unique_id}
     finally:

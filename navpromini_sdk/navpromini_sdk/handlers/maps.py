@@ -189,7 +189,7 @@ class MapHandler(BaseHandler):
         if not resp.success:
             raise ApiError(404, 'map_not_found', resp.message or f'no map {name!r}')
 
-        # Clean up database records (zones, waypoints, missions) associated with the deleted map
+        # Clean up database records (zones, waypoints, missions, road_networks) associated with the deleted map
         store = self.opts['store']
         try:
             for z in store.list_zones(name):
@@ -198,8 +198,15 @@ class MapHandler(BaseHandler):
                 store.delete_waypoint(wp['name'], name)
             for m in store.list_missions(name):
                 store.delete_mission(m['id'], name)
+            store.delete_road_network(name)
             if store.current_map() == name:
                 store.set_current_map('default')
+        except Exception:
+            pass
+
+        try:
+            from .road_network import delete_roadnet_files
+            delete_roadnet_files(name)
         except Exception:
             pass
 
@@ -468,4 +475,50 @@ class ZoneHandler(BaseHandler):
         if zone_mgr:
             zone_mgr.update_zones(map_name)
         self.send({'status': 'ok', 'map': map_name, 'id': zone_id})
+
+
+class MapRoadNetworkHandler(BaseHandler):
+    """GET /maps/<name>/road_network
+       POST /maps/<name>/road_network
+       DELETE /maps/<name>/road_network
+    """
+    async def get(self, name: str) -> None:
+        store = self.opts['store']
+        from .road_network import read_roadnet_file
+        geojson = store.get_road_network(name) or read_roadnet_file(name)
+        if not geojson:
+            geojson = {
+                'type': 'FeatureCollection',
+                'name': 'graph',
+                'crs': {'type': 'name', 'properties': {'name': 'urn:ogc:def:crs:EPSG::3857'}},
+                'features': [],
+            }
+        self.send({'map': name, 'geojson': geojson, 'features_count': len(geojson.get('features', []))})
+
+    async def post(self, name: str) -> None:
+        store = self.opts['store']
+        from .road_network import save_roadnet_files, load_route_graph_into_route_server
+        data = self.body()
+        geojson = data.get('geojson') or data
+        if not isinstance(geojson, dict) or geojson.get('type') != 'FeatureCollection':
+            raise ApiError(400, 'invalid_geojson', 'Expected GeoJSON FeatureCollection')
+        features = geojson.get('features', [])
+        store.put_road_network(geojson, name)
+        path = save_roadnet_files(name, geojson)
+        loaded = False
+        mode_state = self.opts.get('mode_state')
+        if mode_state and mode_state.mode == 'navigation' and (mode_state.map_name == name or store.current_map() == name):
+            try:
+                loaded = await load_route_graph_into_route_server(self.bridge, name, store)
+            except Exception:
+                pass
+        self.send({'saved': True, 'map': name, 'path': path, 'features_count': len(features), 'loaded_live': loaded})
+
+    async def delete(self, name: str) -> None:
+        store = self.opts['store']
+        from .road_network import delete_roadnet_files
+        store.delete_road_network(name)
+        delete_roadnet_files(name)
+        self.send({'deleted': True, 'map': name})
+
 

@@ -32,7 +32,8 @@ from typing import Any, Callable, Optional
 import rclpy
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from nav2_msgs.action import DockRobot, DriveOnHeading, NavigateToPose, Spin
+from nav2_msgs.action import ComputeAndTrackRoute, ComputeRoute, DockRobot, DriveOnHeading, NavigateToPose, Spin
+from nav2_msgs.srv import DynamicEdges, SetRouteGraph
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
@@ -44,7 +45,7 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import BatteryState, CompressedImage, Imu, LaserScan
 from std_msgs.msg import Float32, Float32MultiArray, String
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty, Trigger
 
 from navpromini_launch_manager_interfaces.srv import (
     DeleteMap,
@@ -52,7 +53,7 @@ from navpromini_launch_manager_interfaces.srv import (
     LaunchWithArgs,
     StopLaunch,
 )
-from rcl_interfaces.srv import GetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 
 # battery.low fires once on crossing below this, not on every reading below
 # it — see _on_battery. A pack sitting right at the line would otherwise emit
@@ -173,12 +174,22 @@ class RosBridge(Node):
         self.cli_map_server_param = self.create_client(
             GetParameters, '/map_server/get_parameters', callback_group=cb)
         self.cli_global_loc = self.create_client(Empty, '/reinitialize_global_localization', callback_group=cb)
+        self.cli_set_route_graph = self.create_client(
+            SetRouteGraph, '/route_server/set_route_graph', callback_group=cb)
+        self.cli_reroute = self.create_client(
+            Trigger, '/route_server/ReroutingService/reroute', callback_group=cb)
+        self.cli_dynamic_edges = self.create_client(
+            DynamicEdges, '/route_server/dynamic_edges', callback_group=cb)
+        self.cli_route_server_param = self.create_client(
+            SetParameters, '/route_server/set_parameters', callback_group=cb)
 
         # --- action clients -------------------------------------------------
         # Navigation goes through dock_manager's `undock`, never bt_navigator
         # directly: it undocks first when docked, so a docked robot cannot be
         # told to drive off while still on the connector.
         self.act_navigate = ActionClient(self, NavigateToPose, 'undock', callback_group=cb)
+        self.act_route = ActionClient(self, ComputeAndTrackRoute, '/compute_and_track_route', callback_group=cb)
+        self.act_compute_route = ActionClient(self, ComputeRoute, '/compute_route', callback_group=cb)
         self.act_dock = ActionClient(self, DockRobot, 'dock', callback_group=cb)
         self.act_drive = ActionClient(self, DriveOnHeading, 'drive_on_heading',
                                       callback_group=cb)
@@ -237,6 +248,17 @@ class RosBridge(Node):
     def remove_listener(self, fn: Callable[[str, Any], None]) -> None:
         if fn in self._listeners:
             self._listeners.remove(fn)
+
+    def set_route_reroute_on_collision(self, enabled: bool):
+        """Dynamically toggle RouteServer's CollisionMonitor reroute behavior."""
+        from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+        from rcl_interfaces.srv import SetParameters
+        req = SetParameters.Request()
+        p = Parameter()
+        p.name = 'CollisionMonitor.reroute_on_collision'
+        p.value = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=bool(enabled))
+        req.parameters.append(p)
+        return self.cli_route_server_param.call_async(req)
 
     # -- semantic events ------------------------------------------------------
     #

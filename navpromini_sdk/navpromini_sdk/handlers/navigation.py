@@ -58,8 +58,16 @@ TRACKER = _GoalTracker()
 
 
 def resolve_target(store, data: dict) -> dict:
-    """Waypoint name or raw x/y/theta -> a target dict. Shared by GotoHandler
-    and the mission runner's navigate step (missions.py). Accepts 'waypoint' or 'target'."""
+    """Waypoint name, raw x/y/theta, or road network node ID -> a target dict. Shared by
+    GotoHandler, RouteHandler, and the mission runner's navigate step (missions.py)."""
+    target: dict = {
+        'routing_mode': data.get('routing_mode', 'free_space'),
+        'reroute_policy': data.get('reroute_policy', 'wait_then_reroute'),
+        'wait_timeout_sec': float(data.get('wait_timeout_sec', 5.0)),
+    }
+    if 'goal_id' in data and data['goal_id'] is not None:
+        target['goal_id'] = int(data['goal_id'])
+
     wp_name = data.get('waypoint') or data.get('target')
     if wp_name is not None and isinstance(wp_name, str):
         wp = store.get_waypoint(str(wp_name))
@@ -67,16 +75,24 @@ def resolve_target(store, data: dict) -> dict:
             raise ApiError(404, 'waypoint_not_found',
                            f"No waypoint named {wp_name!r}",
                            {'waypoint': wp_name})
-        x, y, theta = wp['x'], wp['y'], wp.get('theta', 0.0)
-        return {'waypoint': wp['name'], 'x': x, 'y': y, 'theta': theta}
+        target['waypoint'] = wp['name']
+        target['x'] = float(wp['x'])
+        target['y'] = float(wp['y'])
+        target['theta'] = float(wp.get('theta', 0.0))
+        return target
+
+    if target.get('routing_mode') == 'road_network' and 'goal_id' in target:
+        return target
+
     missing = [f for f in ('x', 'y') if f not in data]
     if missing:
         raise ApiError(400, 'missing_field',
-                       'Provide either "waypoint" / "target" or both "x" and "y"',
+                       'Provide either "waypoint" / "target", "goal_id", or both "x" and "y"',
                        {'missing': missing})
-    x, y = float(data['x']), float(data['y'])
-    theta = float(data.get('theta', 0.0))
-    return {'x': x, 'y': y, 'theta': theta}
+    target['x'] = float(data['x'])
+    target['y'] = float(data['y'])
+    target['theta'] = float(data.get('theta', 0.0))
+    return target
 
 
 def load_saved_dock_config() -> dict | None:
@@ -184,6 +200,105 @@ async def relocalize_at_dock(bridge, dock_info: dict | None = None) -> bool:
     return True
 
 
+async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
+    """Monitors if robot is blocked/stationary while road route tracking is active.
+    If stationary for >= timeout_sec, triggers RouteServer ReroutingService."""
+    stationary_start = None
+    try:
+        while TRACKER.state == 'active' and TRACKER.handle is handle:
+            await asyncio.sleep(0.5)
+            vel = bridge.get('velocity') or {}
+            vx = abs(float(vel.get('linear_x', 0.0)))
+            wz = abs(float(vel.get('angular_z', 0.0)))
+            is_stopped = (vx < 0.02 and wz < 0.04)
+
+            if is_stopped:
+                now = time.time()
+                if stationary_start is None:
+                    stationary_start = now
+                elif now - stationary_start >= timeout_sec:
+                    bridge.get_logger().info(f'Robot stopped on road for {timeout_sec:.1f}s; requesting RouteServer reroute...')
+                    bridge.emit_event('navigation.rerouting', {'reason': 'obstacle_wait_timeout', 'timeout_sec': timeout_sec})
+                    try:
+                        from std_srvs.srv import Trigger
+                        req = Trigger.Request()
+                        await call_service(bridge.cli_reroute, req, 'reroute', timeout=3.0)
+                    except Exception as exc:
+                        bridge.get_logger().warn(f'Reroute trigger call note: {exc}')
+                    # Backoff so we do not spam reroute requests every 0.5s
+                    stationary_start = time.time() + 6.0
+            else:
+                stationary_start = None
+    except Exception:
+        pass
+
+
+async def send_route_goal(bridge, target: dict):
+    """Send a Road Network goal via Nav2 RouteServer's ComputeAndTrackRoute action."""
+    # 1. Undock if docked
+    near_dock, dock_info = is_near_dock_or_docked(bridge)
+    if dock_info.get('is_docked'):
+        bridge.get_logger().info('Robot is currently docked; automatically undocking before road route...')
+        try:
+            from .docking import undock_robot
+            undock_res = await undock_robot(bridge, timeout=60.0)
+            if not undock_res.get('ok'):
+                bridge.get_logger().warn(f"Auto-undock note: {undock_res.get('message')}")
+        except Exception as exc:
+            bridge.get_logger().warn(f"Auto-undock before road route encountered error: {exc}")
+
+    # 2. Localization check
+    pose_map, _ = bridge.get_with_age('pose_map')
+    is_unlocalized = (pose_map is None) or (float(pose_map.get('cov_x', 0.0)) > 0.45 or float(pose_map.get('cov_y', 0.0)) > 0.45)
+    if is_unlocalized:
+        if near_dock:
+            bridge.get_logger().info('Robot near dock and delocalized: relocalizing at dock...')
+            await relocalize_at_dock(bridge, dock_info)
+        else:
+            bridge.get_logger().info('Robot delocalized before road route; auto-running relocalization recovery...')
+            bridge.emit_event('localization.recovering', {'target': target})
+            try:
+                await run_relocalize_spin(bridge, angular_vel=0.35, timeout_sec=22.0)
+            except Exception as exc:
+                bridge.get_logger().warn(f'Pre-route relocalization recovery note: {exc}')
+
+    # 3. Configure reroute on collision parameter
+    policy = target.get('reroute_policy', 'wait_then_reroute')
+    if policy == 'immediate':
+        bridge.set_route_reroute_on_collision(True)
+    else:
+        bridge.set_route_reroute_on_collision(False)
+
+    # 4. Construct ComputeAndTrackRoute goal
+    from nav2_msgs.action import ComputeAndTrackRoute
+    goal = ComputeAndTrackRoute.Goal()
+    if 'goal_id' in target and target['goal_id'] is not None and int(target['goal_id']) > 0:
+        goal.goal_id = int(target['goal_id'])
+        goal.use_poses = False
+        goal.use_start = False
+    else:
+        goal.use_poses = True
+        goal.use_start = False
+        x = float(target['x'])
+        y = float(target['y'])
+        theta = float(target.get('theta', 0.0))
+        goal.goal.header.frame_id = 'map'
+        goal.goal.pose.position.x = x
+        goal.goal.pose.position.y = y
+        goal.goal.pose.orientation.z = math.sin(theta / 2.0)
+        goal.goal.pose.orientation.w = math.cos(theta / 2.0)
+
+    handle = await send_goal(goal=goal, action_client=bridge.act_route, name='road_network')
+    TRACKER.begin(handle, target)
+    bridge.emit_event('navigation.started', {'target': target, 'routing_mode': 'road_network', 'reroute_policy': policy})
+
+    if policy == 'wait_then_reroute':
+        timeout_sec = float(target.get('wait_timeout_sec', 5.0))
+        asyncio.create_task(_watch_wait_and_reroute(bridge, handle, timeout_sec))
+
+    return handle
+
+
 async def send_navigate_goal(bridge, target: dict):
     """Build and send the nav goal, returning the accepted handle.
 
@@ -197,6 +312,9 @@ async def send_navigate_goal(bridge, target: dict):
     surface synchronously as an HTTP error, not silently vanish into a
     background task. See navigate_to() for the awaited-result counterpart.
     """
+    if target.get('routing_mode') == 'road_network':
+        return await send_route_goal(bridge, target)
+
     x, y, theta = target['x'], target['y'], target.get('theta', 0.0)
     # Check if robot is docked or inside docking standoff
     near_dock, dock_info = is_near_dock_or_docked(bridge)
@@ -309,6 +427,27 @@ class GotoHandler(BaseHandler):
         # tie up a connection and hit every proxy timeout in between.
         self.opts['spawn'](await_navigate_result(self.bridge, handle, target))
         self.send({'accepted': True, 'target': target}, status=202)
+
+
+class RouteHandler(BaseHandler):
+    """Send a Road Network goal explicitly."""
+
+    async def post(self) -> None:
+        data = self.body()
+        data['routing_mode'] = 'road_network'
+        target = resolve_target(self.opts['store'], data)
+
+        if TRACKER.state == 'active' and not data.get('replace', False):
+            raise ApiError(409, 'goal_active',
+                           'A navigation goal is already running. Cancel it, or '
+                           'resend with {"replace": true}.',
+                           {'current': TRACKER.snapshot()})
+        if TRACKER.state == 'active' and TRACKER.handle is not None:
+            await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+
+        handle = await send_route_goal(self.bridge, target)
+        self.opts['spawn'](await_navigate_result(self.bridge, handle, target))
+        self.send({'accepted': True, 'target': target, 'routing_mode': 'road_network'}, status=202)
 
 
 class StatusHandler(BaseHandler):

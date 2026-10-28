@@ -34,6 +34,7 @@ from .handlers import (
     mode,
     motion,
     navigation,
+    road_network,
     schedules,
     state,
     system,
@@ -123,15 +124,20 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/maps/([^/]+)/activate', maps.ActivateMapHandler, opts),
         (rf'{API}/maps/([^/]+)/zones/([^/]+)', maps.MapZoneHandler, opts),
         (rf'{API}/maps/([^/]+)/zones', maps.MapZonesHandler, opts),
+        (rf'{API}/maps/([^/]+)/road_network', maps.MapRoadNetworkHandler, opts),
         (rf'{API}/maps/([^/]+)', maps.MapHandler, opts),
         # zones
         (rf'{API}/zones/([^/]+)', maps.ZoneHandler, opts),
         (rf'{API}/zones', maps.ZonesHandler, opts),
+        # road network
+        (rf'{API}/road_network/reroute', road_network.RerouteHandler, opts),
+        (rf'{API}/road_network', road_network.RoadNetworkHandler, opts),
         # waypoints
         (rf'{API}/waypoints', waypoints.WaypointsHandler, opts),
         (rf'{API}/waypoints/([^/]+)', waypoints.WaypointHandler, opts),
         # navigation
         (rf'{API}/navigation/goto', navigation.GotoHandler, opts),
+        (rf'{API}/navigation/route', navigation.RouteHandler, opts),
         (rf'{API}/navigation/status', navigation.StatusHandler, opts),
         (rf'{API}/navigation/goal', navigation.CancelHandler, opts),
         (rf'{API}/navigation/localize', navigation.LocalizeHandler, opts),
