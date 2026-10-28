@@ -346,12 +346,13 @@ class CancelHandler(BaseHandler):
 
 async def run_relocalize_spin(
     bridge,
-    angular_vel: float = 0.35,
-    timeout_sec: float = 22.0,
+    angular_vel: float = 0.38,
+    max_tries: int = 3,
+    timeout_sec: float = 50.0,
     target_cov: float = 0.15,
     target_cov_yaw: float = 0.12,
 ) -> dict:
-    """Disperse AMCL particles and smoothly rotate in place to let laser scans converge."""
+    """Disperse AMCL particles and autonomously rotate in place across multiple scan tries until converged."""
     near_dock, dock_info = is_near_dock_or_docked(bridge)
     if near_dock:
         bridge.get_logger().info('run_relocalize_spin requested while near dock/standoff: PREVENTING SPIN and relocalizing directly at dock')
@@ -359,6 +360,7 @@ async def run_relocalize_spin(
         return {
             'status': 'ok',
             'converged': True,
+            'tries': 1,
             'elapsed_sec': 0.0,
             'covariance': {'cov_x': 0.05, 'cov_y': 0.05, 'cov_yaw': 0.02},
             'message': 'Robot is at dock/standoff: relocalized directly at dock without spinning.',
@@ -367,28 +369,66 @@ async def run_relocalize_spin(
     ok = bridge.reinitialize_global_localization(timeout_sec=3.0)
     if not ok:
         raise ApiError(503, 'service_unavailable', 'AMCL /reinitialize_global_localization service unavailable')
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.5)
 
     start_time = time.time()
     converged = False
     last_cov = {}
+    current_try = 1
+
+    # Duration of one 360-degree rotation (2*pi / angular_vel)
+    abs_speed = max(0.15, abs(angular_vel))
+    cycle_duration = (2.0 * math.pi) / abs_speed  # ~16.5 seconds per 360-deg rotation
+
+    # Alternating direction pattern: CCW (+), CW (-), CCW (+)
+    directions = [1.0, -1.0, 1.0]
+
+    bridge.get_logger().info(
+        f'Starting autonomous relocalization: max_tries={max_tries}, speed={abs_speed:.2f} rad/s, cycle_duration={cycle_duration:.1f}s'
+    )
 
     try:
-        while (time.time() - start_time) < timeout_sec:
-            bridge.publish_cmd_vel(0.0, angular_vel)
-            await asyncio.sleep(0.1)
+        for try_idx in range(max(1, max_tries)):
+            current_try = try_idx + 1
+            direction = directions[try_idx % len(directions)]
+            target_w = direction * abs_speed
+            cycle_start = time.time()
 
-            pose_map = bridge.get('pose_map')
-            if pose_map:
-                cx = pose_map.get('cov_x', 999.0)
-                cy = pose_map.get('cov_y', 999.0)
-                cyaw = pose_map.get('cov_yaw', 999.0)
-                last_cov = {'cov_x': cx, 'cov_y': cy, 'cov_yaw': cyaw}
+            bridge.get_logger().info(
+                f'Relocalization scan cycle {current_try}/{max_tries} started (w={target_w:+.2f} rad/s)'
+            )
 
-                elapsed = time.time() - start_time
-                if elapsed > 2.5 and cx < target_cov and cy < target_cov and cyaw < target_cov_yaw:
-                    converged = True
+            while (time.time() - cycle_start) < cycle_duration:
+                if (time.time() - start_time) >= timeout_sec:
                     break
+
+                bridge.publish_cmd_vel(0.0, target_w)
+                await asyncio.sleep(0.1)
+
+                pose_map = bridge.get('pose_map')
+                if pose_map:
+                    cx = float(pose_map.get('cov_x', 999.0))
+                    cy = float(pose_map.get('cov_y', 999.0))
+                    cyaw = float(pose_map.get('cov_yaw', 999.0))
+                    last_cov = {'cov_x': cx, 'cov_y': cy, 'cov_yaw': cyaw}
+
+                    elapsed = time.time() - start_time
+                    if elapsed > 2.5 and cx < target_cov and cy < target_cov and cyaw < target_cov_yaw:
+                        converged = True
+                        bridge.get_logger().info(
+                            f'AMCL converged successfully on try {current_try}/{max_tries} in {elapsed:.1f}s: '
+                            f'cov_x={cx:.3f}, cov_y={cy:.3f}, cov_yaw={cyaw:.3f}'
+                        )
+                        break
+
+            if converged:
+                break
+
+            # Brief deceleration before reversing direction
+            if current_try < max_tries and (time.time() - start_time) < timeout_sec:
+                bridge.publish_cmd_vel(0.0, 0.0)
+                await asyncio.sleep(0.4)
+
     finally:
         bridge.publish_cmd_vel(0.0, 0.0)
 
@@ -396,22 +436,35 @@ async def run_relocalize_spin(
     return {
         'status': 'ok' if converged else 'timeout',
         'converged': converged,
+        'tries': current_try,
         'elapsed_sec': elapsed,
         'covariance': last_cov,
-        'message': 'Relocalization converged successfully' if converged else '360° spin finished, particles converging',
+        'message': f'Relocalized successfully in {elapsed}s ({current_try} scan cycles). AMCL converged.'
+                   if converged else
+                   f'Relocalization timed out after {current_try} scan cycles ({elapsed}s).',
     }
 
 
 class GlobalRelocalizeHandler(BaseHandler):
-    """Disperse AMCL particles across the map for global relocalization."""
+    """Disperse AMCL particles across the map and autonomously recover position."""
 
     async def post(self) -> None:
         data = self.body()
-        spin = bool(data.get('spin', False))
+        spin = bool(data.get('spin', True))
         if spin:
-            angular_vel = float(data.get('angular_vel', 0.35))
-            timeout_sec = float(data.get('timeout_sec', 22.0))
-            result = await run_relocalize_spin(self.bridge, angular_vel=angular_vel, timeout_sec=timeout_sec)
+            angular_vel = float(data.get('angular_vel', 0.38))
+            max_tries = int(data.get('max_tries', 3))
+            timeout_sec = float(data.get('timeout_sec', 50.0))
+            target_cov = float(data.get('target_cov', 0.15))
+            target_cov_yaw = float(data.get('target_cov_yaw', 0.12))
+            result = await run_relocalize_spin(
+                self.bridge,
+                angular_vel=angular_vel,
+                max_tries=max_tries,
+                timeout_sec=timeout_sec,
+                target_cov=target_cov,
+                target_cov_yaw=target_cov_yaw,
+            )
             self.send(result)
             return
 
@@ -422,17 +475,19 @@ class GlobalRelocalizeHandler(BaseHandler):
 
 
 class RelocalizeRecoverHandler(BaseHandler):
-    """Autonomous 360° relocalization recovery with active particle convergence."""
+    """Autonomous relocalization recovery with active multi-try particle convergence."""
 
     async def post(self) -> None:
         data = self.body()
-        angular_vel = float(data.get('angular_vel', 0.35))
-        timeout_sec = float(data.get('timeout_sec', 22.0))
+        angular_vel = float(data.get('angular_vel', 0.38))
+        max_tries = int(data.get('max_tries', 3))
+        timeout_sec = float(data.get('timeout_sec', 50.0))
         target_cov = float(data.get('target_cov', 0.15))
         target_cov_yaw = float(data.get('target_cov_yaw', 0.12))
         result = await run_relocalize_spin(
             self.bridge,
             angular_vel=angular_vel,
+            max_tries=max_tries,
             timeout_sec=timeout_sec,
             target_cov=target_cov,
             target_cov_yaw=target_cov_yaw,
