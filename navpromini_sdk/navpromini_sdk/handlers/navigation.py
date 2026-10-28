@@ -493,17 +493,15 @@ async def run_relocalize_spin(
 ) -> dict:
     """Disperse AMCL particles and autonomously rotate in place across multiple scan tries until converged."""
     near_dock, dock_info = is_near_dock_or_docked(bridge)
-    if near_dock:
-        bridge.get_logger().info('run_relocalize_spin requested while near dock/standoff: PREVENTING SPIN and relocalizing directly at dock')
-        await relocalize_at_dock(bridge, dock_info)
-        return {
-            'status': 'ok',
-            'converged': True,
-            'tries': 1,
-            'elapsed_sec': 0.0,
-            'covariance': {'cov_x': 0.05, 'cov_y': 0.05, 'cov_yaw': 0.02},
-            'message': 'Robot is at dock/standoff: relocalized directly at dock without spinning.',
-        }
+    if dock_info.get('is_docked'):
+        bridge.get_logger().info('run_relocalize_spin: robot is physically docked on charger, automatically undocking before global scan...')
+        try:
+            from .docking import undock_robot
+            undock_res = await undock_robot(bridge, timeout=30.0)
+            if not undock_res.get('ok'):
+                bridge.get_logger().warn(f"Auto-undock note: {undock_res.get('message')}")
+        except Exception as exc:
+            bridge.get_logger().warn(f'Auto-undock before global scan failed: {exc}')
 
     ok = bridge.reinitialize_global_localization(timeout_sec=3.0)
     if not ok:
