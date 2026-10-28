@@ -10,7 +10,7 @@ import os
 import time
 
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import ComputeRoute, NavigateThroughPoses, NavigateToPose
 
 from .base import ApiError, BaseHandler
 from .roscall import call_service, ros_future, send_goal
@@ -271,8 +271,8 @@ async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
         while TRACKER.state == 'active' and TRACKER.handle is handle:
             await asyncio.sleep(0.5)
             vel = bridge.get('velocity') or {}
-            vx = abs(float(vel.get('linear_x', 0.0)))
-            wz = abs(float(vel.get('angular_z', 0.0)))
+            vx = abs(float(vel.get('linear_x', vel.get('linear', 0.0))))
+            wz = abs(float(vel.get('angular_z', vel.get('angular', 0.0))))
             is_stopped = (vx < 0.02 and wz < 0.04)
 
             if is_stopped:
@@ -297,7 +297,8 @@ async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
 
 
 async def send_route_goal(bridge, target: dict):
-    """Send a Road Network goal via Nav2 RouteServer's ComputeAndTrackRoute action."""
+    """Send a Road Network goal: plans via RouteServer's ComputeRoute,
+    then drives along the road network via NavigateThroughPoses."""
     # 1. Undock if docked
     near_dock, dock_info = is_near_dock_or_docked(bridge)
     if dock_info.get('is_docked'):
@@ -332,36 +333,99 @@ async def send_route_goal(bridge, target: dict):
     else:
         bridge.set_route_reroute_on_collision(False)
 
-    # 4. Construct ComputeAndTrackRoute goal
-    from nav2_msgs.action import ComputeAndTrackRoute
-    goal = ComputeAndTrackRoute.Goal()
-    gid = target.get('goal_id')
-    if gid is not None and isinstance(gid, int) and gid > 0:
-        goal.goal_id = gid
-        goal.use_poses = False
-        goal.use_start = False
-    elif 'x' in target and 'y' in target:
-        goal.use_poses = True
-        goal.use_start = False
-        x = float(target['x'])
-        y = float(target['y'])
-        theta = float(target.get('theta', 0.0))
-        goal.goal.header.frame_id = 'map'
-        goal.goal.pose.position.x = x
-        goal.goal.pose.position.y = y
-        goal.goal.pose.orientation.z = math.sin(theta / 2.0)
-        goal.goal.pose.orientation.w = math.cos(theta / 2.0)
-    else:
+    # 4. Plan the route along the road network using RouteServer's ComputeRoute
+    if 'x' not in target or 'y' not in target:
         raise ApiError(400, 'missing_field', 'Road network navigation requires valid goal_id or destination coordinates (x, y)')
 
+    tx = float(target['x'])
+    ty = float(target['y'])
+    target_theta = float(target.get('theta', 0.0))
+
+    compute_goal = ComputeRoute.Goal()
+    compute_goal.use_poses = True
+    compute_goal.use_start = False
+    compute_goal.goal.header.frame_id = 'map'
+    compute_goal.goal.pose.position.x = tx
+    compute_goal.goal.pose.position.y = ty
+    compute_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
+    compute_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
+
     try:
-        handle = await send_goal(goal=goal, action_client=bridge.act_route, name='road_network')
+        route_handle = await send_goal(goal=compute_goal, action_client=bridge.act_compute_route, name='compute_route')
+        route_res = await ros_future(route_handle.get_result_async(), timeout=10.0)
     except Exception as exc:
-        bridge.get_logger().warn(f'Road network routing unavailable ({exc}); falling back to free space navigation.')
+        bridge.get_logger().warn(f'Road network ComputeRoute failed ({exc}); falling back to free space navigation.')
         return await send_navigate_goal(bridge, target)
 
+    if (not route_res or getattr(route_res, 'status', None) != 4 or
+            getattr(route_res.result, 'error_code', 0) != 0 or
+            not getattr(route_res.result, 'path', None) or
+            not route_res.result.path.poses):
+        err_code = getattr(route_res.result, 'error_code', 'unknown') if (route_res and hasattr(route_res, 'result')) else 'no_result'
+        bridge.get_logger().warn(f'Road network routing unavailable (error_code={err_code}); falling back to free space navigation.')
+        return await send_navigate_goal(bridge, target)
+
+    # Publish computed road network path to /plan immediately for visualization
+    try:
+        bridge.pub_plan.publish(route_res.result.path)
+    except Exception:
+        pass
+
+    # 5. Extract waypoints along the route to traverse
+    pose_map, _ = bridge.get_with_age('pose_map')
+    rx = float(pose_map['x']) if (pose_map and 'x' in pose_map) else float(route_res.result.path.poses[0].pose.position.x)
+    ry = float(pose_map['y']) if (pose_map and 'y' in pose_map) else float(route_res.result.path.poses[0].pose.position.y)
+
+    nodes = route_res.result.route.nodes
+    poses: list[PoseStamped] = []
+    for i, node in enumerate(nodes):
+        nx, ny = float(node.position.x), float(node.position.y)
+        dist_to_robot = math.hypot(nx - rx, ny - ry)
+        # Skip start node if robot is already practically standing on it (< 0.45m) and there are subsequent nodes
+        if i == 0 and dist_to_robot < 0.45 and len(nodes) > 1:
+            continue
+
+        p = PoseStamped()
+        p.header.frame_id = 'map'
+        p.pose.position.x = nx
+        p.pose.position.y = ny
+        if i < len(nodes) - 1:
+            next_n = nodes[i + 1]
+            heading = math.atan2(float(next_n.position.y) - ny, float(next_n.position.x) - nx)
+        else:
+            heading = target_theta
+        p.pose.orientation.z = math.sin(heading / 2.0)
+        p.pose.orientation.w = math.cos(heading / 2.0)
+        poses.append(p)
+
+    # Ensure the exact target coordinates are included as final goal if distinct (> 0.25m from last node)
+    if not poses or math.hypot(poses[-1].pose.position.x - tx, poses[-1].pose.position.y - ty) > 0.25:
+        p_final = PoseStamped()
+        p_final.header.frame_id = 'map'
+        p_final.pose.position.x = tx
+        p_final.pose.position.y = ty
+        p_final.pose.orientation.z = math.sin(target_theta / 2.0)
+        p_final.pose.orientation.w = math.cos(target_theta / 2.0)
+        poses.append(p_final)
+
+    # 6. Dispatch navigation through the waypoints
+    if len(poses) <= 1:
+        single_pose = poses[0] if poses else compute_goal.goal
+        goal = NavigateToPose.Goal()
+        goal.pose = single_pose
+        handle = await send_goal(goal=goal, action_client=bridge.act_navigate, name='road_network_direct')
+    else:
+        goal = NavigateThroughPoses.Goal()
+        goal.poses = poses
+        handle = await send_goal(goal=goal, action_client=bridge.act_nav_through_poses, name='road_network_through_poses')
+
     TRACKER.begin(handle, target)
-    bridge.emit_event('navigation.started', {'target': target, 'routing_mode': 'road_network', 'reroute_policy': policy})
+    bridge.emit_event('navigation.started', {
+        'target': target,
+        'routing_mode': 'road_network',
+        'waypoints_count': len(poses),
+        'reroute_policy': policy,
+    })
 
     if policy == 'wait_then_reroute':
         timeout_sec = float(target.get('wait_timeout_sec', 5.0))

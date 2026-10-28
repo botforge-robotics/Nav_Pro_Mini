@@ -32,7 +32,15 @@ from typing import Any, Callable, Optional
 import rclpy
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from nav2_msgs.action import ComputeAndTrackRoute, ComputeRoute, DockRobot, DriveOnHeading, NavigateToPose, Spin
+from nav2_msgs.action import (
+    ComputeAndTrackRoute,
+    ComputeRoute,
+    DockRobot,
+    DriveOnHeading,
+    NavigateThroughPoses,
+    NavigateToPose,
+    Spin,
+)
 from nav2_msgs.srv import DynamicEdges, SetRouteGraph
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -188,6 +196,7 @@ class RosBridge(Node):
         # directly: it undocks first when docked, so a docked robot cannot be
         # told to drive off while still on the connector.
         self.act_navigate = ActionClient(self, NavigateToPose, 'undock', callback_group=cb)
+        self.act_nav_through_poses = ActionClient(self, NavigateThroughPoses, 'navigate_through_poses', callback_group=cb)
         self.act_route = ActionClient(self, ComputeAndTrackRoute, '/compute_and_track_route', callback_group=cb)
         self.act_compute_route = ActionClient(self, ComputeRoute, '/compute_route', callback_group=cb)
         self.act_dock = ActionClient(self, DockRobot, 'dock', callback_group=cb)
