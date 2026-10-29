@@ -26,6 +26,7 @@ import math
 import os
 
 from navpromini_launch_manager_interfaces.srv import LaunchWithArgs, StopLaunch
+from geometry_msgs.msg import PoseStamped
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
 
