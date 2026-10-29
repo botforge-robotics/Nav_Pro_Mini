@@ -10,7 +10,14 @@ import os
 import time
 
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import ComputeRoute, NavigateThroughPoses, NavigateToPose
+from nav_msgs.msg import Path
+from nav2_msgs.action import (
+    ComputePathToPose,
+    ComputeRoute,
+    FollowPath,
+    NavigateThroughPoses,
+    NavigateToPose,
+)
 
 from .base import ApiError, BaseHandler
 from .roscall import call_service, ros_future, send_goal
@@ -125,14 +132,27 @@ def resolve_target(store, data: dict) -> dict:
     if target.get('routing_mode') == 'road_network' and target.get('goal_id') is not None:
         if 'x' not in target or 'y' not in target:
             try:
-                rn = store.get_road_network()
+                rn = store.get_road_network() if store else None
+                if not rn:
+                    from .road_network import read_roadnet_file
+                    cur_map = (store.current_map() if store else None) or 'f202'
+                    rn = read_roadnet_file(cur_map)
                 if rn and 'features' in rn:
                     for f in rn['features']:
                         geom = f.get('geometry', {})
                         props = f.get('properties', {})
                         f_id = f.get('id')
+                        props_id = props.get('id')
                         gid = target['goal_id']
-                        if (f_id == gid or f_id == f'node_{gid}' or props.get('name') == f'Node {gid}') and geom.get('type') == 'Point':
+                        matches = (
+                            f_id == gid or
+                            f_id == f'node_{gid}' or
+                            props_id == gid or
+                            props.get('name') == f'Node {gid}' or
+                            str(f_id) == str(gid) or
+                            str(props_id) == str(gid)
+                        )
+                        if matches and geom.get('type') == 'Point':
                             coords = geom.get('coordinates', [])
                             if len(coords) >= 2:
                                 target['x'] = float(coords[0])
@@ -298,7 +318,8 @@ async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
 
 async def send_route_goal(bridge, target: dict, store=None):
     """Send a Road Network goal: plans via RouteServer's ComputeRoute,
-    then drives along the road network via NavigateThroughPoses."""
+    stitches first-mile (free space -> entry node) and last-mile paths if needed,
+    and executes dense trajectory following along the road network via FollowPath."""
     # 1. Undock if docked
     near_dock, dock_info = is_near_dock_or_docked(bridge)
     if dock_info.get('is_docked'):
@@ -336,7 +357,7 @@ async def send_route_goal(bridge, target: dict, store=None):
     # 4. Ensure road network graph is loaded in RouteServer
     try:
         from .road_network import load_route_graph_into_route_server
-        cur_map = (store.current_map() if store else None) or 'f202'
+        cur_map = bridge.get('current_map') or (store.current_map() if store else None) or 'f202'
         await load_route_graph_into_route_server(bridge, cur_map, store)
     except Exception as exc:
         bridge.get_logger().warn(f'Ensure road graph before route: {exc}')
@@ -377,65 +398,90 @@ async def send_route_goal(bridge, target: dict, store=None):
         fb_target['routing_mode'] = 'free_space'
         return await send_navigate_goal(bridge, fb_target, store=store)
 
-    # Publish computed road network path to /plan immediately for visualization
-    try:
-        bridge.pub_plan.publish(route_res.result.path)
-    except Exception:
-        pass
-
-    # 6. Extract waypoints along the route to traverse
+    route_path = route_res.result.path
     pose_map, _ = bridge.get_with_age('pose_map')
-    rx = float(pose_map['x']) if (pose_map and 'x' in pose_map) else float(route_res.result.path.poses[0].pose.position.x)
-    ry = float(pose_map['y']) if (pose_map and 'y' in pose_map) else float(route_res.result.path.poses[0].pose.position.y)
+    rx = float(pose_map['x']) if (pose_map and 'x' in pose_map) else float(route_path.poses[0].pose.position.x)
+    ry = float(pose_map['y']) if (pose_map and 'y' in pose_map) else float(route_path.poses[0].pose.position.y)
 
-    nodes = route_res.result.route.nodes
-    poses: list[PoseStamped] = []
-    for i, node in enumerate(nodes):
-        nx, ny = float(node.position.x), float(node.position.y)
-        dist_to_robot = math.hypot(nx - rx, ny - ry)
-        # Skip start node if robot is already practically standing on it (< 0.45m) and there are subsequent nodes
-        if i == 0 and dist_to_robot < 0.45 and len(nodes) > 1:
-            continue
+    first_route_pose = route_path.poses[0].pose.position
+    dist_to_start = math.hypot(rx - first_route_pose.x, ry - first_route_pose.y)
 
-        p = PoseStamped()
+    full_poses: list[PoseStamped] = list(route_path.poses)
+
+    # 6. First-mile: if robot is in free space away from the road network entry (> 0.35m),
+    # compute collision-free approach path from current pose to road network entry.
+    if dist_to_start > 0.35:
+        first_mile_goal = ComputePathToPose.Goal()
+        first_mile_goal.use_start = False
+        first_mile_goal.goal.header.frame_id = 'map'
+        first_mile_goal.goal.header.stamp = bridge.get_clock().now().to_msg()
+        first_mile_goal.goal.pose = route_path.poses[0].pose
+        try:
+            fm_handle = await send_goal(goal=first_mile_goal, action_client=bridge.act_compute_path_to_pose, name='first_mile_path')
+            fm_res = await ros_future(fm_handle.get_result_async(), timeout=5.0)
+            if fm_res and getattr(fm_res, 'status', None) == 4 and fm_res.result.path.poses:
+                full_poses = list(fm_res.result.path.poses) + list(route_path.poses[1:])
+                bridge.get_logger().info(f'Stitched first-mile ({len(fm_res.result.path.poses)} poses) with road network ({len(route_path.poses)} poses)')
+        except Exception as exc:
+            bridge.get_logger().warn(f'First-mile path computation note: {exc}')
+
+    # 7. Last-mile: if destination target is away from the road network exit (> 0.35m),
+    # compute collision-free path from road exit to final target coordinates.
+    last_route_pose = full_poses[-1].pose.position
+    dist_to_target = math.hypot(tx - last_route_pose.x, ty - last_route_pose.y)
+    if dist_to_target > 0.35:
+        last_mile_goal = ComputePathToPose.Goal()
+        last_mile_goal.use_start = True
+        last_mile_goal.start = full_poses[-1]
+        last_mile_goal.start.header.frame_id = 'map'
+        last_mile_goal.goal.header.frame_id = 'map'
+        last_mile_goal.goal.header.stamp = bridge.get_clock().now().to_msg()
+        last_mile_goal.goal.pose.position.x = tx
+        last_mile_goal.goal.pose.position.y = ty
+        last_mile_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
+        last_mile_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
+        try:
+            lm_handle = await send_goal(goal=last_mile_goal, action_client=bridge.act_compute_path_to_pose, name='last_mile_path')
+            lm_res = await ros_future(lm_handle.get_result_async(), timeout=5.0)
+            if lm_res and getattr(lm_res, 'status', None) == 4 and lm_res.result.path.poses:
+                full_poses = full_poses + list(lm_res.result.path.poses[1:])
+                bridge.get_logger().info(f'Stitched last-mile ({len(lm_res.result.path.poses)} poses) to target')
+        except Exception as exc:
+            bridge.get_logger().warn(f'Last-mile path computation note: {exc}')
+
+    # Ensure all poses have valid frame_id and timestamp
+    now_msg = bridge.get_clock().now().to_msg()
+    for p in full_poses:
         p.header.frame_id = 'map'
-        p.pose.position.x = nx
-        p.pose.position.y = ny
-        if i < len(nodes) - 1:
-            next_n = nodes[i + 1]
-            heading = math.atan2(float(next_n.position.y) - ny, float(next_n.position.x) - nx)
-        else:
-            heading = target_theta
-        p.pose.orientation.z = math.sin(heading / 2.0)
-        p.pose.orientation.w = math.cos(heading / 2.0)
-        poses.append(p)
+        p.header.stamp = now_msg
 
-    # Ensure the exact target coordinates are included as final goal if distinct (> 0.25m from last node)
-    if not poses or math.hypot(poses[-1].pose.position.x - tx, poses[-1].pose.position.y - ty) > 0.25:
-        p_final = PoseStamped()
-        p_final.header.frame_id = 'map'
-        p_final.pose.position.x = tx
-        p_final.pose.position.y = ty
-        p_final.pose.orientation.z = math.sin(target_theta / 2.0)
-        p_final.pose.orientation.w = math.cos(target_theta / 2.0)
-        poses.append(p_final)
+    # Apply target final orientation if explicitly provided
+    if target_theta != 0.0:
+        full_poses[-1].pose.orientation.z = math.sin(target_theta / 2.0)
+        full_poses[-1].pose.orientation.w = math.cos(target_theta / 2.0)
 
-    # 7. Dispatch navigation through the waypoints
-    if len(poses) <= 1:
-        single_pose = poses[0] if poses else compute_goal.goal
-        goal = NavigateToPose.Goal()
-        goal.pose = single_pose
-        handle = await send_goal(goal=goal, action_client=bridge.act_navigate, name='road_network_direct')
-    else:
-        goal = NavigateThroughPoses.Goal()
-        goal.poses = poses
-        handle = await send_goal(goal=goal, action_client=bridge.act_nav_through_poses, name='road_network_through_poses')
+    final_path = Path()
+    final_path.header.frame_id = 'map'
+    final_path.header.stamp = now_msg
+    final_path.poses = full_poses
+
+    # Publish plan to /plan immediately for frontend visualization
+    bridge.publish_plan(final_path)
+
+    # 8. FollowPath action execution along the dense road network
+    follow_goal = FollowPath.Goal()
+    follow_goal.path = final_path
+    follow_goal.controller_id = 'FollowPath'
+    follow_goal.goal_checker_id = 'general_goal_checker'
+    follow_goal.progress_checker_id = 'progress_checker'
+
+    handle = await send_goal(goal=follow_goal, action_client=bridge.act_follow_path, name='road_network_follow_path')
 
     TRACKER.begin(handle, target)
     bridge.emit_event('navigation.started', {
         'target': target,
         'routing_mode': 'road_network',
-        'waypoints_count': len(poses),
+        'path_poses_count': len(final_path.poses),
         'reroute_policy': policy,
     })
 

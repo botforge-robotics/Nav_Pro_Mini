@@ -165,6 +165,22 @@ def launch_setup(context, *args, **kwargs):
     else:
         localization_params_to_use = localization_params
 
+    # Preload road network in RouteServer if available for this map
+    roadnet_geojson = os.path.join(maps_share_dir, f'{base_map_name}_roadnet.geojson')
+    nav2_rewrites = {}
+    if os.path.isfile(roadnet_geojson):
+        nav2_rewrites['route_server.ros__parameters.graph_filepath'] = roadnet_geojson
+        print(f"[navigation_launch] Preloading RouteServer graph: {roadnet_geojson}")
+
+    if nav2_rewrites:
+        nav2_params_to_use = RewrittenYaml(
+            source_file=nav2_params,
+            param_rewrites=nav2_rewrites,
+            convert_types=True,
+        )
+    else:
+        nav2_params_to_use = nav2_params.perform(context)
+
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
     launch_nav2 = PathJoinSubstitution(
         [pkg_nav2_bringup, 'launch', 'navigation_launch.py'])
@@ -180,7 +196,7 @@ def launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource(launch_nav2),
         launch_arguments=[
             ('use_sim_time', use_sim_time),
-            ('params_file', nav2_params.perform(context)),
+            ('params_file', nav2_params_to_use),
             ('autostart', autostart),
         ],
     )

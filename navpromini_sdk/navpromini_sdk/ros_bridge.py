@@ -34,9 +34,11 @@ from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from nav2_msgs.action import (
     ComputeAndTrackRoute,
+    ComputePathToPose,
     ComputeRoute,
     DockRobot,
     DriveOnHeading,
+    FollowPath,
     NavigateThroughPoses,
     NavigateToPose,
     Spin,
@@ -197,6 +199,8 @@ class RosBridge(Node):
         # told to drive off while still on the connector.
         self.act_navigate = ActionClient(self, NavigateToPose, 'undock', callback_group=cb)
         self.act_nav_through_poses = ActionClient(self, NavigateThroughPoses, 'navigate_through_poses', callback_group=cb)
+        self.act_follow_path = ActionClient(self, FollowPath, 'follow_path', callback_group=cb)
+        self.act_compute_path_to_pose = ActionClient(self, ComputePathToPose, 'compute_path_to_pose', callback_group=cb)
         self.act_route = ActionClient(self, ComputeAndTrackRoute, '/compute_and_track_route', callback_group=cb)
         self.act_compute_route = ActionClient(self, ComputeRoute, '/compute_route', callback_group=cb)
         self.act_dock = ActionClient(self, DockRobot, 'dock', callback_group=cb)
@@ -568,6 +572,20 @@ class RosBridge(Node):
             hint_path.write_text(f"{state}\n{name}\n")
         except Exception:
             pass
+
+    @property
+    def pub_plan(self):
+        return self._pub_plan
+
+    def publish_plan(self, path: Path) -> None:
+        """Publish a Path message to /plan and update cached plan."""
+        try:
+            self._pub_plan.publish(path)
+        except Exception as exc:
+            self.get_logger().warn(f'Failed to publish plan: {exc}')
+        self._put('plan', [{'x': round(p.pose.position.x, 3),
+                            'y': round(p.pose.position.y, 3)}
+                           for p in path.poses])
 
     def publish_empty_plan(self) -> None:
         """Publish an empty Path to /plan and clear the cache when navigation stops."""
