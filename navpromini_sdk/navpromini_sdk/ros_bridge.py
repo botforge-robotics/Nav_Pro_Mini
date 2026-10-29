@@ -43,6 +43,7 @@ from nav2_msgs.action import (
     NavigateToPose,
     Spin,
 )
+from nav2_msgs.msg import SpeedLimit
 from nav2_msgs.srv import DynamicEdges, SetRouteGraph
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -170,6 +171,7 @@ class RosBridge(Node):
         self._pub_mode = self.create_publisher(String, 'robot_mode', LATCHED_QOS)
         self._pub_display_state = self.create_publisher(String, 'navpro/display_state', 10)
         self._pub_plan = self.create_publisher(Path, 'plan', 10)
+        self._pub_speed_limit = self.create_publisher(SpeedLimit, '/speed_limit', 10)
 
         # --- service clients (launch_manager) ------------------------------
         self.cli_launch = self.create_client(LaunchWithArgs, 'launch_with_args',
@@ -189,6 +191,8 @@ class RosBridge(Node):
         self.cli_reroute = self.create_client(
             Trigger, '/route_server/ReroutingService/reroute', callback_group=cb)
         self.cli_dynamic_edges = self.create_client(
+            DynamicEdges, '/route_server/DynamicEdgesScorer/adjust_edges', callback_group=cb)
+        self.cli_dynamic_edges_alt = self.create_client(
             DynamicEdges, '/route_server/dynamic_edges', callback_group=cb)
         self.cli_route_server_param = self.create_client(
             SetParameters, '/route_server/set_parameters', callback_group=cb)
@@ -272,6 +276,37 @@ class RosBridge(Node):
         p.value = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=bool(enabled))
         req.parameters.append(p)
         return self.cli_route_server_param.call_async(req)
+
+    def set_speed_limit(self, speed_mps: float | None = None) -> None:
+        """Publish speed limit to /speed_limit topic. Set 0.0 or None to reset / unlimit."""
+        try:
+            msg = SpeedLimit()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = 'map'
+            msg.percentage = False
+            msg.speed_limit = float(speed_mps) if (speed_mps is not None and speed_mps > 0.0) else 0.0
+            self._pub_speed_limit.publish(msg)
+        except Exception as exc:
+            self.get_logger().warn(f'Failed to publish speed limit: {exc}')
+
+    def reset_speed_limit(self) -> None:
+        self.set_speed_limit(0.0)
+
+    async def set_dynamic_edges(self, closed_edges: list[int] | None = None, opened_edges: list[int] | None = None) -> bool:
+        """Request RouteServer to dynamically close or reopen edges."""
+        req = DynamicEdges.Request()
+        req.closed_edges = [int(e) for e in (closed_edges or [])]
+        req.opened_edges = [int(e) for e in (opened_edges or [])]
+        for cli, name in [(self.cli_dynamic_edges, 'DynamicEdgesScorer/adjust_edges'),
+                          (self.cli_dynamic_edges_alt, 'dynamic_edges')]:
+            try:
+                if cli.service_is_ready():
+                    fut = cli.call_async(req)
+                    resp = await fut
+                    return bool(resp and resp.success)
+            except Exception as exc:
+                self.get_logger().warn(f'Call to {name} failed: {exc}')
+        return False
 
     # -- semantic events ------------------------------------------------------
     #

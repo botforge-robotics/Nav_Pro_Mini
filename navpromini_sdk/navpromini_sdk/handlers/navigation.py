@@ -283,10 +283,116 @@ async def relocalize_at_dock(bridge, dock_info: dict | None = None) -> bool:
     return True
 
 
-async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
+ACTIVE_DYNAMIC_CLOSED_EDGES: set[int] = set()
+
+
+def _dist_point_to_segment(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    """Calculate perpendicular distance from point (px, py) to line segment (x1, y1)-(x2, y2)."""
+    dx = x2 - x1
+    dy = y2 - y1
+    l2 = dx * dx + dy * dy
+    if l2 == 0.0:
+        return math.hypot(px - x1, py - y1)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / l2))
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
+def _extract_road_edges_metadata(store, map_name: str) -> dict[int, dict]:
+    """Extract road network edge geometry and metadata (such as speed_limit) from GeoJSON."""
+    edges: dict[int, dict] = {}
+    try:
+        rn = store.get_road_network(map_name) if store else None
+        if not rn:
+            from .road_network import read_roadnet_file
+            rn = read_roadnet_file(map_name)
+        if rn and 'features' in rn:
+            for f in rn['features']:
+                geom = f.get('geometry', {})
+                if geom.get('type') == 'MultiLineString':
+                    props = f.get('properties', {})
+                    eid = props.get('id')
+                    if eid is not None:
+                        meta = props.get('metadata', {})
+                        speed = meta.get('speed_limit', props.get('speed_limit'))
+                        coords_raw = geom.get('coordinates', [])
+                        flat_coords = coords_raw[0] if (coords_raw and isinstance(coords_raw[0], list)) else coords_raw
+                        edges[int(eid)] = {
+                            'id': int(eid),
+                            'startid': props.get('startid'),
+                            'endid': props.get('endid'),
+                            'speed_limit': float(speed) if speed is not None else None,
+                            'coords': flat_coords,
+                        }
+    except Exception:
+        pass
+    return edges
+
+
+async def _reopen_edges(bridge, edge_ids: list[int] | set[int]):
+    """Reopen dynamically closed road network edges in RouteServer."""
+    global ACTIVE_DYNAMIC_CLOSED_EDGES
+    to_open = [int(e) for e in edge_ids if int(e) in ACTIVE_DYNAMIC_CLOSED_EDGES]
+    if to_open:
+        await bridge.set_dynamic_edges(opened_edges=to_open)
+        for e in to_open:
+            ACTIVE_DYNAMIC_CLOSED_EDGES.discard(e)
+        bridge.get_logger().info(f'Reopened dynamic edges: {to_open}')
+
+
+async def _schedule_reopen_edge(bridge, edge_id: int, delay_sec: float = 60.0):
+    """Reopen a temporarily closed edge after a cooldown period."""
+    await asyncio.sleep(delay_sec)
+    await _reopen_edges(bridge, [edge_id])
+
+
+async def _track_route_and_speed_limits(bridge, handle, edge_meta: dict[int, dict]):
+    """Periodically inspects robot pose, detects the active road edge,
+    and publishes edge speed limits to the /speed_limit topic for controller_server."""
+    current_applied_speed: float | None = None
+    try:
+        while TRACKER.state == 'active' and TRACKER.handle is handle:
+            await asyncio.sleep(0.3)
+            pose_map, _ = bridge.get_with_age('pose_map')
+            if not pose_map:
+                continue
+            rx, ry = float(pose_map.get('x', 0.0)), float(pose_map.get('y', 0.0))
+
+            best_edge = None
+            best_dist = 1.0  # within 1.0m of the edge line
+            for eid, edata in edge_meta.items():
+                coords = edata.get('coords', [])
+                if len(coords) >= 2:
+                    d = _dist_point_to_segment(rx, ry, coords[0][0], coords[0][1], coords[1][0], coords[1][1])
+                    if d < best_dist:
+                        best_dist = d
+                        best_edge = edata
+
+            target_speed = float(best_edge['speed_limit']) if (best_edge and best_edge.get('speed_limit') is not None) else 0.0
+            if target_speed != current_applied_speed:
+                current_applied_speed = target_speed
+                bridge.set_speed_limit(target_speed if target_speed > 0.0 else None)
+                if target_speed > 0.0:
+                    bridge.get_logger().info(f"Speed limit for edge {best_edge['id']} applied: {target_speed:.2f} m/s")
+                    bridge.emit_event('navigation.speed_limit', {'edge_id': best_edge['id'], 'speed_limit': target_speed})
+                else:
+                    bridge.get_logger().info('Speed limit cleared (free-space / unconstrained road)')
+    except Exception as exc:
+        bridge.get_logger().debug(f'Speed limit tracker note: {exc}')
+    finally:
+        bridge.reset_speed_limit()
+
+
+async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0, target: dict = None, store=None, edge_meta: dict = None):
     """Monitors if robot is blocked/stationary while road route tracking is active.
-    If stationary for >= timeout_sec, triggers RouteServer ReroutingService."""
+    If stationary for >= timeout_sec, dynamically closes the blocked edge, requests a RouteServer
+    reroute, computes an alternative detour path, and seamlessly switches the active FollowPath goal."""
+    global ACTIVE_DYNAMIC_CLOSED_EDGES
     stationary_start = None
+    target = target or {}
+    policy = target.get('reroute_policy', 'wait_then_reroute')
+
     try:
         while TRACKER.state == 'active' and TRACKER.handle is handle:
             await asyncio.sleep(0.5)
@@ -300,20 +406,152 @@ async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0):
                 if stationary_start is None:
                     stationary_start = now
                 elif now - stationary_start >= timeout_sec:
-                    bridge.get_logger().info(f'Robot stopped on road for {timeout_sec:.1f}s; requesting RouteServer reroute...')
+                    bridge.get_logger().info(f'Robot stopped on road for {timeout_sec:.1f}s; detecting blocked edge for detour...')
                     bridge.emit_event('navigation.rerouting', {'reason': 'obstacle_wait_timeout', 'timeout_sec': timeout_sec})
+
+                    pose_map, _ = bridge.get_with_age('pose_map')
+                    if not pose_map:
+                        stationary_start = time.time() + 5.0
+                        continue
+                    rx, ry = float(pose_map['x']), float(pose_map['y'])
+
+                    # 1. Identify which edge ahead is blocked
+                    blocked_edge_id = None
+                    if edge_meta:
+                        best_d = 2.0
+                        for eid, edata in edge_meta.items():
+                            coords = edata.get('coords', [])
+                            if len(coords) >= 2:
+                                d = _dist_point_to_segment(rx, ry, coords[0][0], coords[0][1], coords[1][0], coords[1][1])
+                                if d < best_d:
+                                    best_d = d
+                                    blocked_edge_id = int(eid)
+
+                    # 2. Flag the edge as dynamically closed in RouteServer
+                    if blocked_edge_id is not None:
+                        bridge.get_logger().info(f'Closing blocked road edge {blocked_edge_id} in RouteServer...')
+                        await bridge.set_dynamic_edges(closed_edges=[blocked_edge_id])
+                        ACTIVE_DYNAMIC_CLOSED_EDGES.add(blocked_edge_id)
+
+                    # Trigger ReroutingService trigger
                     try:
                         from std_srvs.srv import Trigger
                         req = Trigger.Request()
                         await call_service(bridge.cli_reroute, req, 'reroute', timeout=3.0)
+                    except Exception:
+                        pass
+
+                    # 3. Compute alternative detour route from current pose to target
+                    tx = float(target.get('x', rx))
+                    ty = float(target.get('y', ry))
+                    target_theta = float(target.get('theta', 0.0))
+
+                    compute_goal = ComputeRoute.Goal()
+                    compute_goal.use_poses = True
+                    compute_goal.use_start = True
+                    compute_goal.start.header.frame_id = 'map'
+                    compute_goal.start.pose.position.x = rx
+                    compute_goal.start.pose.position.y = ry
+                    compute_goal.goal.header.frame_id = 'map'
+                    compute_goal.goal.pose.position.x = tx
+                    compute_goal.goal.pose.position.y = ty
+                    compute_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
+                    compute_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
+
+                    detour_found = False
+                    new_poses = []
+                    try:
+                        r_handle = await send_goal(goal=compute_goal, action_client=bridge.act_compute_route, name='detour_compute_route')
+                        r_res = await ros_future(r_handle.get_result_async(), timeout=5.0)
+                        if (r_res and getattr(r_res, 'status', None) == 4 and
+                                getattr(r_res.result, 'error_code', 0) == 0 and
+                                getattr(r_res.result, 'path', None) and
+                                r_res.result.path.poses):
+                            new_poses = list(r_res.result.path.poses)
+                            detour_found = True
+                            bridge.get_logger().info(f'Found road graph detour ({len(new_poses)} poses) avoiding edge {blocked_edge_id}!')
                     except Exception as exc:
-                        bridge.get_logger().warn(f'Reroute trigger call note: {exc}')
-                    # Backoff so we do not spam reroute requests every 0.5s
-                    stationary_start = time.time() + 6.0
+                        bridge.get_logger().warn(f'Detour route computation note: {exc}')
+
+                    # 4. If no graph detour exists, try local free-space detour around obstacle
+                    if not detour_found and policy != 'strict_road_only':
+                        bridge.get_logger().info('No road network detour available; calculating free-space obstacle bypass...')
+                        fm_goal = ComputePathToPose.Goal()
+                        fm_goal.use_start = True
+                        fm_goal.start.header.frame_id = 'map'
+                        fm_goal.start.pose.position.x = rx
+                        fm_goal.start.pose.position.y = ry
+                        fm_goal.goal.header.frame_id = 'map'
+                        fm_goal.goal.pose.position.x = tx
+                        fm_goal.goal.pose.position.y = ty
+                        fm_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
+                        fm_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
+                        try:
+                            fm_handle = await send_goal(goal=fm_goal, action_client=bridge.act_compute_path_to_pose, name='detour_free_space_path')
+                            fm_res = await ros_future(fm_handle.get_result_async(), timeout=5.0)
+                            if fm_res and getattr(fm_res, 'status', None) == 4 and fm_res.result.path.poses:
+                                new_poses = list(fm_res.result.path.poses)
+                                detour_found = True
+                                bridge.get_logger().info(f'Free-space detour path found ({len(new_poses)} poses)!')
+                        except Exception as exc:
+                            bridge.get_logger().warn(f'Free-space detour path note: {exc}')
+
+                    # 5. Switch to detour path if found
+                    if detour_found and new_poses:
+                        try:
+                            await ros_future(handle.cancel_goal_async(), timeout=3.0)
+                        except Exception:
+                            pass
+
+                        now_msg = bridge.get_clock().now().to_msg()
+                        for p in new_poses:
+                            p.header.frame_id = 'map'
+                            p.header.stamp = now_msg
+                        if target_theta != 0.0:
+                            new_poses[-1].pose.orientation.z = math.sin(target_theta / 2.0)
+                            new_poses[-1].pose.orientation.w = math.cos(target_theta / 2.0)
+
+                        detour_path = Path()
+                        detour_path.header.frame_id = 'map'
+                        detour_path.header.stamp = now_msg
+                        detour_path.poses = new_poses
+                        bridge.publish_plan(detour_path)
+
+                        follow_goal = FollowPath.Goal()
+                        follow_goal.path = detour_path
+                        follow_goal.controller_id = 'FollowPath'
+                        follow_goal.goal_checker_id = 'general_goal_checker'
+                        follow_goal.progress_checker_id = 'progress_checker'
+
+                        new_handle = await send_goal(goal=follow_goal, action_client=bridge.act_follow_path, name='detour_follow_path')
+                        TRACKER.handle = new_handle
+                        bridge.emit_event('navigation.detoured', {
+                            'target': target,
+                            'blocked_edge_id': blocked_edge_id,
+                            'path_poses_count': len(new_poses),
+                        })
+
+                        # Spawn tracking for the new detour handle
+                        asyncio.create_task(await_navigate_result(bridge, new_handle, target))
+                        if edge_meta:
+                            asyncio.create_task(_track_route_and_speed_limits(bridge, new_handle, edge_meta))
+                        asyncio.create_task(_watch_wait_and_reroute(bridge, new_handle, timeout_sec, target, store, edge_meta))
+
+                        if blocked_edge_id is not None:
+                            asyncio.create_task(_schedule_reopen_edge(bridge, blocked_edge_id, delay_sec=60.0))
+                        return
+                    else:
+                        bridge.get_logger().warn('No detour available; continuing to wait for obstacle to clear...')
+                        bridge.emit_event('navigation.blocked', {
+                            'target': target,
+                            'blocked_edge_id': blocked_edge_id,
+                            'message': 'Road blocked and no detour path found',
+                        })
+                        stationary_start = time.time() + 6.0
             else:
                 stationary_start = None
-    except Exception:
-        pass
+    except Exception as exc:
+        bridge.get_logger().debug(f'Detour watcher note: {exc}')
 
 
 async def send_route_goal(bridge, target: dict, store=None):
@@ -355,10 +593,12 @@ async def send_route_goal(bridge, target: dict, store=None):
         bridge.set_route_reroute_on_collision(False)
 
     # 4. Ensure road network graph is loaded in RouteServer
+    edge_meta: dict[int, dict] = {}
     try:
         from .road_network import load_route_graph_into_route_server
         cur_map = bridge.get('current_map') or (store.current_map() if store else None) or 'f202'
         await load_route_graph_into_route_server(bridge, cur_map, store)
+        edge_meta = _extract_road_edges_metadata(store, cur_map)
     except Exception as exc:
         bridge.get_logger().warn(f'Ensure road graph before route: {exc}')
 
@@ -497,9 +737,12 @@ async def send_route_goal(bridge, target: dict, store=None):
         'reroute_policy': policy,
     })
 
+    if edge_meta:
+        asyncio.create_task(_track_route_and_speed_limits(bridge, handle, edge_meta))
+
     if policy == 'wait_then_reroute':
         timeout_sec = float(target.get('wait_timeout_sec', 5.0))
-        asyncio.create_task(_watch_wait_and_reroute(bridge, handle, timeout_sec))
+        asyncio.create_task(_watch_wait_and_reroute(bridge, handle, timeout_sec, target=target, store=store, edge_meta=edge_meta))
 
     return handle
 
@@ -589,6 +832,10 @@ async def await_navigate_result(bridge, handle, target: dict, timeout: float = 3
         bridge.emit_event('navigation.failed', {'target': target, 'message': str(exc)})
         bridge.publish_empty_plan()
         return {'ok': False, 'message': str(exc)}
+    finally:
+        bridge.reset_speed_limit()
+        if ACTIVE_DYNAMIC_CLOSED_EDGES:
+            asyncio.create_task(_reopen_edges(bridge, list(ACTIVE_DYNAMIC_CLOSED_EDGES)))
 
 
 async def navigate_to(bridge, target: dict, timeout: float = 3600.0) -> dict:
@@ -674,6 +921,9 @@ async def cancel_active_goal(bridge, reason: str = 'canceled') -> bool:
     except Exception:
         pass
     TRACKER.finish('canceled', reason)
+    bridge.reset_speed_limit()
+    if ACTIVE_DYNAMIC_CLOSED_EDGES:
+        asyncio.create_task(_reopen_edges(bridge, list(ACTIVE_DYNAMIC_CLOSED_EDGES)))
     bridge.emit_event('navigation.cancelled', {'reason': reason})
     bridge.publish_empty_plan()
     return True
