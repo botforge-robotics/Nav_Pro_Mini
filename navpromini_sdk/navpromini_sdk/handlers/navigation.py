@@ -9,6 +9,8 @@ import math
 import os
 import time
 
+import rclpy
+
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from nav2_msgs.action import (
@@ -575,7 +577,7 @@ async def _watch_localization_during_navigation(
     """
     delocalized_ticks = 0
     try:
-        while rclcpp.ok():
+        while rclpy.ok():
             await asyncio.sleep(0.5)
             if TRACKER.state != 'active' or TRACKER.handle != handle:
                 break
@@ -589,14 +591,14 @@ async def _watch_localization_during_navigation(
             cov_yaw = float(pose_map.get('cov_yaw', 0.0))
 
             # Severe covariance threshold indicating AMCL particle blowout or lidar misalignment
-            is_delocalized = (cov_x > 0.45 or cov_y > 0.45 or cov_yaw > 0.38)
+            is_delocalized = (cov_x > 0.35 or cov_y > 0.35 or cov_yaw > 0.28)
             if is_delocalized:
                 delocalized_ticks += 1
             else:
                 delocalized_ticks = max(0, delocalized_ticks - 1)
 
-            # Require 3 consecutive checks (1.5 seconds) to filter out momentary sensor jitter
-            if delocalized_ticks >= 3:
+            # Require 2 consecutive checks (1.0 second) to filter out momentary sensor jitter
+            if delocalized_ticks >= 2:
                 bridge.get_logger().warn(
                     f'In-transit delocalization detected! cov_x={cov_x:.3f}, cov_y={cov_y:.3f}, cov_yaw={cov_yaw:.3f}. '
                     'Halting drive and launching autonomous global search relocalization spin...'
@@ -645,7 +647,7 @@ async def _watch_localization_during_navigation(
                     bridge.publish_cmd_vel(0.0, 0.0)
                     return
     except Exception as exc:
-        bridge.get_logger().debug(f'Localization watchdog note: {exc}')
+        bridge.get_logger().warn(f'Localization watchdog note: {exc}')
 
 
 async def send_route_goal(bridge, target: dict, store=None):

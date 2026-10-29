@@ -294,6 +294,7 @@ class RosBridge(Node):
 
     async def set_dynamic_edges(self, closed_edges: list[int] | None = None, opened_edges: list[int] | None = None) -> bool:
         """Request RouteServer to dynamically close or reopen edges."""
+        from .handlers.roscall import ros_future
         req = DynamicEdges.Request()
         req.closed_edges = [int(e) for e in (closed_edges or [])]
         req.opened_edges = [int(e) for e in (opened_edges or [])]
@@ -302,7 +303,7 @@ class RosBridge(Node):
             try:
                 if cli.service_is_ready():
                     fut = cli.call_async(req)
-                    resp = await fut
+                    resp = await ros_future(fut, timeout=5.0)
                     return bool(resp and resp.success)
             except Exception as exc:
                 self.get_logger().warn(f'Call to {name} failed: {exc}')
