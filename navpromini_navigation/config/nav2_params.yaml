@@ -377,15 +377,11 @@ route_server:
     CollisionMonitor:
       plugin: "nav2_route::CollisionMonitor"
       max_collision_dist: 3.0
-    edge_cost_functions: ["DynamicEdgesScorer", "DistanceScorer", "CostmapScorer"]
+    edge_cost_functions: ["DynamicEdgesScorer", "DistanceScorer"]
     DynamicEdgesScorer:
       plugin: "nav2_route::DynamicEdgesScorer"
     DistanceScorer:
       plugin: "nav2_route::DistanceScorer"
-    CostmapScorer:
-      plugin: "nav2_route::CostmapScorer"
-      use_maximum: true
-      invalid_on_collision: true
 
 velocity_smoother:
   ros__parameters:

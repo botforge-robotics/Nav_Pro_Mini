@@ -100,10 +100,12 @@ def find_nearest_road_node(store, x: float, y: float, max_distance: float = 50.0
 def resolve_target(store, data: dict) -> dict:
     """Waypoint name, raw x/y/theta, or road network node ID -> a target dict. Shared by
     GotoHandler, RouteHandler, and the mission runner's navigate step (missions.py)."""
+    default_routing_mode = 'road_network' if ('goal_id' in data and data['goal_id'] is not None) else 'free_space'
     target: dict = {
-        'routing_mode': data.get('routing_mode', 'free_space'),
+        'routing_mode': data.get('routing_mode', default_routing_mode),
         'reroute_policy': data.get('reroute_policy', 'wait_then_reroute'),
         'wait_timeout_sec': float(data.get('wait_timeout_sec', 5.0)),
+        'allow_free_space_fallback': bool(data.get('allow_free_space_fallback', False)),
     }
     if 'goal_id' in data and data['goal_id'] is not None:
         raw_gid = str(data['goal_id']).replace('node_', '')
@@ -635,24 +637,31 @@ async def send_route_goal(bridge, target: dict, store=None):
         compute_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
         compute_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
 
+    allow_fallback = bool(target.get('allow_free_space_fallback', False))
     try:
         route_handle = await send_goal(goal=compute_goal, action_client=bridge.act_compute_route, name='compute_route')
         route_res = await ros_future(route_handle.get_result_async(), timeout=10.0)
     except Exception as exc:
-        bridge.get_logger().warn(f'Road network ComputeRoute failed ({exc}); falling back to free space navigation.')
-        fb_target = dict(target)
-        fb_target['routing_mode'] = 'free_space'
-        return await send_navigate_goal(bridge, fb_target, store=store)
+        if allow_fallback:
+            bridge.get_logger().warn(f'Road network ComputeRoute failed ({exc}); falling back to free space navigation.')
+            fb_target = dict(target)
+            fb_target['routing_mode'] = 'free_space'
+            return await send_navigate_goal(bridge, fb_target, store=store)
+        raise ApiError(500, 'compute_route_failed', f'Road network ComputeRoute action failed: {exc}')
 
     if (not route_res or getattr(route_res, 'status', None) != 4 or
             getattr(route_res.result, 'error_code', 0) != 0 or
             not getattr(route_res.result, 'path', None) or
             not route_res.result.path.poses):
         err_code = getattr(route_res.result, 'error_code', 'unknown') if (route_res and hasattr(route_res, 'result')) else 'no_result'
-        bridge.get_logger().warn(f'Road network routing unavailable (error_code={err_code}); falling back to free space navigation.')
-        fb_target = dict(target)
-        fb_target['routing_mode'] = 'free_space'
-        return await send_navigate_goal(bridge, fb_target, store=store)
+        if allow_fallback:
+            bridge.get_logger().warn(f'Road network routing unavailable (error_code={err_code}); falling back to free space navigation.')
+            fb_target = dict(target)
+            fb_target['routing_mode'] = 'free_space'
+            return await send_navigate_goal(bridge, fb_target, store=store)
+        raise ApiError(422, 'route_planning_failed',
+                       f'Road network routing unavailable (error_code={err_code}). '
+                       'Check road network connectivity or clear blocked edges.')
 
     route_path = route_res.result.path
     first_route_pose = route_path.poses[0].pose.position
