@@ -1,9 +1,9 @@
 amcl:
   ros__parameters:
-    alpha1: 0.20
-    alpha2: 0.20
-    alpha3: 0.25
-    alpha4: 0.25
+    alpha1: 0.15
+    alpha2: 0.15
+    alpha3: 0.20
+    alpha4: 0.20
     alpha5: 0.15
     base_frame_id: "base_link"
     beam_skip_distance: 0.5
@@ -14,11 +14,11 @@ amcl:
     lambda_short: 0.1
     laser_likelihood_max_dist: 4.0
     laser_max_range: 8.0
-    laser_min_range: 0.35
+    laser_min_range: 0.16
     laser_model_type: "likelihood_field"
-    max_beams: 40
-    max_particles: 600
-    min_particles: 250
+    max_beams: 90
+    max_particles: 1000
+    min_particles: 350
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
@@ -38,9 +38,9 @@ amcl:
       yaw: 0.0
     update_min_a: 0.05
     update_min_d: 0.05
-    z_hit: 0.9
+    z_hit: 0.85
     z_max: 0.05
-    z_rand: 0.25
+    z_rand: 0.05
     z_short: 0.05
     scan_topic: scan_filtered
 
@@ -93,11 +93,11 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      angular_dist_threshold: 0.52
+      angular_dist_threshold: 0.65
       angular_disengage_threshold: 0.20
-      forward_sampling_distance: 0.28
-      rotate_to_heading_angular_vel: 0.32
-      max_angular_accel: 1.0
+      forward_sampling_distance: 0.25
+      rotate_to_heading_angular_vel: 0.22
+      max_angular_accel: 0.45
       simulate_ahead_time: 0.4
       max_cost_threshold: 254.0
       rotate_to_heading_once: true
@@ -106,27 +106,27 @@ controller_server:
       use_path_orientations: false
 
       desired_linear_vel: 0.105
-      lookahead_dist: 0.35
-      min_lookahead_dist: 0.28
-      max_lookahead_dist: 0.48
-      lookahead_time: 2.0
+      lookahead_dist: 0.22
+      min_lookahead_dist: 0.15
+      max_lookahead_dist: 0.30
+      lookahead_time: 1.2
       use_velocity_scaled_lookahead_dist: true
       use_rotate_to_heading: true
-      rotate_to_heading_angular_vel: 0.32
-      rotate_to_heading_min_angle: 0.70
-      max_angular_accel: 1.0
+      rotate_to_heading_angular_vel: 0.22
+      rotate_to_heading_min_angle: 0.65
+      max_angular_accel: 0.45
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.35
-      min_approach_linear_velocity: 0.080
+      min_approach_linear_velocity: 0.075
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.5
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.30
-      regulated_linear_scaling_min_speed: 0.075
-      use_cost_regulated_linear_velocity_scaling: false
-      cost_scaling_dist: 0.25
-      cost_scaling_gain: 1.0
-      inflation_cost_scaling_factor: 2.5
+      regulated_linear_scaling_min_radius: 0.35
+      regulated_linear_scaling_min_speed: 0.065
+      use_cost_regulated_linear_velocity_scaling: true
+      cost_scaling_dist: 0.35
+      cost_scaling_gain: 1.5
+      inflation_cost_scaling_factor: 2.0
       transform_tolerance: 2.5
       allow_reversing: false
 
@@ -208,8 +208,8 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.36
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.52
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -274,8 +274,8 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.36
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.52
       always_send_full_costmap: True
 
 map_saver:
@@ -349,9 +349,9 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 2.5
     simulate_ahead_time: 0.8
-    max_rotational_vel: 0.359
-    min_rotational_vel: 0.149
-    rotational_acc_lim: 0.8
+    max_rotational_vel: 0.24
+    min_rotational_vel: 0.12
+    rotational_acc_lim: 0.45
 
 waypoint_follower:
   ros__parameters:
@@ -366,9 +366,9 @@ waypoint_follower:
 
 route_server:
   ros__parameters:
-    boundary_radius_to_achieve_node: 1.0
-    radius_to_achieve_node: 2.0
-    smooth_corners: true
+    boundary_radius_to_achieve_node: 0.50
+    radius_to_achieve_node: 0.75
+    smooth_corners: false
     operations: ["AdjustSpeedLimit", "ReroutingService", "CollisionMonitor"]
     ReroutingService:
       plugin: "nav2_route::ReroutingService"
@@ -393,10 +393,10 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: True
     feedback: "OPEN_LOOP"
-    max_velocity: [0.12, 0.0, 0.55]
-    min_velocity: [-0.0, 0.0, -0.55]
-    max_accel: [0.22, 0.0, 2.5]
-    max_decel: [-0.35, 0.0, -2.5]
+    max_velocity: [0.12, 0.0, 0.35]
+    min_velocity: [-0.0, 0.0, -0.35]
+    max_accel: [0.22, 0.0, 1.2]
+    max_decel: [-0.30, 0.0, -1.2]
     odom_topic: "odom"
     odom_duration: 0.15
     # deadband_velocity suppresses micro-commands inside the motor dead zone,
