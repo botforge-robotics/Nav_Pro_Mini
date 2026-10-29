@@ -1,9 +1,9 @@
 amcl:
   ros__parameters:
-    alpha1: 0.15
-    alpha2: 0.15
+    alpha1: 0.25
+    alpha2: 0.20
     alpha3: 0.20
-    alpha4: 0.20
+    alpha4: 0.25
     alpha5: 0.15
     base_frame_id: "base_link"
     beam_skip_distance: 0.5
@@ -14,11 +14,11 @@ amcl:
     lambda_short: 0.1
     laser_likelihood_max_dist: 4.0
     laser_max_range: 8.0
-    laser_min_range: 0.16
+    laser_min_range: 0.14
     laser_model_type: "likelihood_field"
-    max_beams: 90
-    max_particles: 1000
-    min_particles: 350
+    max_beams: 120
+    max_particles: 1500
+    min_particles: 500
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
@@ -106,9 +106,9 @@ controller_server:
       use_path_orientations: false
 
       desired_linear_vel: 0.105
-      lookahead_dist: 0.22
-      min_lookahead_dist: 0.15
-      max_lookahead_dist: 0.30
+      lookahead_dist: 0.20
+      min_lookahead_dist: 0.14
+      max_lookahead_dist: 0.28
       lookahead_time: 1.2
       use_velocity_scaled_lookahead_dist: true
       use_rotate_to_heading: true
@@ -124,9 +124,9 @@ controller_server:
       regulated_linear_scaling_min_radius: 0.35
       regulated_linear_scaling_min_speed: 0.065
       use_cost_regulated_linear_velocity_scaling: true
-      cost_scaling_dist: 0.35
-      cost_scaling_gain: 1.5
-      inflation_cost_scaling_factor: 2.0
+      cost_scaling_dist: 0.40
+      cost_scaling_gain: 1.8
+      inflation_cost_scaling_factor: 2.8
       transform_tolerance: 2.5
       allow_reversing: false
 
@@ -208,8 +208,8 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.52
+        cost_scaling_factor: 2.8
+        inflation_radius: 0.55
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -274,8 +274,8 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.52
+        cost_scaling_factor: 2.8
+        inflation_radius: 0.55
       always_send_full_costmap: True
 
 map_saver:
