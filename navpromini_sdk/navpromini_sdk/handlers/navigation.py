@@ -225,6 +225,22 @@ def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict
         dy = float(dock_pose['y'])
         dtheta = float(dock_pose.get('theta', 0.0))
 
+    dist_to_dock = None
+    if dx is not None and dy is not None:
+        pose_map = bridge.get('pose_map')
+        if pose_map and 'x' in pose_map and 'y' in pose_map:
+            rx = float(pose_map['x'])
+            ry = float(pose_map['y'])
+            dist_to_dock = math.hypot(rx - dx, ry - dy)
+
+    dock_tag = bridge.get('dock_tag')
+    tag_z = float(dock_tag.get('z', 99.0)) if dock_tag else None
+
+    # Spatial confirmation: robot is physically inside dock slot (< 0.48m from dock origin
+    # or tag distance < 0.48m) where attempting in-place rotation or dense path following
+    # without undocking roll-off would strike dock funnel or trigger collision_monitor.
+    in_dock_slot = is_docked or (dist_to_dock is not None and dist_to_dock <= 0.48) or (tag_z is not None and tag_z <= 0.48)
+
     dock_info = {
         'x': dx,
         'y': dy,
@@ -232,28 +248,20 @@ def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict
         'standoff_x': (dx + 0.70 * math.cos(dtheta)) if dx is not None else None,
         'standoff_y': (dy + 0.70 * math.sin(dtheta)) if dy is not None else None,
         'standoff_theta': dtheta if dx is not None else None,
-        'is_docked': is_docked,
+        'is_docked': is_docked or in_dock_slot,
+        'in_dock_slot': in_dock_slot,
+        'dist_to_dock': dist_to_dock if dist_to_dock is not None else (tag_z if tag_z is not None else 999.0),
     }
 
-    if is_docked:
+    if in_dock_slot:
         return True, dock_info
 
-    # 3. Check distance to dock if coordinates and pose are known
-    if dx is not None and dy is not None:
-        pose_map = bridge.get('pose_map')
-        if pose_map and 'x' in pose_map and 'y' in pose_map:
-            rx = float(pose_map['x'])
-            ry = float(pose_map['y'])
-            dist_to_dock = math.hypot(rx - dx, ry - dy)
-            dock_info['dist_to_dock'] = dist_to_dock
-            if dist_to_dock <= max_dist_m:
-                return True, dock_info
+    if dist_to_dock is not None and dist_to_dock <= max_dist_m:
+        return True, dock_info
 
-        # Also check tag visibility: if dock tag is in view, robot is facing dock directly
-        dock_tag = bridge.get('dock_tag')
-        if dock_tag and dock_tag.get('z', 99.0) < 1.30:
-            dock_info['dist_to_dock'] = float(dock_tag.get('z', 0.5))
-            return True, dock_info
+    if tag_z is not None and tag_z < 1.30:
+        dock_info['dist_to_dock'] = tag_z
+        return True, dock_info
 
     return False, dock_info
 
@@ -388,7 +396,7 @@ async def _track_route_and_speed_limits(bridge, handle, edge_meta: dict[int, dic
         bridge.reset_speed_limit()
 
 
-async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0, target: dict = None, store=None, edge_meta: dict = None):
+async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 15.0, target: dict = None, store=None, edge_meta: dict = None):
     """Monitors if robot is blocked/stationary while road route tracking is active.
     If stationary for >= timeout_sec, dynamically closes the blocked edge, requests a RouteServer
     reroute, computes an alternative detour path, and seamlessly switches the active FollowPath goal."""
@@ -410,6 +418,14 @@ async def _watch_wait_and_reroute(bridge, handle, timeout_sec: float = 5.0, targ
                 if stationary_start is None:
                     stationary_start = now
                 elif now - stationary_start >= timeout_sec:
+                    # Guard: if robot is close to the dock (<0.85m), do NOT treat it as a blocked road edge!
+                    near_dock, dock_info = is_near_dock_or_docked(bridge)
+                    dock_dist = dock_info.get('dist_to_dock', 999.0)
+                    if dock_dist < 0.85:
+                        bridge.get_logger().info(f'Robot stationary near dock ({dock_dist:.2f}m) — skipping edge closing/reroute')
+                        stationary_start = time.time() + 5.0
+                        continue
+
                     bridge.get_logger().info(f'Robot stopped on road for {timeout_sec:.1f}s; detecting blocked edge for detour...')
                     bridge.emit_event('navigation.rerouting', {'reason': 'obstacle_wait_timeout', 'timeout_sec': timeout_sec})
 
@@ -654,10 +670,21 @@ async def send_route_goal(bridge, target: dict, store=None):
     """Send a Road Network goal: plans via RouteServer's ComputeRoute,
     stitches first-mile (free space -> entry node) and last-mile paths if needed,
     and executes dense trajectory following along the road network via FollowPath."""
-    # 1. Undock if docked
+    # 0. Reopen any previously closed dynamic edges in RouteServer before planning
+    global ACTIVE_DYNAMIC_CLOSED_EDGES
+    if ACTIVE_DYNAMIC_CLOSED_EDGES:
+        to_open = list(ACTIVE_DYNAMIC_CLOSED_EDGES)
+        ACTIVE_DYNAMIC_CLOSED_EDGES.clear()
+        try:
+            await bridge.set_dynamic_edges(opened_edges=to_open)
+            bridge.get_logger().info(f'Reopened dynamic edges before routing: {to_open}')
+        except Exception as exc:
+            bridge.get_logger().warn(f'Error reopening dynamic edges before routing: {exc}')
+
+    # 1. Undock if docked or inside dock slot
     near_dock, dock_info = is_near_dock_or_docked(bridge)
-    if dock_info.get('is_docked'):
-        bridge.get_logger().info('Robot is currently docked; automatically undocking before road route...')
+    if dock_info.get('is_docked') or dock_info.get('in_dock_slot'):
+        bridge.get_logger().info('Robot is docked / inside dock slot; automatically undocking before road route...')
         try:
             from .docking import undock_robot
             undock_res = await undock_robot(bridge, timeout=60.0)
@@ -869,10 +896,10 @@ async def send_navigate_goal(bridge, target: dict, store=None):
         return await send_route_goal(bridge, target, store=store)
 
     x, y, theta = target['x'], target['y'], target.get('theta', 0.0)
-    # Check if robot is docked or inside docking standoff
+    # Check if robot is docked or inside dock slot
     near_dock, dock_info = is_near_dock_or_docked(bridge)
-    if dock_info.get('is_docked'):
-        bridge.get_logger().info('Robot is currently docked on charger; automatically undocking before sending navigation goal...')
+    if dock_info.get('is_docked') or dock_info.get('in_dock_slot'):
+        bridge.get_logger().info('Robot is currently docked / inside dock slot; automatically undocking before sending navigation goal...')
         try:
             from .docking import undock_robot
             undock_res = await undock_robot(bridge, timeout=60.0)

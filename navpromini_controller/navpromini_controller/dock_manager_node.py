@@ -78,13 +78,13 @@ class DockManagerNode(Node):
         p('blind_creep_speed', 0.023)
         p('blind_push_max_scale', 3.5)
         p('stall_speed_mps', 0.003)
-        p('stall_confirm_sec', 0.4)
+        p('stall_confirm_sec', 1.2)
         p('stall_charge_wait_sec', 10.0)
-        p('stall_min_travel_m', 0.015)
+        p('stall_min_travel_m', 0.08)
         p('straight_kp', 1.5)
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
-        p('undock_distance', 0.35)
+        p('undock_distance', 0.45)
         p('undock_speed', 0.065)
         p('dock_origin_offset_m', 0.13)
         p('standoff_m', 0.70)
@@ -223,18 +223,22 @@ class DockManagerNode(Node):
             if not self._docked:
                 self._docked = True
                 self.get_logger().info(
-                    'Battery charging detected — inferring robot is parked at dock.')
+                    'Battery charging/dock contact detected — inferring robot is parked at dock.')
                 if self._dock_pose is not None:
                     self._dock_pose_pub.publish(self._dock_pose)
             self._set_status(
-                'full' if msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_FULL
+                'full' if msg.power_supply_status in (BatteryState.POWER_SUPPLY_STATUS_FULL,
+                                                      BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING)
                 else 'charging')
         elif self._docked and not self._busy:
-            if msg.power_supply_status in (BatteryState.POWER_SUPPLY_STATUS_DISCHARGING,
-                                           BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING):
+            # Only consider robot removed from dock if it is actively discharging (current < -0.25A)
+            # AND odometry/AMCL/tag shows it is physically outside the dock slot.
+            is_discharging = (msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_DISCHARGING or self._batt_current < -0.25)
+            outside_slot = not self._is_inside_dock_slot()
+            if is_discharging and outside_slot:
                 self._docked = False
                 self._set_status('undocked')
-                self.get_logger().info('Battery not charging — robot removed from dock.')
+                self.get_logger().info('Battery discharging and outside dock slot — robot removed from dock.')
         self._docked_state_known = True
 
     def _on_odom(self, msg: Odometry) -> None:
@@ -249,6 +253,12 @@ class DockManagerNode(Node):
         if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL:
             # Full battery parked on dock floats near 0A without discharging
             if self._batt_current > -0.2:
+                return True
+        if self._power == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING:
+            # When pack reaches 100%, BMS stops active charging and reports NOT_CHARGING.
+            # If current is near zero (> -0.15A) and robot is inside dock slot or was docked,
+            # it is still parked on the charger contacts.
+            if self._batt_current > -0.15 and (self._docked or self._is_inside_dock_slot()):
                 return True
         # Hardware current ground truth: positive current flowing into the pack (>50mA)
         # proves physical electrical contact with the charging dock.
@@ -558,7 +568,7 @@ class DockManagerNode(Node):
                 if now - stalled_since > self._stall_confirm:
                     self._stop()
                     self.get_logger().info(
-                        'straight drive: stalled (odom speed near zero) — stopping')
+                        f'straight drive: stalled (travelled={travelled:.3f}m, speed={speed_now:.4f}m/s) — stopping')
                     await self._sleep(self._settle)
                     return False
             else:
