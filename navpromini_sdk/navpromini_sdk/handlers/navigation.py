@@ -370,14 +370,30 @@ async def send_route_goal(bridge, target: dict, store=None):
     ty = float(target['y'])
     target_theta = float(target.get('theta', 0.0))
 
+    pose_map, _ = bridge.get_with_age('pose_map')
+    rx = float(pose_map['x']) if (pose_map and 'x' in pose_map) else tx
+    ry = float(pose_map['y']) if (pose_map and 'y' in pose_map) else ty
+
+    start_id = find_nearest_road_node(store, rx, ry) if store else None
+    goal_id = target.get('goal_id')
+    if goal_id is None and store:
+        goal_id = find_nearest_road_node(store, tx, ty)
+
     compute_goal = ComputeRoute.Goal()
-    compute_goal.use_poses = True
-    compute_goal.use_start = False
-    compute_goal.goal.header.frame_id = 'map'
-    compute_goal.goal.pose.position.x = tx
-    compute_goal.goal.pose.position.y = ty
-    compute_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
-    compute_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
+    if start_id is not None and goal_id is not None and start_id != goal_id:
+        compute_goal.use_poses = False
+        compute_goal.use_start = True
+        compute_goal.start_id = int(start_id)
+        compute_goal.goal_id = int(goal_id)
+        bridge.get_logger().info(f'Computing road route from Node {start_id} to Node {goal_id}')
+    else:
+        compute_goal.use_poses = True
+        compute_goal.use_start = False
+        compute_goal.goal.header.frame_id = 'map'
+        compute_goal.goal.pose.position.x = tx
+        compute_goal.goal.pose.position.y = ty
+        compute_goal.goal.pose.orientation.z = math.sin(target_theta / 2.0)
+        compute_goal.goal.pose.orientation.w = math.cos(target_theta / 2.0)
 
     try:
         route_handle = await send_goal(goal=compute_goal, action_client=bridge.act_compute_route, name='compute_route')
@@ -399,10 +415,6 @@ async def send_route_goal(bridge, target: dict, store=None):
         return await send_navigate_goal(bridge, fb_target, store=store)
 
     route_path = route_res.result.path
-    pose_map, _ = bridge.get_with_age('pose_map')
-    rx = float(pose_map['x']) if (pose_map and 'x' in pose_map) else float(route_path.poses[0].pose.position.x)
-    ry = float(pose_map['y']) if (pose_map and 'y' in pose_map) else float(route_path.poses[0].pose.position.y)
-
     first_route_pose = route_path.poses[0].pose.position
     dist_to_start = math.hypot(rx - first_route_pose.x, ry - first_route_pose.y)
 
