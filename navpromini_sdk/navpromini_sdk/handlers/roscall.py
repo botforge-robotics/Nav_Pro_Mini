@@ -74,6 +74,9 @@ async def send_goal(action_client, goal, name: str) -> Any:
                        'navigation stack running?', {'action': name})
     handle = await ros_future(action_client.send_goal_async(goal), timeout=30.0)
     if not handle.accepted:
+        await asyncio.sleep(0.3)
+        handle = await ros_future(action_client.send_goal_async(goal), timeout=30.0)
+    if not handle.accepted:
         raise ApiError(409, 'goal_rejected', f'{name} rejected the goal',
                        {'action': name})
     return handle
