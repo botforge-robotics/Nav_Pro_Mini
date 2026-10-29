@@ -712,7 +712,18 @@ class DockManagerNode(Node):
             await self._tick()
         res = result_fut.result()
         if res.status != GoalStatus.STATUS_SUCCEEDED:
-            return False
+            # Fallback when robot is already close to or in front of the dock
+            x_rel, y_rel = self._get_dock_relative_pose()
+            if x_rel is not None and y_rel is not None and -0.20 <= x_rel < self._standoff and abs(y_rel) <= 0.45:
+                dist = self._standoff - x_rel
+                self.get_logger().warn(
+                    f'Nav2 staging reported status {res.status}, but robot is on dock axis (x_rel={x_rel:.2f}m) — '
+                    f'driving straight forward {dist:.2f}m to reach standoff')
+                await self._drive_straight(
+                    dist, speed=self._undock_speed,
+                    is_canceled=lambda: (parent_goal_handle is not None and parent_goal_handle.is_cancel_requested))
+            else:
+                return False
 
         # RPP with use_rotate_to_heading: false reaches XY tolerance without rotating
         # to the goal orientation. Explicitly align robot heading to standoff orientation
@@ -752,27 +763,21 @@ class DockManagerNode(Node):
             else:
                 self._docked = False
 
-            # Navigate to the staging standoff pose in front of the dock via Nav2 ONLY IF NOT already in dock zone:
+            # Always navigate to the staging standoff pose in front of the dock from any location
+            # (including inside dock area) to ensure clean centerline alignment before visual servoing:
             if dock_pose is not None:
-                if not self._is_in_dock_zone():
-                    self._set_status('staging')
-                    if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
-                        self._stop()
-                        if goal_handle.is_cancel_requested:
-                            goal_handle.canceled()
-                            self._set_status('undocked')
-                            return DockRobot.Result(success=False, error_msg='cancelled')
-                        self.get_logger().error('failed to reach staging pose via Nav2')
-                        self._set_status('docking_failed')
-                        goal_handle.abort()
-                        return DockRobot.Result(
-                            success=False, error_msg='failed to reach staging pose')
-                else:
-                    self.get_logger().info('dock: robot already inside docking zone — aligning heading directly to dock')
-                    q = self._staging_pose_for(dock_pose).pose.orientation
-                    target_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                                            1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-                    await self._turn_to_map_heading(target_yaw)
+                self._set_status('staging')
+                if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
+                    self._stop()
+                    if goal_handle.is_cancel_requested:
+                        goal_handle.canceled()
+                        self._set_status('undocked')
+                        return DockRobot.Result(success=False, error_msg='cancelled')
+                    self.get_logger().error('failed to reach staging pose')
+                    self._set_status('docking_failed')
+                    goal_handle.abort()
+                    return DockRobot.Result(
+                        success=False, error_msg='failed to reach staging pose')
             else:
                 self.get_logger().warn(
                     'no dock pose configured — attempting visual servoing directly')
