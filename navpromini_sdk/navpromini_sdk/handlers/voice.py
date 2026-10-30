@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -43,12 +44,69 @@ _LAST_TRANSCRIPT = ""
 _LAST_REPLY = ""
 _AUDIO_LEVEL = 0.0
 
-# Dynamic API configuration for Groq & Gemini (can be set via env or /api/v1/voice/config)
-_VOICE_CONFIG = {
-    "groq_api_key": os.getenv("GROQ_API_KEY", "").strip(),
-    "gemini_api_key": os.getenv("GEMINI_API_KEY", "").strip(),
-    "model_preference": os.getenv("VOICE_MODEL_PREF", "groq").strip()  # "groq" or "gemini"
-}
+# Dynamic API configuration for Groq & Gemini (persisted securely on robot disk)
+_CONFIG_PATHS = [
+    Path("/home/navpromini/.config/navpro/voice_config.json"),
+    Path("/root/.config/navpro/voice_config.json"),
+    Path("/tmp/navpro_voice_config.json"),
+]
+
+def _get_secure_config_path() -> Path:
+    for p in _CONFIG_PATHS:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            continue
+    return Path("/tmp/navpro_voice_config.json")
+
+def _load_persisted_config() -> dict[str, str]:
+    cfg = {
+        "groq_api_key": os.getenv("GROQ_API_KEY", "").strip(),
+        "gemini_api_key": os.getenv("GEMINI_API_KEY", "").strip(),
+        "model_preference": os.getenv("VOICE_MODEL_PREF", "groq").strip()
+    }
+    for p in _CONFIG_PATHS:
+        if p.is_file():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if data.get("groq_api_key"):
+                            cfg["groq_api_key"] = str(data["groq_api_key"]).strip()
+                        if data.get("gemini_api_key"):
+                            cfg["gemini_api_key"] = str(data["gemini_api_key"]).strip()
+                        if data.get("model_preference"):
+                            cfg["model_preference"] = str(data["model_preference"]).strip()
+                break
+            except Exception:
+                pass
+    return cfg
+
+def _save_persisted_config(cfg: dict[str, str]) -> None:
+    target_path = _get_secure_config_path()
+    try:
+        temp_fd, temp_path = tempfile.mkstemp(prefix="voice_cfg_", dir=str(target_path.parent))
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+            json.dump({
+                "groq_api_key": cfg.get("groq_api_key", ""),
+                "gemini_api_key": cfg.get("gemini_api_key", ""),
+                "model_preference": cfg.get("model_preference", "groq"),
+                "updated_at": time.time()
+            }, f, indent=2)
+        os.chmod(temp_path, 0o600)  # Secure: rw------- (owner only)
+        os.replace(temp_path, str(target_path))
+    except Exception:
+        pass
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "****"
+    return f"{key[:4]}...{key[-4:]}"
+
+_VOICE_CONFIG = _load_persisted_config()
 
 
 def _get_pulse_env() -> dict[str, str]:
@@ -610,14 +668,16 @@ class VoiceMuteHandler(BaseHandler):
 
 
 class VoiceConfigHandler(BaseHandler):
-    """Configure voice models, Groq / Gemini API keys, and model preferences."""
+    """Configure voice models, Groq / Gemini API keys, and model preferences (securely persisted)."""
 
     def get(self) -> None:
-        groq_set = bool(_VOICE_CONFIG.get("groq_api_key"))
-        gemini_set = bool(_VOICE_CONFIG.get("gemini_api_key"))
+        groq_key = _VOICE_CONFIG.get("groq_api_key", "")
+        gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
         self.send({
-            "groq_configured": groq_set,
-            "gemini_configured": gemini_set,
+            "groq_configured": bool(groq_key),
+            "groq_masked_key": _mask_key(groq_key),
+            "gemini_configured": bool(gemini_key),
+            "gemini_masked_key": _mask_key(gemini_key),
             "model_preference": _VOICE_CONFIG.get("model_preference", "groq"),
             "available_engines": [
                 {"id": "groq", "name": "Groq Whisper Turbo + LLaMA 3.3 (Ultra Fast, Free Daily Tier)"},
@@ -628,18 +688,29 @@ class VoiceConfigHandler(BaseHandler):
 
     def post(self) -> None:
         data = self.body()
+        changed = False
         if "groq_api_key" in data:
             _VOICE_CONFIG["groq_api_key"] = str(data["groq_api_key"]).strip()
+            changed = True
         if "gemini_api_key" in data:
             _VOICE_CONFIG["gemini_api_key"] = str(data["gemini_api_key"]).strip()
+            changed = True
         if "model_preference" in data:
             pref = str(data["model_preference"]).strip().lower()
             if pref in ("groq", "gemini", "local"):
                 _VOICE_CONFIG["model_preference"] = pref
+                changed = True
 
+        if changed:
+            _save_persisted_config(_VOICE_CONFIG)
+
+        groq_key = _VOICE_CONFIG.get("groq_api_key", "")
+        gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
         self.send({
             "status": "updated",
-            "groq_configured": bool(_VOICE_CONFIG.get("groq_api_key")),
-            "gemini_configured": bool(_VOICE_CONFIG.get("gemini_api_key")),
+            "groq_configured": bool(groq_key),
+            "groq_masked_key": _mask_key(groq_key),
+            "gemini_configured": bool(gemini_key),
+            "gemini_masked_key": _mask_key(gemini_key),
             "model_preference": _VOICE_CONFIG.get("model_preference")
         })
