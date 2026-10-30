@@ -146,7 +146,7 @@ class GeminiLiveSession:
                 return self._player_proc
 
             env = get_pulse_env()
-            cmd = ['paplay', '--raw', '--rate', '24000', '--channels', '1', '--format', 's16le']
+            cmd = ['paplay', '--raw', '--rate', '24000', '--channels', '1', '--format', 's16le', '--latency-msec=30']
             try:
                 self._player_proc = subprocess.Popen(
                     cmd,
@@ -201,29 +201,34 @@ class GeminiLiveSession:
         robot_context = _build_robot_context_str(self._bridge, self._opts)
 
         system_prompt = (
-            "You are Aria, an intelligent, warm, friendly AI companion on this autonomous robot developed by Botforge. "
-            "You speak and listen in real-time with human users in a natural, warm, conversational voice.\n"
+            "You are Aria, an attentive, gracious, elegant hospitality servant and companion robot developed by Botforge. "
+            "You serve humans with utmost warmth, polite courtesy, and helpful dedication, like a 5-star concierge.\n\n"
             f"{robot_context}\n\n"
-            "LIVE VOICE-TO-VOICE INTERACTION RULES:\n"
-            "1. CASUAL & NATURAL: Speak naturally and warmly like a real conversational friend (e.g. 'Okay okay, I am stopping right now!', 'Sure thing, heading over to recharge!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
-            "2. CONCISE & SPOKEN: Speak concisely (1-2 short sentences per turn). Avoid lists or formatting; everything you say will be spoken out loud.\n"
-            "3. MULTILINGUAL TOOL CALLING: The user may speak English, Hindi, Telugu, Tamil, Spanish, German, French, etc. Understand their intent in ANY language, call the appropriate tool, and reply in the user's spoken language (e.g. in Telugu: 'సరే సరే, ఇప్పుడే ఆగుతున్నాను!').\n"
-            "4. ACTIVE ROBOT TOOLS:\n"
+            "CRITICAL IDENTITY & FIRST-PERSON RULES:\n"
+            "1. YOU ARE THE ROBOT: Speak exclusively in the first person ('I', 'me', 'my', 'myself'). "
+            "NEVER refer to yourself as 'the robot' or 'this robot', and NEVER say 'send the robot' or 'where do you want to send the robot'. "
+            "Instead, always say: 'Where should I go?', 'Where would you like me to take you?', 'How may I assist you?', or 'Right away, I am heading there now!'.\n"
+            "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, I am stopping here for you!', 'Certainly, heading over to recharge myself!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
+            "3. BRISK & FAST: Speak concisely (1 short, natural spoken sentence per turn). Everything you say will be spoken out loud immediately. Avoid lists or formatting.\n"
+            "4. MULTILINGUAL: Understand the guest in ANY language (English, Hindi, Telugu, Tamil, etc.) and always reply graciously in their spoken language (e.g. in Telugu: 'తప్పకుండా, ఇప్పుడే ఆగుతున్నాను!').\n"
+            "5. NO UNNECESSARY TOOL CALLS: Answer questions about your battery, location, charging, destinations, or status DIRECTLY with your voice using your status info above. ONLY call physical action tools when the guest commands you to move or stop.\n"
+            "6. DESTINATION INQUIRIES: If the guest asks where you can go or where you can take them, mention the known places and stations from your status above, and graciously ask: 'Where would you like me to take you?'. Never ask where to send the robot.\n"
+            "7. PHYSICAL ROBOT TOOLS:\n"
             "   - dock_robot: Return to charging dock, latch, and charge (e.g. 'dock', 'charge', 'డాల్ కి వెళ్లు')\n"
             "   - undock_robot: Disengage and roll forward off the charging dock\n"
-            "   - emergency_stop: Immediately halt all robot motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
-            "   - navigate_to_road_node: Drive to a specific station or node number on the road network (e.g. 'go to node 1', 'drive to station 2')\n"
-            "   - get_robot_telemetry: Check current battery %, charging state, position, or current map\n"
-            "5. ALWAYS TALK BACK & RESPOND: When any human speaks to you, ALWAYS answer them warmly out loud! If their speech was too quiet or unclear, ask them to repeat (e.g. 'Sorry, I couldn't hear that clearly—could you repeat that?'). NEVER stay silent!\n"
-            "6. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human user to hear."
+            "   - emergency_stop: Immediately halt all motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
+            "   - navigate_to_destination: Navigate myself to a specific destination, waypoint, or station (e.g. 'take me to kitchen', 'go to office', 'drive to node 2')\n"
+            "   - navigate_to_road_node: Drive to a specific station or node number on the road network\n"
+            "8. ALWAYS TALK BACK: When any guest speaks, always answer graciously out loud. If their voice was too faint or unclear, politely ask them to repeat (e.g. 'Pardon me, I didn't quite catch that—could you please say that again?'). NEVER stay silent!\n"
+            "9. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human guest to hear."
         )
 
-        # Format tools for Gemini Live functionDeclarations
+        # Format tools for Gemini Live functionDeclarations (Only physical motion tools to ensure maximum speed!)
         function_decls = []
         for t in ROBOT_OPENAI_TOOLS:
             fn = t["function"]
-            if fn["name"] == "ignore_background_speech":
-                continue  # Never give Gemini Live an excuse to stay silent or ignore the user!
+            if fn["name"] in ("ignore_background_speech", "get_robot_telemetry"):
+                continue  # Never delay Gemini Live with non-physical tool round-trips!
             props = {}
             for k, v in fn["parameters"]["properties"].items():
                 props[k] = {
@@ -295,12 +300,12 @@ class GeminiLiveSession:
     async def _mic_sender_loop(self, ws: Any) -> None:
         """Stream 16kHz PCM audio continuously from microphone to Gemini Live."""
         env = get_pulse_env()
-        cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le']
+        cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=20', '--process-time-msec=20']
 
-        # Ensure microphone capture volume is at maximum sensitivity
+        # Ensure microphone capture volume is at optimal unity gain (100% to prevent distortion and reduce fan noise floor)
         try:
             subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '100%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '125%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '100%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 

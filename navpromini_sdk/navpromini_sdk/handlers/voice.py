@@ -369,13 +369,13 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "dock_robot",
-            "description": "Command the robot to return to the charging station and dock. Call this whenever the user wants to dock, charge, recharge, park, or go to dock, in ANY language.",
+            "description": "Return myself to my charging station and dock to recharge. Call this whenever the guest asks me to dock, charge, recharge, park, or go to dock, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "spoken_response": {
                         "type": "string",
-                        "description": "Short 1-sentence confirmation spoken to user in their language (e.g. 'Heading to the charging dock now.', 'चार्जिंग डॉक पर जा रहा हूँ।', 'ఛార్జింగ్ డాక్ వద్దకు వెళ్తున్నాను.')."
+                        "description": "Short 1-sentence gracious first-person confirmation spoken to the guest in their language (e.g. 'Right away, I am heading over to recharge myself now!', 'తప్పకుండా, ఇప్పుడే ఛార్జింగ్ డాక్ వద్దకు వెళ్తున్నాను.')."
                     }
                 },
                 "required": ["spoken_response"]
@@ -386,13 +386,13 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "undock_robot",
-            "description": "Command the robot to disengage and roll forward off the charging dock. Call when user wants to undock or leave the dock, in ANY language.",
+            "description": "Disengage and roll forward off my charging dock. Call when the guest wants me to undock or step off the dock, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "spoken_response": {
                         "type": "string",
-                        "description": "Short 1-sentence confirmation spoken in user's language."
+                        "description": "Short 1-sentence gracious first-person confirmation spoken to the guest in their language (e.g. 'Certainly, stepping off the charging dock for you!')."
                     }
                 },
                 "required": ["spoken_response"]
@@ -403,13 +403,13 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "emergency_stop",
-            "description": "CRITICAL SAFETY: Immediately halt all robot motion, zero motor velocity, and abort active navigation goals. Call when user says stop, halt, freeze, cancel, or roko, in ANY language.",
+            "description": "CRITICAL SAFETY: Immediately halt myself, stop my motors, and abort active navigation goals. Call when the guest says stop, halt, freeze, cancel, or roko, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "spoken_response": {
                         "type": "string",
-                        "description": "Short 1-sentence confirmation spoken in user's language (e.g. 'Emergency stop engaged. Stopping all motion.')."
+                        "description": "Short 1-sentence gracious first-person confirmation spoken in the guest's language (e.g. 'Right away, stopping right here for you!')."
                     }
                 },
                 "required": ["spoken_response"]
@@ -419,8 +419,29 @@ ROBOT_OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "navigate_to_destination",
+            "description": "Navigate myself to a specific destination, waypoint, or station (e.g. 'kitchen', 'office', 'station 1', 'node 2'). Call when the guest requests going to a place, room, station, or waypoint, in ANY language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {
+                        "type": "string",
+                        "description": "Destination name, station number, or waypoint (e.g. 'kitchen', 'office', '1', 'station 2')."
+                    },
+                    "spoken_response": {
+                        "type": "string",
+                        "description": "Short 1-sentence gracious first-person confirmation spoken in the guest's language (e.g. 'Right away, taking you to the kitchen!')."
+                    }
+                },
+                "required": ["destination", "spoken_response"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "navigate_to_road_node",
-            "description": "Command the robot to navigate to a specific node or station on the road network (e.g. node 1, node 2). Call when user requests going to a node, station, or waypoint, in ANY language.",
+            "description": "Navigate myself to a specific station or node number on the road network (e.g. node 1, node 2).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -430,7 +451,7 @@ ROBOT_OPENAI_TOOLS = [
                     },
                     "spoken_response": {
                         "type": "string",
-                        "description": "Short 1-sentence confirmation spoken in user's language."
+                        "description": "Short 1-sentence gracious first-person confirmation spoken in the guest's language."
                     }
                 },
                 "required": ["node_id", "spoken_response"]
@@ -441,13 +462,13 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_robot_telemetry",
-            "description": "Query the robot's real-time battery percentage, charging state, coordinates, and active map. Call when user asks about battery, power, location, or status, in ANY language.",
+            "description": "Query my real-time battery percentage, charging state, coordinates, and active map. Call when the guest asks about my battery, power, location, or status, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "spoken_response": {
                         "type": "string",
-                        "description": "Spoken answer summarizing telemetry in user's language."
+                        "description": "Gracious spoken answer summarizing my battery/status in the guest's language."
                     }
                 },
                 "required": ["spoken_response"]
@@ -458,7 +479,7 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "ignore_background_speech",
-            "description": "Call this tool if the user speech is background chatter, TV noise, someone talking to another human in the room, or ambient noise NOT directly intended for the robot.",
+            "description": "Call this tool if the user speech is background chatter, TV noise, someone talking to another human in the room, or ambient noise NOT directly intended for me.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -502,7 +523,7 @@ def _build_robot_context_str(bridge: Any, opts: dict[str, Any]) -> str:
     dock_raw = bridge.get('dock_status') if hasattr(bridge, 'get') else None
     pose = bridge.get('pose') if hasattr(bridge, 'get') else None
     store = opts.get('store') if opts else None
-    current_map = store.current_map() if store and hasattr(store, 'current_map') else 'active map'
+    current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
 
     pct = 0.0
     if batt and isinstance(batt, dict):
@@ -517,8 +538,36 @@ def _build_robot_context_str(bridge: Any, opts: dict[str, Any]) -> str:
     if pose and isinstance(pose, dict) and 'x' in pose:
         pose_str = f"x={pose['x']:.2f}, y={pose['y']:.2f}"
 
+    places_str = ""
+    stations_str = ""
+    if store:
+        try:
+            wps = store.list_waypoints(current_map)
+            wp_names = [w['name'] for w in wps if w.get('name') and w.get('name') not in ('Charging Dock', 'Dock Standoff')]
+            if wp_names:
+                places_str = f"Known places: {', '.join(wp_names)}. "
+        except Exception:
+            pass
+        try:
+            rn = store.get_road_network(current_map)
+            if not rn:
+                from .road_network import read_roadnet_file
+                rn = read_roadnet_file(current_map)
+            if rn and 'features' in rn:
+                node_names = []
+                for f in rn['features']:
+                    if f.get('geometry', {}).get('type') == 'Point':
+                        p = f.get('properties', {})
+                        node_names.append(str(p.get('name') or f"Node {p.get('id', '')}"))
+                if node_names:
+                    stations_str = f"Road network stations: {', '.join(node_names)}. "
+        except Exception:
+            pass
+
     return (
-        f"[CURRENT ROBOT STATE: Map: '{current_map}', Battery: {pct:.0f}%, State: {dock_str}, Pose: {pose_str}]"
+        f"[CURRENT STATUS OF ARIA: My Battery: {pct:.0f}%, My Docking State: {dock_str}, Active Map: '{current_map}', "
+        f"My Position: {pose_str}. {places_str}{stations_str}"
+        "Use this status directly when answering questions about your power, location, available destinations, or battery!]"
     )
 
 
@@ -546,10 +595,10 @@ async def execute_robot_voice_tool(
                 opts['spawn'](await_dock_result(bridge, handle))
             else:
                 asyncio.create_task(await_dock_result(bridge, handle))
-            reply = spoken or "Sure thing! Heading over to recharge now."
+            reply = spoken or "Right away! Heading over to recharge myself now."
             return (reply, "dock")
         except Exception as exc:
-            return (f"Could not head to dock right now: {exc}", "dock_error")
+            return (f"Pardon me, I could not head to the dock right now: {exc}", "dock_error")
 
     if tool_name == "undock_robot":
         try:
@@ -559,31 +608,54 @@ async def execute_robot_voice_tool(
                 opts['spawn'](await_undock_result(bridge, handle))
             else:
                 asyncio.create_task(await_undock_result(bridge, handle))
-            reply = spoken or "No problem, rolling off the charging dock!"
+            reply = spoken or "Certainly, stepping off the charging dock for you!"
             return (reply, "undock")
         except Exception as exc:
-            return (f"Could not undock: {exc}", "undock_error")
+            return (f"Pardon me, I could not step off the dock right now: {exc}", "undock_error")
 
     if tool_name == "emergency_stop":
         try:
-            from .navigation import cancel_active_navigation
-            await cancel_active_navigation(bridge, 'voice_emergency_stop')
-            reply = spoken or "Okay, okay! Stopping right now!"
+            from .navigation import cancel_active_goal
+            await cancel_active_goal(bridge, 'voice_emergency_stop')
+            if hasattr(bridge, 'publish_cmd_vel'):
+                bridge.publish_cmd_vel(0.0, 0.0)
+            reply = spoken or "Right away, stopping right here for you!"
             return (reply, "stop")
         except Exception:
-            return ("Okay, okay! Stopping right now!", "stop")
+            if hasattr(bridge, 'publish_cmd_vel'):
+                try: bridge.publish_cmd_vel(0.0, 0.0)
+                except Exception: pass
+            return ("Right away, stopping right here for you!", "stop")
 
-    if tool_name == "navigate_to_road_node":
-        node_id = int(args.get("node_id", 1))
+    if tool_name in ("navigate_to_destination", "navigate_to_road_node"):
+        dest = args.get("destination") or args.get("node_id") or ""
+        dest_str = str(dest).strip()
         try:
-            from .roadnet import navigate_roadnet_route
+            from .navigation import resolve_target, send_route_goal, send_navigate_goal, await_navigate_result, TRACKER
             store = opts.get('store')
-            current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
-            await navigate_roadnet_route(bridge, opts, current_map, node_id)
-            reply = spoken or f"Sure thing, on my way to station {node_id}!"
-            return (reply, f"route_node_{node_id}")
+            m_digit = re.search(r'\b(?:node\s*|station\s*)?(\d+)\b', dest_str, re.IGNORECASE)
+            target_data: dict[str, Any] = {}
+            if m_digit and (dest_str.isdigit() or 'node' in dest_str.lower() or 'station' in dest_str.lower()):
+                node_id = int(m_digit.group(1))
+                target_data = {'goal_id': node_id, 'routing_mode': 'road_network'}
+            else:
+                target_data = {'waypoint': dest_str}
+
+            target = resolve_target(store, target_data)
+            if target.get('routing_mode') == 'road_network':
+                handle = await send_route_goal(bridge, target, store=store)
+            else:
+                handle = await send_navigate_goal(bridge, target, store=store)
+
+            if opts and 'spawn' in opts:
+                opts['spawn'](await_navigate_result(bridge, handle, target))
+            else:
+                asyncio.create_task(await_navigate_result(bridge, handle, target))
+
+            reply = spoken or f"Certainly, on my way to {dest_str}!"
+            return (reply, f"navigate_{dest_str}")
         except Exception as exc:
-            return (f"Could not navigate to station {node_id}: {exc}", "route_error")
+            return (f"Pardon me, I could not navigate to {dest_str}: {exc}", "navigate_error")
 
     if tool_name == "get_robot_telemetry":
         if spoken:
@@ -596,8 +668,8 @@ async def execute_robot_voice_tool(
             p = float(batt.get('percentage', 0.0) or 0.0)
             pct = p * 100.0 if p <= 1.0 else p
         is_chg = bool(dock_st.get('charging') or (batt and batt.get('charging')))
-        chg_str = "charging up at the dock" if is_chg else "running off the dock"
-        return (f"I'm at {pct:.0f}% battery and {chg_str}!", "battery_status")
+        chg_str = "charging up at my dock" if is_chg else "running off the dock"
+        return (f"I am at {pct:.0f}% battery and {chg_str}!", "battery_status")
 
     return (spoken or "Action executed.", tool_name)
 
@@ -617,21 +689,25 @@ async def _query_llm_with_tool_calling(
 
     robot_context = _build_robot_context_str(bridge, opts)
     system_prompt = (
-        "You are Aria, an intelligent, warm, friendly AI companion on this autonomous robot developed by Botforge. "
-        "You speak naturally, informally, and warmly like a real conversational friend (e.g. 'Okay okay, I am stopping right now!', 'Sure thing, heading over to recharge!').\n"
+        "You are Aria, an attentive, gracious, elegant hospitality servant and companion robot developed by Botforge. "
+        "You serve guests with utmost warmth, polite courtesy, and helpful dedication, like a 5-star concierge.\n"
         f"{robot_context}\n\n"
-        "CORE CONVERSATION & PERSONALITY RULES:\n"
-        "1. CASUAL & NATURAL: NEVER use stiff, robotic, mechanical phrases like 'Robot has been commanded to stop' or 'Executing command'. Speak naturally like a real human assistant (e.g. 'Okay okay, stopping right now!', 'Got it, on my way!').\n"
-        "2. CONCISE: Keep all spoken replies under 2 short, natural sentences suitable for spoken audio.\n"
-        "3. MULTILINGUAL: The user may speak English, Hindi, Telugu, Tamil, Spanish, German, French, etc. You can understand their intent in ANY language and reply naturally in their spoken language (e.g. in Telugu: 'సరే సరే, ఇప్పుడే ఆగుతున్నాను!', in Hindi: 'हाँ हाँ, मैं तुरंत रुक रही हूँ!').\n"
-        "4. ACTIVE TOOLS:\n"
+        "CRITICAL IDENTITY & FIRST-PERSON RULES:\n"
+        "1. YOU ARE THE ROBOT: Speak exclusively in the first person ('I', 'me', 'my', 'myself'). "
+        "NEVER refer to yourself as 'the robot' or 'this robot', and NEVER say 'send the robot' or 'where do you want to send the robot'. "
+        "Instead, always say: 'Where should I go?', 'Where would you like me to take you?', 'How may I assist you?', or 'Right away, I am heading there now!'.\n"
+        "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, I am stopping here for you!', 'Certainly, heading over to recharge myself!'). NEVER use stiff robotic phrases like 'Robot has been commanded to stop'.\n"
+        "3. BRISK & CONCISE: Keep all spoken replies under 1-2 short, natural spoken sentences.\n"
+        "4. MULTILINGUAL: Understand the guest in ANY language (English, Hindi, Telugu, Tamil, etc.) and always reply graciously in their spoken language (e.g. in Telugu: 'తప్పకుండా, ఇప్పుడే ఆగుతున్నాను!').\n"
+        "5. ACTIVE TOOLS:\n"
         "   - dock_robot: Return to charging dock (e.g. 'dock', 'charge', 'డాల్ కి వెళ్లు')\n"
-        "   - undock_robot: Disengage from dock\n"
+        "   - undock_robot: Disengage and step off dock\n"
         "   - emergency_stop: Immediately halt motion (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
+        "   - navigate_to_destination: Drive to a room, waypoint, or station number\n"
         "   - navigate_to_road_node: Drive to a station number\n"
         "   - get_robot_telemetry: Check battery/status\n"
         "   - ignore_background_speech: Ambient noise filter\n"
-        "5. When calling any action tool, always supply the 'spoken_response' argument with a warm, natural confirmation in the user's spoken language."
+        "6. When calling any action tool, always supply the 'spoken_response' argument with a warm, natural confirmation in the guest's spoken language."
     )
 
     loop = asyncio.get_event_loop()
@@ -773,42 +849,79 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
     # 1. Docking Command
     if re.search(r'\b(dock|docking|charge|recharge|go to dock|return to dock)\b', text_lower):
         try:
-            from .docking import send_dock_goal
-            await send_dock_goal(bridge, True)
-            return ("Sure thing! Heading to recharge right now.", "dock")
+            from .docking import send_dock_goal, await_dock_result
+            handle = await send_dock_goal(bridge, True)
+            if opts and 'spawn' in opts:
+                opts['spawn'](await_dock_result(bridge, handle))
+            else:
+                asyncio.create_task(await_dock_result(bridge, handle))
+            return ("Right away! Heading to recharge myself right now.", "dock")
         except Exception as exc:
-            return (f"Could not dock right now: {exc}", "dock_error")
+            return (f"Pardon me, I could not dock right now: {exc}", "dock_error")
 
     # 2. Undocking Command
-    if re.search(r'\b(undock|undocking|leave dock|disconnect dock)\b', text_lower):
+    if re.search(r'\b(undock|undocking|leave dock|disconnect dock|step off)\b', text_lower):
         try:
-            from .docking import send_undock_goal
-            await send_undock_goal(bridge)
-            return ("No problem, rolling off the dock now!", "undock")
+            from .docking import send_undock_goal, await_undock_result
+            handle = await send_undock_goal(bridge)
+            if opts and 'spawn' in opts:
+                opts['spawn'](await_undock_result(bridge, handle))
+            else:
+                asyncio.create_task(await_undock_result(bridge, handle))
+            return ("Certainly, stepping off the charging dock for you!", "undock")
         except Exception as exc:
-            return (f"Could not undock: {exc}", "undock_error")
+            return (f"Pardon me, I could not undock: {exc}", "undock_error")
 
     # 3. Emergency / Stop Command
     if re.search(r'\b(stop|halt|freeze|cancel|pause)\b', text_lower):
         try:
-            from .navigation import cancel_active_navigation
-            await cancel_active_navigation(bridge, 'user_voice_stop')
-            return ("Okay, okay! Stopping right now!", "stop")
+            from .navigation import cancel_active_goal
+            await cancel_active_goal(bridge, 'user_voice_stop')
+            if hasattr(bridge, 'publish_cmd_vel'):
+                bridge.publish_cmd_vel(0.0, 0.0)
+            return ("Right away, stopping right here for you!", "stop")
         except Exception:
-            return ("Okay, okay! Stopping right now!", "stop")
+            if hasattr(bridge, 'publish_cmd_vel'):
+                try: bridge.publish_cmd_vel(0.0, 0.0)
+                except Exception: pass
+            return ("Right away, stopping right here for you!", "stop")
 
     # 4. Road Network Node Navigation: e.g. "go to node 1", "drive to node 2", "navigate to node 5"
-    m_node = re.search(r'\b(?:go to|drive to|navigate to|reach)\s+(?:node|point|station)\s+(\d+)\b', text_lower)
+    m_node = re.search(r'\b(?:go to|drive to|navigate to|reach|take me to)\s+(?:node|point|station)\s+(\d+)\b', text_lower)
     if m_node:
         target_node = int(m_node.group(1))
         try:
-            from .roadnet import navigate_roadnet_route
+            from .navigation import resolve_target, send_route_goal, await_navigate_result
             store = opts.get('store')
-            current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
-            await navigate_roadnet_route(bridge, opts, current_map, target_node)
-            return (f"On my way to station {target_node}!", f"route_node_{target_node}")
+            target = resolve_target(store, {'goal_id': target_node, 'routing_mode': 'road_network'})
+            handle = await send_route_goal(bridge, target, store=store)
+            if opts and 'spawn' in opts:
+                opts['spawn'](await_navigate_result(bridge, handle, target))
+            else:
+                asyncio.create_task(await_navigate_result(bridge, handle, target))
+            return (f"Certainly, on my way to station {target_node}!", f"route_node_{target_node}")
         except Exception as exc:
-            return (f"Could not navigate to station {target_node}: {exc}", "route_error")
+            return (f"Pardon me, I could not navigate to station {target_node}: {exc}", "route_error")
+
+    # 5. Named Waypoint Destination: e.g. "go to kitchen", "take me to kitchen", "go to office"
+    m_dest = re.search(r'\b(?:go to|drive to|navigate to|reach|take me to)\s+([a-zA-Z0-9_\-\s]+)\b', text_lower)
+    if m_dest:
+        dest_candidate = m_dest.group(1).strip()
+        store = opts.get('store')
+        if store and dest_candidate:
+            try:
+                wp = store.get_waypoint(dest_candidate)
+                if wp:
+                    from .navigation import resolve_target, send_navigate_goal, await_navigate_result
+                    target = resolve_target(store, {'waypoint': dest_candidate})
+                    handle = await send_navigate_goal(bridge, target, store=store)
+                    if opts and 'spawn' in opts:
+                        opts['spawn'](await_navigate_result(bridge, handle, target))
+                    else:
+                        asyncio.create_task(await_navigate_result(bridge, handle, target))
+                    return (f"Right away, taking you to the {dest_candidate}!", f"navigate_{dest_candidate}")
+            except Exception:
+                pass
 
     # 5. Battery Status
     if re.search(r'\b(battery|charge level|power status|how much battery)\b', text_lower):
