@@ -232,9 +232,23 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
     # 5. Battery Status
     if re.search(r'\b(battery|charge level|power status|how much battery)\b', text_lower):
         batt = bridge.get('battery') if hasattr(bridge, 'get') else None
-        dock_st = bridge.get('dock_status') if hasattr(bridge, 'get') else None
-        pct = (batt.get('percentage', 0.0) if batt else 0.0) * 100.0 if batt and batt.get('percentage', 0.0) <= 1.0 else (batt.get('percentage', 0.0) if batt else 0.0)
-        is_charging = bool(dock_st and dock_st.get('charging'))
+        dock_raw = bridge.get('dock_status') if hasattr(bridge, 'get') else None
+        dock_st: dict[str, Any] = {}
+        if isinstance(dock_raw, dict):
+            dock_st = dock_raw
+        elif isinstance(dock_raw, str):
+            try:
+                import json
+                dock_st = json.loads(dock_raw)
+            except Exception:
+                dock_st = {}
+
+        pct = 0.0
+        if batt and isinstance(batt, dict):
+            pct_val = float(batt.get('percentage', 0.0) or 0.0)
+            pct = pct_val * 100.0 if pct_val <= 1.0 else pct_val
+
+        is_charging = bool(dock_st.get('charging') or (batt and batt.get('charging')))
         chg_str = "charging at the dock" if is_charging else "discharging"
         if pct > 0:
             return (f"My battery is currently at {pct:.0f}% and {chg_str}.", "battery_status")
@@ -243,12 +257,22 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
     # 6. Location / Status
     if re.search(r'\b(where are you|position|location|status|what are you doing)\b', text_lower):
         pose = bridge.get('pose') if hasattr(bridge, 'get') else None
-        dock_st = bridge.get('dock_status') if hasattr(bridge, 'get') else None
+        dock_raw = bridge.get('dock_status') if hasattr(bridge, 'get') else None
+        dock_st: dict[str, Any] = {}
+        if isinstance(dock_raw, dict):
+            dock_st = dock_raw
+        elif isinstance(dock_raw, str):
+            try:
+                import json
+                dock_st = json.loads(dock_raw)
+            except Exception:
+                dock_st = {}
+
         store = opts.get('store')
         current_map = store.current_map() if store and hasattr(store, 'current_map') else 'active map'
-        if dock_st and dock_st.get('charging'):
+        if dock_st.get('charging') or dock_st.get('state') == 'charging':
             return (f"I am docked and charging on map '{current_map}'.", "status")
-        if pose and 'x' in pose:
+        if pose and isinstance(pose, dict) and 'x' in pose:
             return (f"I am at coordinates ({pose['x']:.2f}, {pose['y']:.2f}) on map '{current_map}'.", "status")
         return (f"I am ready for navigation on map '{current_map}'.", "status")
 
