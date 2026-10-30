@@ -1117,3 +1117,77 @@ class VoiceConfigHandler(BaseHandler):
             "gemini_masked_key": _mask_key(gemini_key),
             "model_preference": _VOICE_CONFIG.get("model_preference")
         })
+
+
+class VoiceLiveStatusHandler(BaseHandler):
+    """GET /api/v1/voice/live/status - check status of bidirectional Gemini Live session."""
+
+    def get(self) -> None:
+        try:
+            from ..gemini_live import get_live_session
+            sess = get_live_session()
+            st = sess.get_status()
+            gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
+            st["has_gemini_key"] = bool(gemini_key)
+            self.send(st)
+        except Exception as exc:
+            self.send({"active": False, "muted": True, "error": str(exc), "has_gemini_key": False})
+
+
+class VoiceLiveToggleHandler(BaseHandler):
+    """POST /api/v1/voice/live/toggle - tap button toggles Mute or starts live stream."""
+
+    async def post(self) -> None:
+        try:
+            from ..gemini_live import get_live_session
+            sess = get_live_session()
+            gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
+
+            if not sess.active and not sess.connecting:
+                if not gemini_key:
+                    raise ApiError(400, "gemini_key_missing", "Google Gemini API key required for Live stream. Please add Gemini API key in Settings.")
+                ok, msg = sess.start(gemini_key, self.bridge, self.opts)
+                self.send({"active": True, "muted": False, "status": msg})
+                return
+
+            new_muted = sess.toggle_mute()
+            self.send({
+                "active": sess.active,
+                "muted": new_muted,
+                "message": "Live assistant muted" if new_muted else "Live assistant active & listening"
+            })
+        except ApiError:
+            raise
+        except Exception as exc:
+            self.fail(500, "live_toggle_failed", str(exc))
+
+
+class VoiceLiveStartHandler(BaseHandler):
+    """POST /api/v1/voice/live/start - start continuous live stream."""
+
+    async def post(self) -> None:
+        try:
+            from ..gemini_live import get_live_session
+            sess = get_live_session()
+            gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
+            if not gemini_key:
+                raise ApiError(400, "gemini_key_missing", "Google Gemini API key required for Live stream. Please add Gemini API key in Settings.")
+            ok, msg = sess.start(gemini_key, self.bridge, self.opts)
+            self.send({"active": ok, "muted": False, "status": msg})
+        except ApiError:
+            raise
+        except Exception as exc:
+            self.fail(500, "live_start_failed", str(exc))
+
+
+class VoiceLiveStopHandler(BaseHandler):
+    """POST /api/v1/voice/live/stop - stop continuous live stream."""
+
+    async def post(self) -> None:
+        try:
+            from ..gemini_live import get_live_session
+            sess = get_live_session()
+            sess.stop()
+            self.send({"active": False, "muted": True, "status": "stopped"})
+        except Exception as exc:
+            self.fail(500, "live_stop_failed", str(exc))

@@ -182,6 +182,10 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/voice/mute', voice.VoiceMuteHandler, opts),
         (rf'{API}/voice/interrupt', voice.VoiceInterruptHandler, opts),
         (rf'{API}/voice/config', voice.VoiceConfigHandler, opts),
+        (rf'{API}/voice/live/toggle', voice.VoiceLiveToggleHandler, opts),
+        (rf'{API}/voice/live/status', voice.VoiceLiveStatusHandler, opts),
+        (rf'{API}/voice/live/start', voice.VoiceLiveStartHandler, opts),
+        (rf'{API}/voice/live/stop', voice.VoiceLiveStopHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
         # media static files
