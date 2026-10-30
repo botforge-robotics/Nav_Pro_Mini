@@ -599,104 +599,111 @@ async def _query_llm_with_tool_calling(
 
     loop = asyncio.get_event_loop()
 
-    # 1. Groq LLaMA 3.3 70B (ultra-fast, native tool calling, free daily tier)
-    if groq_key and (pref == "groq" or not gemini_key):
-        def _call_groq():
-            import requests
-            models_to_try = [
-                "llama-3.3-70b-versatile",
-                "qwen/qwen3.8-27b",
-                "llama-3.1-8b-instant",
-                "allam-2-7b"
-            ]
-            for m in models_to_try:
-                try:
-                    resp = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                        json={
-                            "model": m,
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_text}
-                            ],
-                            "tools": ROBOT_OPENAI_TOOLS,
-                            "tool_choice": "auto",
-                            "max_tokens": 120,
-                            "temperature": 0.3
-                        },
-                        timeout=5.5
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        choice = data.get("choices", [{}])[0].get("message", {})
-                        tool_calls = choice.get("tool_calls", [])
-                        if tool_calls:
-                            fn = tool_calls[0].get("function", {})
-                            name = fn.get("name", "")
-                            raw_args = fn.get("arguments", "{}")
-                            try:
-                                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                            except Exception:
-                                args = {}
-                            return ("tool_call", name, args)
-                        content = choice.get("content", "")
-                        if content:
-                            return ("text", content.strip(), None)
-                    elif resp.status_code in (400, 404):
+    # 1. Primary engine attempt based on preference
+    engine_order = ["gemini", "groq"] if pref == "gemini" else ["groq", "gemini"]
+
+    for eng in engine_order:
+        if eng == "groq" and groq_key:
+            def _call_groq():
+                import requests
+                models_to_try = [
+                    "llama-3.3-70b-versatile",
+                    "qwen/qwen3.8-27b",
+                    "llama-3.1-8b-instant",
+                    "allam-2-7b"
+                ]
+                for m in models_to_try:
+                    try:
+                        resp = requests.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                            json={
+                                "model": m,
+                                "messages": [
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": user_text}
+                                ],
+                                "tools": ROBOT_OPENAI_TOOLS,
+                                "tool_choice": "auto",
+                                "max_tokens": 120,
+                                "temperature": 0.3
+                            },
+                            timeout=5.5
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            choice = data.get("choices", [{}])[0].get("message", {})
+                            tool_calls = choice.get("tool_calls", [])
+                            if tool_calls:
+                                fn = tool_calls[0].get("function", {})
+                                name = fn.get("name", "")
+                                raw_args = fn.get("arguments", "{}")
+                                try:
+                                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                                except Exception:
+                                    args = {}
+                                return ("tool_call", name, args)
+                            content = choice.get("content", "")
+                            if content:
+                                return ("text", content.strip(), None)
+                        elif resp.status_code in (400, 404):
+                            continue
+                    except Exception:
                         continue
-                except Exception:
-                    continue
-            return None
+                return None
 
-        try:
-            res = await loop.run_in_executor(None, _call_groq)
-            if res:
-                kind, val1, val2 = res
-                if kind == "tool_call":
-                    return await execute_robot_voice_tool(bridge, opts, val1, val2 or {})
-                elif kind == "text":
-                    return (val1, "conversational_llm")
-        except Exception:
-            pass
+            try:
+                res = await loop.run_in_executor(None, _call_groq)
+                if res:
+                    kind, val1, val2 = res
+                    if kind == "tool_call":
+                        return await execute_robot_voice_tool(bridge, opts, val1, val2 or {})
+                    elif kind == "text":
+                        return (val1, "conversational_llm")
+            except Exception:
+                pass
 
-    # 2. Gemini 2.0 Flash (multimodal, native tool calling, free daily tier)
-    if gemini_key:
-        def _call_gemini():
-            import requests
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-            payload = {
-                "contents": [
-                    {"role": "user", "parts": [{"text": user_text}]}
-                ],
-                "systemInstruction": {
-                    "parts": [{"text": system_prompt}]
-                },
-                "tools": ROBOT_GEMINI_TOOLS,
-                "generationConfig": {"maxOutputTokens": 120, "temperature": 0.3}
-            }
-            resp = requests.post(url, json=payload, timeout=5.5)
-            if resp.status_code == 200:
-                data = resp.json()
-                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                for part in parts:
-                    if "functionCall" in part:
-                        fc = part["functionCall"]
-                        return ("tool_call", fc.get("name", ""), fc.get("args", {}))
-                    if "text" in part and part["text"].strip():
-                        return ("text", part["text"].strip(), None)
-            return None
+        if eng == "gemini" and gemini_key:
+            def _call_gemini():
+                import requests
+                models_to_try = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
+                for m in models_to_try:
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={gemini_key}"
+                        payload = {
+                            "contents": [
+                                {"role": "user", "parts": [{"text": user_text}]}
+                            ],
+                            "systemInstruction": {
+                                "parts": [{"text": system_prompt}]
+                            },
+                            "tools": ROBOT_GEMINI_TOOLS,
+                            "generationConfig": {"maxOutputTokens": 120, "temperature": 0.3}
+                        }
+                        resp = requests.post(url, json=payload, timeout=5.5)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                            for part in parts:
+                                if "functionCall" in part:
+                                    fc = part["functionCall"]
+                                    return ("tool_call", fc.get("name", ""), fc.get("args", {}))
+                                if "text" in part and part["text"].strip():
+                                    return ("text", part["text"].strip(), None)
+                    except Exception:
+                        continue
+                return None
 
-        try:
-            res = await loop.run_in_executor(None, _call_gemini)
-            if res:
-                kind, val1, val2 = res
-                if kind == "tool_call":
-                    return await execute_robot_voice_tool(bridge, opts, val1, val2 or {})
-                elif kind == "text":
-                    return (val1, "conversational_llm")
-        except Exception:
-            pass
+            try:
+                res = await loop.run_in_executor(None, _call_gemini)
+                if res:
+                    kind, val1, val2 = res
+                    if kind == "tool_call":
+                        return await execute_robot_voice_tool(bridge, opts, val1, val2 or {})
+                    elif kind == "text":
+                        return (val1, "conversational_llm")
+            except Exception:
+                pass
 
     return None
 
