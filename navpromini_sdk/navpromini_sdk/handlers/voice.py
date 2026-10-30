@@ -285,21 +285,275 @@ def transcribe_audio_file(wav_path: str) -> Optional[str]:
             except OSError: pass
 
 
-async def _query_llm_conversational_reply(user_text: str) -> Optional[str]:
-    """Generate intelligent natural voice reply via Groq or Gemini if keys are configured."""
+# ---------------------------------------------------------------------------
+# Robot Tools Schema (OpenAI / Groq format and Gemini format)
+# ---------------------------------------------------------------------------
+
+ROBOT_OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "dock_robot",
+            "description": "Command the robot to return to the charging station and dock. Call this whenever the user wants to dock, charge, recharge, park, or go to dock, in ANY language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spoken_response": {
+                        "type": "string",
+                        "description": "Short 1-sentence confirmation spoken to user in their language (e.g. 'Heading to the charging dock now.', 'चार्जिंग डॉक पर जा रहा हूँ।', 'ఛార్జింగ్ డాక్ వద్దకు వెళ్తున్నాను.')."
+                    }
+                },
+                "required": ["spoken_response"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "undock_robot",
+            "description": "Command the robot to disengage and roll forward off the charging dock. Call when user wants to undock or leave the dock, in ANY language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spoken_response": {
+                        "type": "string",
+                        "description": "Short 1-sentence confirmation spoken in user's language."
+                    }
+                },
+                "required": ["spoken_response"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "emergency_stop",
+            "description": "CRITICAL SAFETY: Immediately halt all robot motion, zero motor velocity, and abort active navigation goals. Call when user says stop, halt, freeze, cancel, or roko, in ANY language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spoken_response": {
+                        "type": "string",
+                        "description": "Short 1-sentence confirmation spoken in user's language (e.g. 'Emergency stop engaged. Stopping all motion.')."
+                    }
+                },
+                "required": ["spoken_response"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "navigate_to_road_node",
+            "description": "Command the robot to navigate to a specific node or station on the road network (e.g. node 1, node 2). Call when user requests going to a node, station, or waypoint, in ANY language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "integer",
+                        "description": "Target road network node number (e.g. 1, 2, 3)."
+                    },
+                    "spoken_response": {
+                        "type": "string",
+                        "description": "Short 1-sentence confirmation spoken in user's language."
+                    }
+                },
+                "required": ["node_id", "spoken_response"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_robot_telemetry",
+            "description": "Query the robot's real-time battery percentage, charging state, coordinates, and active map. Call when user asks about battery, power, location, or status, in ANY language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spoken_response": {
+                        "type": "string",
+                        "description": "Spoken answer summarizing telemetry in user's language."
+                    }
+                },
+                "required": ["spoken_response"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ignore_background_speech",
+            "description": "Call this tool if the user speech is background chatter, TV noise, someone talking to another human in the room, or ambient noise NOT directly intended for the robot.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief explanation of why this speech is background chatter."
+                    }
+                }
+            }
+        }
+    }
+]
+
+ROBOT_GEMINI_TOOLS = [
+    {
+        "function_declarations": [
+            {
+                "name": t["function"]["name"],
+                "description": t["function"]["description"],
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        k: {
+                            "type": "INTEGER" if v.get("type") == "integer" else "STRING",
+                            "description": v.get("description", "")
+                        }
+                        for k, v in t["function"]["parameters"]["properties"].items()
+                    },
+                    "required": t["function"]["parameters"].get("required", [])
+                }
+            }
+            for t in ROBOT_OPENAI_TOOLS
+        ]
+    }
+]
+
+
+def _build_robot_context_str(bridge: Any, opts: dict[str, Any]) -> str:
+    """Build telemetry summary injected into conversational LLM context."""
+    batt = bridge.get('battery') if hasattr(bridge, 'get') else None
+    dock_raw = bridge.get('dock_status') if hasattr(bridge, 'get') else None
+    pose = bridge.get('pose') if hasattr(bridge, 'get') else None
+    store = opts.get('store') if opts else None
+    current_map = store.current_map() if store and hasattr(store, 'current_map') else 'active map'
+
+    pct = 0.0
+    if batt and isinstance(batt, dict):
+        p = float(batt.get('percentage', 0.0) or 0.0)
+        pct = p * 100.0 if p <= 1.0 else p
+
+    dock_st = dock_raw if isinstance(dock_raw, dict) else {}
+    is_chg = bool(dock_st.get('charging') or (batt and batt.get('charging')))
+    dock_str = "Docked & Charging" if is_chg else "Discharging / Off dock"
+
+    pose_str = "unknown"
+    if pose and isinstance(pose, dict) and 'x' in pose:
+        pose_str = f"x={pose['x']:.2f}, y={pose['y']:.2f}"
+
+    return (
+        f"[CURRENT ROBOT STATE: Map: '{current_map}', Battery: {pct:.0f}%, State: {dock_str}, Pose: {pose_str}]"
+    )
+
+
+async def execute_robot_voice_tool(
+    bridge: Any,
+    opts: dict[str, Any],
+    tool_name: str,
+    args: dict[str, Any]
+) -> tuple[str, Optional[str]]:
+    """Execute robot action triggered by LLM tool calling.
+
+    Returns:
+        (spoken_response, action_tag)
+    """
+    spoken = str(args.get("spoken_response", "")).strip()
+
+    if tool_name == "ignore_background_speech":
+        return ("", "ignored")
+
+    if tool_name == "dock_robot":
+        try:
+            from .docking import send_dock_goal
+            await send_dock_goal(bridge, True)
+            reply = spoken or "Heading to the charging dock now."
+            return (reply, "dock")
+        except Exception as exc:
+            return (f"Could not initiate docking: {exc}", "dock_error")
+
+    if tool_name == "undock_robot":
+        try:
+            from .docking import send_undock_goal
+            await send_undock_goal(bridge)
+            reply = spoken or "Undocking and rolling forward off the charging dock."
+            return (reply, "undock")
+        except Exception as exc:
+            return (f"Could not undock: {exc}", "undock_error")
+
+    if tool_name == "emergency_stop":
+        try:
+            from .navigation import cancel_active_navigation
+            await cancel_active_navigation(bridge, 'voice_emergency_stop')
+            reply = spoken or "Emergency stop engaged. All motion halted."
+            return (reply, "stop")
+        except Exception:
+            return ("Robot has been commanded to stop.", "stop")
+
+    if tool_name == "navigate_to_road_node":
+        node_id = int(args.get("node_id", 1))
+        try:
+            from .roadnet import navigate_roadnet_route
+            store = opts.get('store')
+            current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
+            await navigate_roadnet_route(bridge, opts, current_map, node_id)
+            reply = spoken or f"Navigating to road network node {node_id}."
+            return (reply, f"route_node_{node_id}")
+        except Exception as exc:
+            return (f"Could not navigate to node {node_id}: {exc}", "route_error")
+
+    if tool_name == "get_robot_telemetry":
+        if spoken:
+            return (spoken, "battery_status")
+        batt = bridge.get('battery') if hasattr(bridge, 'get') else None
+        dock_raw = bridge.get('dock_status') if hasattr(bridge, 'get') else None
+        dock_st = dock_raw if isinstance(dock_raw, dict) else {}
+        pct = 0.0
+        if batt and isinstance(batt, dict):
+            p = float(batt.get('percentage', 0.0) or 0.0)
+            pct = p * 100.0 if p <= 1.0 else p
+        is_chg = bool(dock_st.get('charging') or (batt and batt.get('charging')))
+        chg_str = "charging at dock" if is_chg else "discharging"
+        return (f"Battery is at {pct:.0f}% and {chg_str}.", "battery_status")
+
+    return (spoken or "Action executed.", tool_name)
+
+
+async def _query_llm_with_tool_calling(
+    bridge: Any,
+    opts: dict[str, Any],
+    user_text: str
+) -> Optional[tuple[str, Optional[str]]]:
+    """Execute conversational reasoning with native tool calling via Groq LLaMA 3.3 or Gemini 2.0 Flash."""
     groq_key = _VOICE_CONFIG.get("groq_api_key") or os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = _VOICE_CONFIG.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "").strip()
     pref = _VOICE_CONFIG.get("model_preference", "groq")
 
+    if not groq_key and not gemini_key:
+        return None
+
+    robot_context = _build_robot_context_str(bridge, opts)
     system_prompt = (
-        "You are NavPro Mini, an autonomous mobile robot assistant developed by Botforge. "
-        "You have LiDAR, depth cameras, and autonomous navigation. "
-        "Keep your response concise, polite, natural, and under 2 sentences, ideal for spoken audio."
+        "You are NavPro Mini, an intelligent autonomous robotics voice assistant developed by Botforge. "
+        "You are deployed on an autonomous mobile robot equipped with LiDAR, depth cameras, and ROS2 navigation.\n"
+        f"{robot_context}\n\n"
+        "CORE CONVERSATION & SAFETY RULES:\n"
+        "1. TELEPHONY STYLE & CONCISENESS: Keep all spoken replies under 2 natural, concise sentences suitable for spoken TTS audio.\n"
+        "2. MULTILINGUAL TOOL CALLING: The user may speak English, Hindi, Telugu, Tamil, Spanish, German, French, etc. You must understand their intent, execute tools, and speak your reply in the SAME language the user spoke.\n"
+        "3. TOOL CALLING: Use your direct tools to control the robot:\n"
+        "   - dock_robot: Return to charging dock, latch, and charge (e.g. 'dock', 'charge', 'डॉक पर जाओ', 'ఛార్జింగ్ డాక్ కి వెళ్లు')\n"
+        "   - undock_robot: Disengage and roll forward off the charging dock\n"
+        "   - emergency_stop: Immediately halt all robot motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'freeze', 'रोको', 'ఆగు')\n"
+        "   - navigate_to_road_node: Drive to a specific station or node number on the road network (e.g. 'go to node 1', 'drive to station 2')\n"
+        "   - get_robot_telemetry: Check current battery %, charging state, position, or current map\n"
+        "   - ignore_background_speech: BACKGROUND CHATTER FILTER\n"
+        "4. FILTERING UNNECESSARY SURROUNDING CHATTER: If the audio transcript is background chatter, someone talking to another human in the room, background TV/music, or ambient noise not directly addressing you, you MUST call 'ignore_background_speech'. Do NOT speak or interrupt human conversations.\n"
+        "5. When calling any action tool, always supply the 'spoken_response' argument in the user's spoken language."
     )
 
     loop = asyncio.get_event_loop()
 
-    # 1. Groq LLaMA 3.3 / 3.1
+    # 1. Groq LLaMA 3.3 70B (ultra-fast, native tool calling, free daily tier)
     if groq_key and (pref == "groq" or not gemini_key):
         def _call_groq():
             import requests
@@ -312,44 +566,77 @@ async def _query_llm_conversational_reply(user_text: str) -> Optional[str]:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_text}
                     ],
-                    "max_tokens": 100,
-                    "temperature": 0.6
+                    "tools": ROBOT_OPENAI_TOOLS,
+                    "tool_choice": "auto",
+                    "max_tokens": 120,
+                    "temperature": 0.3
                 },
-                timeout=5.0
+                timeout=5.5
             )
             if resp.status_code == 200:
                 data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                choice = data.get("choices", [{}])[0].get("message", {})
+                tool_calls = choice.get("tool_calls", [])
+                if tool_calls:
+                    fn = tool_calls[0].get("function", {})
+                    name = fn.get("name", "")
+                    raw_args = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except Exception:
+                        args = {}
+                    return ("tool_call", name, args)
+                content = choice.get("content", "")
+                if content:
+                    return ("text", content.strip(), None)
             return None
 
         try:
-            ans = await loop.run_in_executor(None, _call_groq)
-            if ans: return ans
+            res = await loop.run_in_executor(None, _call_groq)
+            if res:
+                kind, val1, val2 = res
+                if kind == "tool_call":
+                    return await execute_robot_voice_tool(bridge, opts, val1, val2 or {})
+                elif kind == "text":
+                    return (val1, "conversational_llm")
         except Exception:
             pass
 
-    # 2. Gemini 2.0 Flash / 1.5 Flash
+    # 2. Gemini 2.0 Flash (multimodal, native tool calling, free daily tier)
     if gemini_key:
         def _call_gemini():
             import requests
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
             payload = {
                 "contents": [
-                    {"role": "user", "parts": [{"text": f"{system_prompt}\nUser: {user_text}\nNavPro Mini:"}]}
+                    {"role": "user", "parts": [{"text": user_text}]}
                 ],
-                "generationConfig": {"maxOutputTokens": 80, "temperature": 0.6}
+                "systemInstruction": {
+                    "parts": [{"text": system_prompt}]
+                },
+                "tools": ROBOT_GEMINI_TOOLS,
+                "generationConfig": {"maxOutputTokens": 120, "temperature": 0.3}
             }
-            resp = requests.post(url, json=payload, timeout=5.0)
+            resp = requests.post(url, json=payload, timeout=5.5)
             if resp.status_code == 200:
                 data = resp.json()
                 parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", "").strip()
+                for part in parts:
+                    if "functionCall" in part:
+                        fc = part["functionCall"]
+                        return ("tool_call", fc.get("name", ""), fc.get("args", {}))
+                    if "text" in part and part["text"].strip():
+                        return ("text", part["text"].strip(), None)
             return None
 
         try:
-            ans = await loop.run_in_executor(None, _call_gemini)
-            if ans: return ans
+            res = await loop.run_in_executor(None, _call_gemini)
+            if res:
+                kind, val1, val2 = res
+                if kind == "tool_call":
+                    return await execute_robot_voice_tool(bridge, opts, val1, val2 or {})
+                elif kind == "text":
+                    return (val1, "conversational_llm")
         except Exception:
             pass
 
@@ -362,6 +649,18 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
     Returns:
         (robot_reply_text, action_executed_or_none)
     """
+    # 1. Primary: Intelligent LLM with Native Tool Calling (if Groq or Gemini key is configured)
+    groq_key = _VOICE_CONFIG.get("groq_api_key") or os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = _VOICE_CONFIG.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "").strip()
+    if groq_key or gemini_key:
+        try:
+            llm_res = await _query_llm_with_tool_calling(bridge, opts, user_text)
+            if llm_res is not None:
+                return llm_res
+        except Exception:
+            pass
+
+    # 2. Fallback: Fast Local Regex Engine (Zero Cloud / Offline Operation)
     text_lower = user_text.lower().strip()
 
     # 1. Docking Command
@@ -457,13 +756,20 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
     if re.search(r'\b(help|what can you do|commands)\b', text_lower):
         return ("You can tell me to dock, undock, go to node 1, check battery, or stop anytime!", "help")
 
-    # 9. Conversational reasoning via LLM (Groq / Gemini)
-    llm_reply = await _query_llm_conversational_reply(user_text)
-    if llm_reply:
-        return (llm_reply, "conversational_llm")
-
-    # 10. Fallback Conversational Response
+    # 9. Fallback Local Conversational Response
     return (f"I heard you say: '{user_text}'. I am ready to navigate, dock, or check status whenever you are ready!", "conversational")
+
+
+class VoiceInterruptHandler(BaseHandler):
+    """Instantly interrupt and cancel any active speech synthesis (barge-in reflex)."""
+
+    async def post(self) -> None:
+        try:
+            from ..audio import stop_active_speech
+            stop_active_speech()
+        except Exception:
+            pass
+        self.send({'interrupted': True})
 
 
 class VoiceListenHandler(BaseHandler):
@@ -477,6 +783,13 @@ class VoiceListenHandler(BaseHandler):
 
         if _IS_MUTED:
             raise ApiError(400, 'voice_muted', 'Microphone is currently muted in UI')
+
+        # Instant Barge-In: immediately interrupt any currently playing audio so robot stops speaking
+        try:
+            from ..audio import stop_active_speech
+            stop_active_speech()
+        except Exception:
+            pass
 
         _IS_LISTENING = True
         if hasattr(self.bridge, 'publish_led_command'):
@@ -499,6 +812,24 @@ class VoiceListenHandler(BaseHandler):
                 self.send({'status': 'silence', 'text': '', 'reply': 'No speech detected.'})
                 return
 
+            reply_text = ""
+            action = None
+            if auto_reply:
+                reply_text, action = await process_voice_agent_command(self.bridge, self.opts, transcript)
+
+                # If speech was classified as background noise/third-party chatter, stay silent!
+                if action == "ignored":
+                    if hasattr(self.bridge, 'publish_led_command'):
+                        self.bridge.publish_led_command('solid,0,255,100')
+                    self.send({
+                        'status': 'ignored',
+                        'text': transcript,
+                        'reply': '',
+                        'action': 'ignored',
+                        'messages': _CONVERSATION_HISTORY[-30:]
+                    })
+                    return
+
             _LAST_TRANSCRIPT = transcript
             user_msg = {
                 "id": f"user_{int(time.time()*1000)}",
@@ -510,10 +841,7 @@ class VoiceListenHandler(BaseHandler):
             with _VOICE_LOCK:
                 _CONVERSATION_HISTORY.append(user_msg)
 
-            reply_text = ""
-            action = None
             if auto_reply:
-                reply_text, action = await process_voice_agent_command(self.bridge, self.opts, transcript)
                 _LAST_REPLY = reply_text
                 robot_msg = {
                     "id": f"robot_{int(time.time()*1000)}",
@@ -559,6 +887,23 @@ class VoiceChatHandler(BaseHandler):
         if not message:
             raise ApiError(400, 'invalid_message', 'Message text cannot be empty')
 
+        # Instant Barge-In: immediately interrupt any currently playing audio
+        try:
+            from ..audio import stop_active_speech
+            stop_active_speech()
+        except Exception:
+            pass
+
+        reply_text, action = await process_voice_agent_command(self.bridge, self.opts, message)
+
+        if action == "ignored":
+            self.send({
+                'reply': '',
+                'action': 'ignored',
+                'messages': _CONVERSATION_HISTORY[-30:]
+            })
+            return
+
         user_msg = {
             "id": f"user_{int(time.time()*1000)}",
             "sender": "user",
@@ -569,9 +914,7 @@ class VoiceChatHandler(BaseHandler):
         with _VOICE_LOCK:
             _CONVERSATION_HISTORY.append(user_msg)
 
-        reply_text, action = await process_voice_agent_command(self.bridge, self.opts, message)
         _LAST_REPLY = reply_text
-
         robot_msg = {
             "id": f"robot_{int(time.time()*1000)}",
             "sender": "robot",
@@ -582,7 +925,7 @@ class VoiceChatHandler(BaseHandler):
         with _VOICE_LOCK:
             _CONVERSATION_HISTORY.append(robot_msg)
 
-        if speak:
+        if speak and reply_text:
             try:
                 from ..audio import play_speech
                 play_speech(reply_text, wait=False)
