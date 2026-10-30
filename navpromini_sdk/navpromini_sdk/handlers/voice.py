@@ -3,16 +3,18 @@
 
 Provides:
 - Live microphone audio capture and filtering (removes bottom chassis / fan rumble)
-- Speech-to-Text (STT) transcription
+- Multi-engine Speech-to-Text (STT) transcription (Groq Whisper-large-v3-turbo / Google STT)
 - Voice Agent intent parser & autonomous robot controller (via SDK / MCP actions)
+- Multi-engine Conversational LLM reasoning (Groq LLaMA 3.3 / Gemini 2.0 Flash / Local Fallback)
 - Conversational chat dialog history (Left: Robot, Right: User)
-- Cute Neural TTS output streaming through robot speakers
+- Cute Neural TTS output streaming through robot speakers (Piper TTS)
 - Real-time listening / mute state and audio activity levels
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -41,6 +43,13 @@ _LAST_TRANSCRIPT = ""
 _LAST_REPLY = ""
 _AUDIO_LEVEL = 0.0
 
+# Dynamic API configuration for Groq & Gemini (can be set via env or /api/v1/voice/config)
+_VOICE_CONFIG = {
+    "groq_api_key": os.getenv("GROQ_API_KEY", "").strip(),
+    "gemini_api_key": os.getenv("GEMINI_API_KEY", "").strip(),
+    "model_preference": os.getenv("VOICE_MODEL_PREF", "groq").strip()  # "groq" or "gemini"
+}
+
 
 def _get_pulse_env() -> dict[str, str]:
     env = dict(os.environ)
@@ -61,8 +70,17 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
     global _AUDIO_LEVEL
     raw_fd, raw_wav = tempfile.mkstemp(prefix="navpro_raw_", suffix=".wav")
     os.close(raw_fd)
+    try:
+        os.chmod(raw_wav, 0o666)
+    except OSError:
+        pass
+
     clean_fd, clean_wav = tempfile.mkstemp(prefix="navpro_clean_", suffix=".wav")
     os.close(clean_fd)
+    try:
+        os.chmod(clean_wav, 0o666)
+    except OSError:
+        pass
 
     env = _get_pulse_env()
     cmd: list[str] = []
@@ -123,6 +141,11 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
         else:
             samples = samples.astype(np.float32)
 
+        # Discard the initial 0.35s hardware startup pop from the webcam microphone
+        startup_samples = int(framerate * 0.35)
+        if len(samples) > startup_samples + int(framerate * 0.5):
+            samples = samples[startup_samples:]
+
         # High-pass filter (100 Hz cutoff) to eliminate chassis/motor rumble from bottom webcam mic
         try:
             from scipy.signal import butter, sosfilt
@@ -155,7 +178,7 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
             pass
 
         return clean_wav
-    except Exception as exc:
+    except Exception:
         # Fallback: if numpy processing fails, return raw WAV directly
         return raw_wav
     finally:
@@ -165,8 +188,29 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
 
 
 def transcribe_audio_file(wav_path: str) -> Optional[str]:
-    """Transcribe audio file to text using speech_recognition."""
+    """Transcribe audio file to text using Groq Whisper or Google STT."""
     try:
+        # 1. Try Groq Whisper (blazing fast, highest accuracy, free tier)
+        groq_key = _VOICE_CONFIG.get("groq_api_key") or os.getenv("GROQ_API_KEY", "").strip()
+        if groq_key:
+            try:
+                import requests
+                with open(wav_path, "rb") as audio_file:
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {groq_key}"},
+                        files={"file": ("audio.wav", audio_file, "audio/wav")},
+                        data={"model": "whisper-large-v3-turbo", "response_format": "json"},
+                        timeout=7.0
+                    )
+                if resp.status_code == 200:
+                    text = resp.json().get("text", "").strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+
+        # 2. Fallback: Google Speech Recognition (free, unlimited small clips, no key needed)
         import speech_recognition as sr
         r = sr.Recognizer()
         r.energy_threshold = 200
@@ -183,8 +227,79 @@ def transcribe_audio_file(wav_path: str) -> Optional[str]:
             except OSError: pass
 
 
+async def _query_llm_conversational_reply(user_text: str) -> Optional[str]:
+    """Generate intelligent natural voice reply via Groq or Gemini if keys are configured."""
+    groq_key = _VOICE_CONFIG.get("groq_api_key") or os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = _VOICE_CONFIG.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "").strip()
+    pref = _VOICE_CONFIG.get("model_preference", "groq")
+
+    system_prompt = (
+        "You are NavPro Mini, an autonomous mobile robot assistant developed by Botforge. "
+        "You have LiDAR, depth cameras, and autonomous navigation. "
+        "Keep your response concise, polite, natural, and under 2 sentences, ideal for spoken audio."
+    )
+
+    loop = asyncio.get_event_loop()
+
+    # 1. Groq LLaMA 3.3 / 3.1
+    if groq_key and (pref == "groq" or not gemini_key):
+        def _call_groq():
+            import requests
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_text}
+                    ],
+                    "max_tokens": 100,
+                    "temperature": 0.6
+                },
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["choices"][0]["message"]["content"].strip()
+            return None
+
+        try:
+            ans = await loop.run_in_executor(None, _call_groq)
+            if ans: return ans
+        except Exception:
+            pass
+
+    # 2. Gemini 2.0 Flash / 1.5 Flash
+    if gemini_key:
+        def _call_gemini():
+            import requests
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [
+                    {"role": "user", "parts": [{"text": f"{system_prompt}\nUser: {user_text}\nNavPro Mini:"}]}
+                ],
+                "generationConfig": {"maxOutputTokens": 80, "temperature": 0.6}
+            }
+            resp = requests.post(url, json=payload, timeout=5.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                if parts:
+                    return parts[0].get("text", "").strip()
+            return None
+
+        try:
+            ans = await loop.run_in_executor(None, _call_gemini)
+            if ans: return ans
+        except Exception:
+            pass
+
+    return None
+
+
 async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_text: str) -> tuple[str, Optional[str]]:
-    """Interpret user speech and execute corresponding robot action if matched.
+    """Interpret user speech, execute corresponding robot action, or converse intelligently.
 
     Returns:
         (robot_reply_text, action_executed_or_none)
@@ -218,16 +333,18 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
         except Exception:
             return ("Robot has been commanded to stop.", "stop")
 
-    # 4. Road Network Navigation (e.g. "go to node 1", "navigate to node 2", "node 3")
-    node_match = re.search(r'\b(?:node|waypoint|point)\s*(\d+)\b', text_lower)
-    if node_match:
-        node_id = int(node_match.group(1))
+    # 4. Road Network Node Navigation: e.g. "go to node 1", "drive to node 2", "navigate to node 5"
+    m_node = re.search(r'\b(?:go to|drive to|navigate to|reach)\s+(?:node|point|station)\s+(\d+)\b', text_lower)
+    if m_node:
+        target_node = int(m_node.group(1))
         try:
-            from .navigation import send_route_goal
-            await send_route_goal(bridge, opts, goal_id=node_id, routing_mode='road_network')
-            return (f"Navigating along the road network to Node {node_id}.", f"route_node_{node_id}")
+            from .roadnet import navigate_roadnet_route
+            store = opts.get('store')
+            current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
+            await navigate_roadnet_route(bridge, opts, current_map, target_node)
+            return (f"Navigating to road network node {target_node}.", f"route_node_{target_node}")
         except Exception as exc:
-            return (f"Could not route to Node {node_id}: {exc}", f"route_error_{node_id}")
+            return (f"Could not navigate to node {target_node}: {exc}", "route_error")
 
     # 5. Battery Status
     if re.search(r'\b(battery|charge level|power status|how much battery)\b', text_lower):
@@ -238,7 +355,6 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
             dock_st = dock_raw
         elif isinstance(dock_raw, str):
             try:
-                import json
                 dock_st = json.loads(dock_raw)
             except Exception:
                 dock_st = {}
@@ -252,7 +368,7 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
         chg_str = "charging at the dock" if is_charging else "discharging"
         if pct > 0:
             return (f"My battery is currently at {pct:.0f}% and {chg_str}.", "battery_status")
-        return ("Battery monitor is currently active.", "battery_status")
+        return (f"Battery telemetry is initializing, and system is {chg_str}.", "battery_status")
 
     # 6. Location / Status
     if re.search(r'\b(where are you|position|location|status|what are you doing)\b', text_lower):
@@ -263,7 +379,6 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
             dock_st = dock_raw
         elif isinstance(dock_raw, str):
             try:
-                import json
                 dock_st = json.loads(dock_raw)
             except Exception:
                 dock_st = {}
@@ -277,15 +392,20 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
         return (f"I am ready for navigation on map '{current_map}'.", "status")
 
     # 7. Greetings / Introductions
-    if re.search(r'\b(hello|hi|hey|good morning|good afternoon|who are you|introduce)\b', text_lower):
+    if re.search(r'\b(hello|hi|hey|good morning|good afternoon)\b', text_lower):
         return ("Hello! I am NavPro Mini. I can hear you clearly and navigate your facility. What would you like me to do?", "greeting")
 
     # 8. Help / Capabilities
     if re.search(r'\b(help|what can you do|commands)\b', text_lower):
         return ("You can tell me to dock, undock, go to node 1, check battery, or stop anytime!", "help")
 
-    # 9. Conversational Fallback
-    return (f"I heard you say: '{user_text}'. I am ready to navigate or dock whenever you are ready!", "conversational")
+    # 9. Conversational reasoning via LLM (Groq / Gemini)
+    llm_reply = await _query_llm_conversational_reply(user_text)
+    if llm_reply:
+        return (llm_reply, "conversational_llm")
+
+    # 10. Fallback Conversational Response
+    return (f"I heard you say: '{user_text}'. I am ready to navigate, dock, or check status whenever you are ready!", "conversational")
 
 
 class VoiceListenHandler(BaseHandler):
@@ -486,4 +606,40 @@ class VoiceMuteHandler(BaseHandler):
             'muted': _IS_MUTED,
             'listening': _IS_LISTENING,
             'message': 'Microphone muted' if _IS_MUTED else 'Microphone active and listening'
+        })
+
+
+class VoiceConfigHandler(BaseHandler):
+    """Configure voice models, Groq / Gemini API keys, and model preferences."""
+
+    def get(self) -> None:
+        groq_set = bool(_VOICE_CONFIG.get("groq_api_key"))
+        gemini_set = bool(_VOICE_CONFIG.get("gemini_api_key"))
+        self.send({
+            "groq_configured": groq_set,
+            "gemini_configured": gemini_set,
+            "model_preference": _VOICE_CONFIG.get("model_preference", "groq"),
+            "available_engines": [
+                {"id": "groq", "name": "Groq Whisper Turbo + LLaMA 3.3 (Ultra Fast, Free Daily Tier)"},
+                {"id": "gemini", "name": "Google Gemini 2.0 Flash (Multimodal, Free Daily Tier)"},
+                {"id": "local", "name": "Google Speech Recognition + Offline Local Agent"}
+            ]
+        })
+
+    def post(self) -> None:
+        data = self.body()
+        if "groq_api_key" in data:
+            _VOICE_CONFIG["groq_api_key"] = str(data["groq_api_key"]).strip()
+        if "gemini_api_key" in data:
+            _VOICE_CONFIG["gemini_api_key"] = str(data["gemini_api_key"]).strip()
+        if "model_preference" in data:
+            pref = str(data["model_preference"]).strip().lower()
+            if pref in ("groq", "gemini", "local"):
+                _VOICE_CONFIG["model_preference"] = pref
+
+        self.send({
+            "status": "updated",
+            "groq_configured": bool(_VOICE_CONFIG.get("groq_api_key")),
+            "gemini_configured": bool(_VOICE_CONFIG.get("gemini_api_key")),
+            "model_preference": _VOICE_CONFIG.get("model_preference")
         })
