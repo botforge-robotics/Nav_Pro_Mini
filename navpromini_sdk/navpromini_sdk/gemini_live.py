@@ -24,7 +24,12 @@ from typing import Any, Optional
 
 logger = logging.getLogger("navpromini_sdk.gemini_live")
 
-GEMINI_LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+GEMINI_LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+GEMINI_LIVE_MODELS = [
+    "models/gemini-2.5-flash-native-audio-preview-12-2025",
+    "models/gemini-2.5-flash-native-audio",
+    "models/gemini-2.0-flash-exp",
+]
 
 
 def get_pulse_env() -> dict[str, str]:
@@ -218,13 +223,13 @@ class GeminiLiveSession:
 
         setup_message = {
             "setup": {
-                "model": "models/gemini-3.5-flash",
+                "model": "models/gemini-2.5-flash-native-audio-preview-12-2025",
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
                     "speechConfig": {
                         "voiceConfig": {
                             "prebuiltVoiceConfig": {
-                                "voiceName": "Puck"
+                                "voiceName": "Aoede"
                             }
                         }
                     }
@@ -267,19 +272,21 @@ class GeminiLiveSession:
 
     async def _mic_sender_loop(self, ws: Any) -> None:
         """Stream 16kHz PCM audio continuously from microphone to Gemini Live."""
-        env = get_pulse_env()
-        cmd = ['parecord', '--raw', '--rate', '16000', '--channels', '1', '--format', 's16le']
+        if shutil.which('arecord'):
+            cmd = ['arecord', '-D', 'default', '-t', 'raw', '-f', 'S16_LE', '-r', '16000', '-c', '1', '-q']
+        else:
+            cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le']
+
         p_mic: Optional[subprocess.Popen] = None
         try:
             p_mic = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                env=env,
                 bufsize=0
             )
         except Exception as e:
-            logger.error(f"Failed to start parecord for Gemini Live mic stream: {e}")
+            logger.error(f"Failed to start mic capture for Gemini Live mic stream: {e}")
             return
 
         chunk_size = 3200  # 100 ms of 16kHz 16-bit mono PCM (1600 samples * 2 bytes)
@@ -396,6 +403,7 @@ class GeminiLiveSession:
 
                     responses.append({
                         "id": call_id,
+                        "name": name,
                         "response": {
                             "output": {
                                 "status": "success",

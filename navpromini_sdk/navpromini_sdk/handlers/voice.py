@@ -189,8 +189,14 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
     env = _get_pulse_env()
     cmd: list[str] = []
 
-    # Use parecord with PulseAudio if available (runs as navpromini user if root)
-    if shutil.which('parecord'):
+    # Use arecord as primary (direct ALSA / Pulse default capture with accurate duration & clean WAV header)
+    if shutil.which('arecord'):
+        cmd = [
+            'arecord', '-D', 'default', '-f', 'S16_LE',
+            '-c', '1', '-r', '16000', '-d', str(int(duration_sec)),
+            '-q', raw_wav
+        ]
+    elif shutil.which('parecord'):
         if os.geteuid() == 0:
             cmd = [
                 'sudo', '-u', 'navpromini', 'env',
@@ -206,12 +212,6 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
                 'parecord', '-r', '--file-format=wav',
                 '--channels=1', '--rate=16000', raw_wav
             ]
-    elif shutil.which('arecord'):
-        cmd = [
-            'arecord', '-D', 'hw:0,0', '-f', 'S16_LE',
-            '-c', '2', '-r', '16000', '-d', str(int(duration_sec)),
-            '-q', raw_wav
-        ]
     else:
         return None
 
@@ -322,7 +322,7 @@ def transcribe_audio_file(wav_path: str) -> Optional[str]:
                 import requests
                 with open(wav_path, "rb") as af:
                     b64_audio = base64.b64encode(af.read()).decode("ascii")
-                for m in ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+                for m in ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"]:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={gemini_key}"
                     payload = {
                         "contents": [{
@@ -697,10 +697,9 @@ async def _query_llm_with_tool_calling(
                 import requests
                 models_to_try = [
                     "gemini-3.5-flash",
-                    "gemini-3.6-flash",
+                    "gemini-flash-latest",
                     "gemini-3.1-flash-lite",
                     "gemini-3.8-flash",
-                    "gemini-flash-latest",
                 ]
                 for m in models_to_try:
                     try:
