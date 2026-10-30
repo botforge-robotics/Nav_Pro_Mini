@@ -33,7 +33,7 @@ _CONVERSATION_HISTORY: list[dict[str, Any]] = [
     {
         "id": "welcome_1",
         "sender": "robot",
-        "text": "Hello! I am NavPro Mini. I can hear your voice and control navigation. Try saying 'dock', 'undock', 'go to node 1', or 'what is your battery?'",
+        "text": "Hi! I'm Aria. How can I help you?",
         "timestamp": time.time(),
         "action": None
     }
@@ -542,16 +542,16 @@ async def execute_robot_voice_tool(
         try:
             from .docking import send_dock_goal
             await send_dock_goal(bridge, True)
-            reply = spoken or "Heading to the charging dock now."
+            reply = spoken or "Sure thing! Heading over to recharge now."
             return (reply, "dock")
         except Exception as exc:
-            return (f"Could not initiate docking: {exc}", "dock_error")
+            return (f"Could not head to dock right now: {exc}", "dock_error")
 
     if tool_name == "undock_robot":
         try:
             from .docking import send_undock_goal
             await send_undock_goal(bridge)
-            reply = spoken or "Undocking and rolling forward off the charging dock."
+            reply = spoken or "No problem, rolling off the charging dock!"
             return (reply, "undock")
         except Exception as exc:
             return (f"Could not undock: {exc}", "undock_error")
@@ -560,10 +560,10 @@ async def execute_robot_voice_tool(
         try:
             from .navigation import cancel_active_navigation
             await cancel_active_navigation(bridge, 'voice_emergency_stop')
-            reply = spoken or "Emergency stop engaged. All motion halted."
+            reply = spoken or "Okay, okay! Stopping right now!"
             return (reply, "stop")
         except Exception:
-            return ("Robot has been commanded to stop.", "stop")
+            return ("Okay, okay! Stopping right now!", "stop")
 
     if tool_name == "navigate_to_road_node":
         node_id = int(args.get("node_id", 1))
@@ -572,10 +572,10 @@ async def execute_robot_voice_tool(
             store = opts.get('store')
             current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
             await navigate_roadnet_route(bridge, opts, current_map, node_id)
-            reply = spoken or f"Navigating to road network node {node_id}."
+            reply = spoken or f"Sure thing, on my way to station {node_id}!"
             return (reply, f"route_node_{node_id}")
         except Exception as exc:
-            return (f"Could not navigate to node {node_id}: {exc}", "route_error")
+            return (f"Could not navigate to station {node_id}: {exc}", "route_error")
 
     if tool_name == "get_robot_telemetry":
         if spoken:
@@ -588,8 +588,8 @@ async def execute_robot_voice_tool(
             p = float(batt.get('percentage', 0.0) or 0.0)
             pct = p * 100.0 if p <= 1.0 else p
         is_chg = bool(dock_st.get('charging') or (batt and batt.get('charging')))
-        chg_str = "charging at dock" if is_chg else "discharging"
-        return (f"Battery is at {pct:.0f}% and {chg_str}.", "battery_status")
+        chg_str = "charging up at the dock" if is_chg else "running off the dock"
+        return (f"I'm at {pct:.0f}% battery and {chg_str}!", "battery_status")
 
     return (spoken or "Action executed.", tool_name)
 
@@ -609,21 +609,21 @@ async def _query_llm_with_tool_calling(
 
     robot_context = _build_robot_context_str(bridge, opts)
     system_prompt = (
-        "You are NavPro Mini, an intelligent autonomous robotics voice assistant developed by Botforge. "
-        "You are deployed on an autonomous mobile robot equipped with LiDAR, depth cameras, and ROS2 navigation.\n"
+        "You are Aria, an intelligent, warm, friendly AI companion on this autonomous robot developed by Botforge. "
+        "You speak naturally, informally, and warmly like a real conversational friend (e.g. 'Okay okay, I am stopping right now!', 'Sure thing, heading over to recharge!').\n"
         f"{robot_context}\n\n"
-        "CORE CONVERSATION & SAFETY RULES:\n"
-        "1. TELEPHONY STYLE & CONCISENESS: Keep all spoken replies under 2 natural, concise sentences suitable for spoken TTS audio.\n"
-        "2. MULTILINGUAL TOOL CALLING: The user may speak English, Hindi, Telugu, Tamil, Spanish, German, French, etc. You must understand their intent, execute tools, and speak your reply in the SAME language the user spoke.\n"
-        "3. TOOL CALLING: Use your direct tools to control the robot:\n"
-        "   - dock_robot: Return to charging dock, latch, and charge (e.g. 'dock', 'charge', 'डॉक पर जाओ', 'ఛార్జింగ్ డాక్ కి వెళ్లు')\n"
-        "   - undock_robot: Disengage and roll forward off the charging dock\n"
-        "   - emergency_stop: Immediately halt all robot motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'freeze', 'रोको', 'ఆగు')\n"
-        "   - navigate_to_road_node: Drive to a specific station or node number on the road network (e.g. 'go to node 1', 'drive to station 2')\n"
-        "   - get_robot_telemetry: Check current battery %, charging state, position, or current map\n"
-        "   - ignore_background_speech: BACKGROUND CHATTER FILTER\n"
-        "4. FILTERING UNNECESSARY SURROUNDING CHATTER: If the audio transcript is background chatter, someone talking to another human in the room, background TV/music, or ambient noise not directly addressing you, you MUST call 'ignore_background_speech'. Do NOT speak or interrupt human conversations.\n"
-        "5. When calling any action tool, always supply the 'spoken_response' argument in the user's spoken language."
+        "CORE CONVERSATION & PERSONALITY RULES:\n"
+        "1. CASUAL & NATURAL: NEVER use stiff, robotic, mechanical phrases like 'Robot has been commanded to stop' or 'Executing command'. Speak naturally like a real human assistant (e.g. 'Okay okay, stopping right now!', 'Got it, on my way!').\n"
+        "2. CONCISE: Keep all spoken replies under 2 short, natural sentences suitable for spoken audio.\n"
+        "3. MULTILINGUAL: The user may speak English, Hindi, Telugu, Tamil, Spanish, German, French, etc. You can understand their intent in ANY language and reply naturally in their spoken language (e.g. in Telugu: 'సరే సరే, ఇప్పుడే ఆగుతున్నాను!', in Hindi: 'हाँ हाँ, मैं तुरंत रुक रही हूँ!').\n"
+        "4. ACTIVE TOOLS:\n"
+        "   - dock_robot: Return to charging dock (e.g. 'dock', 'charge', 'డాల్ కి వెళ్లు')\n"
+        "   - undock_robot: Disengage from dock\n"
+        "   - emergency_stop: Immediately halt motion (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
+        "   - navigate_to_road_node: Drive to a station number\n"
+        "   - get_robot_telemetry: Check battery/status\n"
+        "   - ignore_background_speech: Ambient noise filter\n"
+        "5. When calling any action tool, always supply the 'spoken_response' argument with a warm, natural confirmation in the user's spoken language."
     )
 
     loop = asyncio.get_event_loop()
@@ -768,16 +768,16 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
         try:
             from .docking import send_dock_goal
             await send_dock_goal(bridge, True)
-            return ("Heading to the charging dock now.", "dock")
+            return ("Sure thing! Heading to recharge right now.", "dock")
         except Exception as exc:
-            return (f"Could not start docking: {exc}", "dock_error")
+            return (f"Could not dock right now: {exc}", "dock_error")
 
     # 2. Undocking Command
     if re.search(r'\b(undock|undocking|leave dock|disconnect dock)\b', text_lower):
         try:
             from .docking import send_undock_goal
             await send_undock_goal(bridge)
-            return ("Undocking and rolling forward off the charging contacts.", "undock")
+            return ("No problem, rolling off the dock now!", "undock")
         except Exception as exc:
             return (f"Could not undock: {exc}", "undock_error")
 
@@ -786,9 +786,9 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
         try:
             from .navigation import cancel_active_navigation
             await cancel_active_navigation(bridge, 'user_voice_stop')
-            return ("Stopping all motion and canceling active goals.", "stop")
+            return ("Okay, okay! Stopping right now!", "stop")
         except Exception:
-            return ("Robot has been commanded to stop.", "stop")
+            return ("Okay, okay! Stopping right now!", "stop")
 
     # 4. Road Network Node Navigation: e.g. "go to node 1", "drive to node 2", "navigate to node 5"
     m_node = re.search(r'\b(?:go to|drive to|navigate to|reach)\s+(?:node|point|station)\s+(\d+)\b', text_lower)
@@ -799,9 +799,9 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
             store = opts.get('store')
             current_map = store.current_map() if store and hasattr(store, 'current_map') else 'f202'
             await navigate_roadnet_route(bridge, opts, current_map, target_node)
-            return (f"Navigating to road network node {target_node}.", f"route_node_{target_node}")
+            return (f"On my way to station {target_node}!", f"route_node_{target_node}")
         except Exception as exc:
-            return (f"Could not navigate to node {target_node}: {exc}", "route_error")
+            return (f"Could not navigate to station {target_node}: {exc}", "route_error")
 
     # 5. Battery Status
     if re.search(r'\b(battery|charge level|power status|how much battery)\b', text_lower):
@@ -822,9 +822,9 @@ async def process_voice_agent_command(bridge: Any, opts: dict[str, Any], user_te
             pct = pct_val * 100.0 if pct_val <= 1.0 else pct_val
 
         is_charging = bool(dock_st.get('charging') or (batt and batt.get('charging')))
-        chg_str = "charging at the dock" if is_charging else "discharging"
+        chg_str = "charging up at the dock" if is_charging else "running off the dock"
         if pct > 0:
-            return (f"My battery is currently at {pct:.0f}% and {chg_str}.", "battery_status")
+            return (f"I'm at {pct:.0f}% battery and {chg_str}!", "battery_status")
         return (f"Battery telemetry is initializing, and system is {chg_str}.", "battery_status")
 
     # 6. Location / Status
