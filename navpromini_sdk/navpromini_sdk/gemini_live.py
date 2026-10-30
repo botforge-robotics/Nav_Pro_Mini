@@ -292,8 +292,8 @@ class GeminiLiveSession:
 
     async def _mic_sender_loop(self, ws: Any) -> None:
         """Stream 16kHz PCM audio continuously from microphone to Gemini Live."""
-        device = 'plughw:CARD=Audio,DEV=0' if os.path.exists('/dev/snd/pcmC0D0c') else 'default'
-        cmd = ['arecord', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', '16000', '-c', '1', '-q']
+        env = get_pulse_env()
+        cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le']
 
         p_mic: Optional[subprocess.Popen] = None
         try:
@@ -301,9 +301,10 @@ class GeminiLiveSession:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                env=env,
                 bufsize=0
             )
-            print(f"[GeminiLive] Started microphone capture using {device}", flush=True)
+            print("[GeminiLive] Started microphone capture using parec (PulseAudio)", flush=True)
         except Exception as e:
             logger.error(f"Failed to start mic capture for Gemini Live mic stream: {e}")
             return
@@ -311,28 +312,39 @@ class GeminiLiveSession:
         chunk_size = 1600  # 50 ms of 16kHz 16-bit mono PCM (800 samples * 2 bytes)
         loop = asyncio.get_event_loop()
 
-        # Discard the initial 150ms DC transient pop on USB microphones
+        def _read_exact(n: int) -> bytes:
+            buf = bytearray()
+            while len(buf) < n:
+                if self._stop_event.is_set():
+                    break
+                part = p_mic.stdout.read(n - len(buf))
+                if not part:
+                    break
+                buf.extend(part)
+            return bytes(buf)
+
+        # Discard the initial 400ms DC transient pop on USB microphones
         try:
-            await loop.run_in_executor(None, p_mic.stdout.read, 4800)
+            await loop.run_in_executor(None, _read_exact, 12800)
         except Exception:
             pass
 
         try:
             while not self._stop_event.is_set():
-                data = await loop.run_in_executor(None, p_mic.stdout.read, chunk_size)
-                if not data:
+                data = await loop.run_in_executor(None, _read_exact, chunk_size)
+                if not data or len(data) < chunk_size:
+                    if self._stop_event.is_set():
+                        break
                     await asyncio.sleep(0.01)
                     continue
 
                 if self.muted:
                     # When muted, do not send user speech to Gemini
-                    await asyncio.sleep(0.05)
                     continue
 
                 # Echo prevention: if robot speaker is currently playing Aria's voice,
                 # do not feed the robot's own speaker sound back into the microphone
                 if self.is_speaking:
-                    await asyncio.sleep(0.04)
                     continue
 
                 b64_audio = base64.b64encode(data).decode('ascii')
@@ -349,6 +361,8 @@ class GeminiLiveSession:
                 await ws.send(json.dumps(realtime_msg))
         except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
             pass
+        except Exception as e:
+            logger.warning(f"Gemini live mic loop exception: {e}")
         finally:
             if p_mic:
                 try:
@@ -385,12 +399,11 @@ class GeminiLiveSession:
                     print("[GeminiLive] Model turn complete", flush=True)
                     # Turn complete: flush/close paplay stdin so audio finishes naturally and frees player
                     with self._player_lock:
-                        if self._player_proc and self._player_proc.stdin:
+                        if self._player_proc and self._player_proc.stdin and not self._player_proc.stdin.closed:
                             try:
                                 self._player_proc.stdin.close()
                             except Exception:
                                 pass
-                            self._player_proc = None
 
                 model_turn = server_content.get("modelTurn")
                 if model_turn:
