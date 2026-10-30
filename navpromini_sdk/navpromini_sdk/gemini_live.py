@@ -62,12 +62,18 @@ class GeminiLiveSession:
         self._bridge: Any = None
         self._opts: dict[str, Any] = {}
 
+    @property
+    def is_speaking(self) -> bool:
+        with self._player_lock:
+            return self._player_proc is not None and self._player_proc.poll() is None
+
     def get_status(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "active": self.active,
                 "muted": self.muted,
                 "connecting": self.connecting,
+                "speaking": self.is_speaking,
                 "last_error": self.last_error,
                 "engine": "gemini_live"
             }
@@ -208,7 +214,7 @@ class GeminiLiveSession:
             "   - emergency_stop: Immediately halt all robot motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
             "   - navigate_to_road_node: Drive to a specific station or node number on the road network (e.g. 'go to node 1', 'drive to station 2')\n"
             "   - get_robot_telemetry: Check current battery %, charging state, position, or current map\n"
-            "   - ignore_background_speech: When ambient speech is clearly background noise or chatter not directed at you.\n"
+            "   - ignore_background_speech: ONLY call this if audio is completely unintelligible noise or silence. When any human talks to you, ALWAYS answer them out loud!\n"
             "5. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human user to hear."
         )
 
@@ -286,10 +292,8 @@ class GeminiLiveSession:
 
     async def _mic_sender_loop(self, ws: Any) -> None:
         """Stream 16kHz PCM audio continuously from microphone to Gemini Live."""
-        if shutil.which('arecord'):
-            cmd = ['arecord', '-D', 'default', '-t', 'raw', '-f', 'S16_LE', '-r', '16000', '-c', '1', '-q']
-        else:
-            cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le']
+        device = 'plughw:CARD=Audio,DEV=0' if os.path.exists('/dev/snd/pcmC0D0c') else 'default'
+        cmd = ['arecord', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', '16000', '-c', '1', '-q']
 
         p_mic: Optional[subprocess.Popen] = None
         try:
@@ -299,16 +303,17 @@ class GeminiLiveSession:
                 stderr=subprocess.DEVNULL,
                 bufsize=0
             )
+            print(f"[GeminiLive] Started microphone capture using {device}", flush=True)
         except Exception as e:
             logger.error(f"Failed to start mic capture for Gemini Live mic stream: {e}")
             return
 
-        chunk_size = 3200  # 100 ms of 16kHz 16-bit mono PCM (1600 samples * 2 bytes)
+        chunk_size = 1600  # 50 ms of 16kHz 16-bit mono PCM (800 samples * 2 bytes)
         loop = asyncio.get_event_loop()
 
-        # Discard the initial 200ms DC transient pop on USB microphones
+        # Discard the initial 150ms DC transient pop on USB microphones
         try:
-            await loop.run_in_executor(None, p_mic.stdout.read, 6400)
+            await loop.run_in_executor(None, p_mic.stdout.read, 4800)
         except Exception:
             pass
 
@@ -322,6 +327,12 @@ class GeminiLiveSession:
                 if self.muted:
                     # When muted, do not send user speech to Gemini
                     await asyncio.sleep(0.05)
+                    continue
+
+                # Echo prevention: if robot speaker is currently playing Aria's voice,
+                # do not feed the robot's own speaker sound back into the microphone
+                if self.is_speaking:
+                    await asyncio.sleep(0.04)
                     continue
 
                 b64_audio = base64.b64encode(data).decode('ascii')
@@ -367,10 +378,11 @@ class GeminiLiveSession:
             server_content = msg.get("serverContent")
             if server_content:
                 if server_content.get("interrupted"):
-                    logger.info("Barge-in detected: Gemini interrupted by user speech! Cutting off playback immediately.")
+                    print("[GeminiLive] User barge-in detected: interrupting playback!", flush=True)
                     self._kill_player()
 
                 if server_content.get("turnComplete"):
+                    print("[GeminiLive] Model turn complete", flush=True)
                     # Turn complete: flush/close paplay stdin so audio finishes naturally and frees player
                     with self._player_lock:
                         if self._player_proc and self._player_proc.stdin:
@@ -429,7 +441,7 @@ class GeminiLiveSession:
                     call_id = fc.get("id", "")
                     name = fc.get("name", "")
                     args = fc.get("args", {})
-                    logger.info(f"Gemini Live native tool call received: {name}({args})")
+                    print(f"[GeminiLive] Native tool call received: {name}({args})", flush=True)
 
                     if name == "emergency_stop":
                         self._kill_player()
