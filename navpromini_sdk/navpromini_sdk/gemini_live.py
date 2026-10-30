@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Optional
+import websockets
 
 logger = logging.getLogger("navpromini_sdk.gemini_live")
 
@@ -182,7 +183,6 @@ class GeminiLiveSession:
             self.connecting = False
 
     async def _session_loop(self, api_key: str) -> None:
-        import websockets
         from .handlers.voice import (
             ROBOT_OPENAI_TOOLS,
             _build_robot_context_str,
@@ -243,6 +243,9 @@ class GeminiLiveSession:
                                 "voiceName": "Aoede"
                             }
                         }
+                    },
+                    "thinkingConfig": {
+                        "thinkingBudget": 0
                     }
                 },
                 "systemInstruction": {
@@ -302,6 +305,12 @@ class GeminiLiveSession:
 
         chunk_size = 3200  # 100 ms of 16kHz 16-bit mono PCM (1600 samples * 2 bytes)
         loop = asyncio.get_event_loop()
+
+        # Discard the initial 200ms DC transient pop on USB microphones
+        try:
+            await loop.run_in_executor(None, p_mic.stdout.read, 6400)
+        except Exception:
+            pass
 
         try:
             while not self._stop_event.is_set():
@@ -375,18 +384,23 @@ class GeminiLiveSession:
                 if model_turn:
                     parts = model_turn.get("parts", [])
                     for part in parts:
-                        # Audio stream chunk
-                        if part.get("mimeType", "").startswith("audio/pcm"):
+                        # Audio stream chunk (Gemini Multimodal Live returns inlineData with audio/pcm;rate=24000)
+                        inline = part.get("inlineData")
+                        b64_pcm = None
+                        if inline and inline.get("mimeType", "").startswith("audio/pcm"):
+                            b64_pcm = inline.get("data", "")
+                        elif part.get("mimeType", "").startswith("audio/pcm"):
                             b64_pcm = part.get("data", "")
-                            if b64_pcm and not self.muted:
-                                pcm_bytes = base64.b64decode(b64_pcm)
-                                player = self._ensure_player()
-                                if player and player.stdin:
-                                    try:
-                                        player.stdin.write(pcm_bytes)
-                                        player.stdin.flush()
-                                    except (BrokenPipeError, OSError):
-                                        self._kill_player()
+
+                        if b64_pcm and not self.muted:
+                            pcm_bytes = base64.b64decode(b64_pcm)
+                            player = self._ensure_player()
+                            if player and player.stdin:
+                                try:
+                                    player.stdin.write(pcm_bytes)
+                                    player.stdin.flush()
+                                except (BrokenPipeError, OSError):
+                                    self._kill_player()
 
                         # Text transcript chunk
                         if "text" in part and part["text"].strip():
@@ -416,6 +430,9 @@ class GeminiLiveSession:
                     name = fc.get("name", "")
                     args = fc.get("args", {})
                     logger.info(f"Gemini Live native tool call received: {name}({args})")
+
+                    if name == "emergency_stop":
+                        self._kill_player()
 
                     spoken_reply, action_tag = await execute_robot_voice_tool(
                         self._bridge, self._opts, name, args
