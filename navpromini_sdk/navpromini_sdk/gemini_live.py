@@ -214,14 +214,16 @@ class GeminiLiveSession:
             "   - emergency_stop: Immediately halt all robot motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
             "   - navigate_to_road_node: Drive to a specific station or node number on the road network (e.g. 'go to node 1', 'drive to station 2')\n"
             "   - get_robot_telemetry: Check current battery %, charging state, position, or current map\n"
-            "   - ignore_background_speech: ONLY call this if audio is completely unintelligible noise or silence. When any human talks to you, ALWAYS answer them out loud!\n"
-            "5. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human user to hear."
+            "5. ALWAYS TALK BACK & RESPOND: When any human speaks to you, ALWAYS answer them warmly out loud! If their speech was too quiet or unclear, ask them to repeat (e.g. 'Sorry, I couldn't hear that clearly—could you repeat that?'). NEVER stay silent!\n"
+            "6. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human user to hear."
         )
 
         # Format tools for Gemini Live functionDeclarations
         function_decls = []
         for t in ROBOT_OPENAI_TOOLS:
             fn = t["function"]
+            if fn["name"] == "ignore_background_speech":
+                continue  # Never give Gemini Live an excuse to stay silent or ignore the user!
             props = {}
             for k, v in fn["parameters"]["properties"].items():
                 props[k] = {
@@ -294,6 +296,13 @@ class GeminiLiveSession:
         """Stream 16kHz PCM audio continuously from microphone to Gemini Live."""
         env = get_pulse_env()
         cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le']
+
+        # Ensure microphone capture volume is at maximum sensitivity
+        try:
+            subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '100%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '125%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
         p_mic: Optional[subprocess.Popen] = None
         try:
