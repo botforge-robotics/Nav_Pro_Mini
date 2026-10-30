@@ -314,7 +314,36 @@ def transcribe_audio_file(wav_path: str) -> Optional[str]:
             except Exception:
                 pass
 
-        # 2. Fallback: Google Speech Recognition (free, unlimited small clips, no key needed)
+        # 2. Try Gemini Multimodal Flash Audio Transcription (if gemini_key is set)
+        gemini_key = _VOICE_CONFIG.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "").strip()
+        if gemini_key:
+            try:
+                import base64
+                import requests
+                with open(wav_path, "rb") as af:
+                    b64_audio = base64.b64encode(af.read()).decode("ascii")
+                for m in ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={gemini_key}"
+                    payload = {
+                        "contents": [{
+                            "role": "user",
+                            "parts": [
+                                {"inlineData": {"mimeType": "audio/wav", "data": b64_audio}},
+                                {"text": "Transcribe the spoken words in this audio exactly as spoken in their original language. Output ONLY the plain transcription text, nothing else. If there is no speech or only background noise, reply with empty string."}
+                            ]
+                        }],
+                        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 100}
+                    }
+                    resp = requests.post(url, json=payload, timeout=5.5)
+                    if resp.status_code == 200:
+                        parts = resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                        for p in parts:
+                            if "text" in p and p["text"].strip():
+                                return p["text"].strip()
+            except Exception:
+                pass
+
+        # 3. Fallback: Google Speech Recognition (free, unlimited small clips, no key needed)
         import speech_recognition as sr
         r = sr.Recognizer()
         r.energy_threshold = 200
@@ -666,7 +695,13 @@ async def _query_llm_with_tool_calling(
         if eng == "gemini" and gemini_key:
             def _call_gemini():
                 import requests
-                models_to_try = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
+                models_to_try = [
+                    "gemini-3.5-flash",
+                    "gemini-3.6-flash",
+                    "gemini-3.1-flash-lite",
+                    "gemini-3.8-flash",
+                    "gemini-flash-latest",
+                ]
                 for m in models_to_try:
                     try:
                         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={gemini_key}"
@@ -1089,7 +1124,7 @@ class VoiceConfigHandler(BaseHandler):
             "model_preference": _VOICE_CONFIG.get("model_preference", "groq"),
             "available_engines": [
                 {"id": "groq", "name": "Groq Whisper Turbo + LLaMA 3.3 (Ultra Fast, Free Daily Tier)"},
-                {"id": "gemini", "name": "Google Gemini 2.0 Flash (Multimodal, Free Daily Tier)"},
+                {"id": "gemini", "name": "Google Gemini Flash (Multimodal Audio & Fast Tool Calling, Free Daily Tier)"},
                 {"id": "local", "name": "Google Speech Recognition + Offline Local Agent"}
             ]
         })

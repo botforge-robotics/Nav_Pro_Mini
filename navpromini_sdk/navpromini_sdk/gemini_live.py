@@ -218,7 +218,7 @@ class GeminiLiveSession:
 
         setup_message = {
             "setup": {
-                "model": "models/gemini-2.0-flash-exp",
+                "model": "models/gemini-3.5-flash",
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
                     "speechConfig": {
