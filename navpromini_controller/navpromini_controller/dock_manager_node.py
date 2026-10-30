@@ -234,7 +234,7 @@ class DockManagerNode(Node):
             # Only consider robot removed from dock if it is actively discharging (current < -0.25A)
             # AND odometry/AMCL/tag shows it is physically outside the dock slot.
             is_discharging = (msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_DISCHARGING or self._batt_current < -0.25)
-            outside_slot = not self._is_inside_dock_slot()
+            outside_slot = not self._is_spatially_in_dock_slot()
             if is_discharging and outside_slot:
                 self._docked = False
                 self._set_status('undocked')
@@ -258,7 +258,7 @@ class DockManagerNode(Node):
             # When pack reaches 100%, BMS stops active charging and reports NOT_CHARGING.
             # If current is near zero (> -0.15A) and robot is inside dock slot or was docked,
             # it is still parked on the charger contacts.
-            if self._batt_current > -0.15 and (self._docked or self._is_inside_dock_slot()):
+            if self._batt_current > -0.15 and (self._docked or self._is_spatially_in_dock_slot()):
                 return True
         # Hardware current ground truth: positive current flowing into the pack (>50mA)
         # proves physical electrical contact with the charging dock.
@@ -332,14 +332,9 @@ class DockManagerNode(Node):
 
         return False
 
-    def _is_inside_dock_slot(self) -> bool:
-        """Determines if the robot is deep inside the dock slot / funnel
-        (near the charger contacts, where in-place rotation would strike the dock
-        or Nav2 would abort with 'Start occupied')."""
-        if self._charging():
-            return True
-        if self._docked and self._status in ('charging', 'full', 'docked'):
-            return True
+    def _is_spatially_in_dock_slot(self) -> bool:
+        """Determines if the robot is physically inside the dock slot / funnel
+        based purely on tag depth and dock-relative coordinates (no charging status check)."""
         if self._in_view() and self._tag:
             try:
                 z = float(self._tag[4])
@@ -355,6 +350,16 @@ class DockManagerNode(Node):
                 return True
 
         return False
+
+    def _is_inside_dock_slot(self) -> bool:
+        """Determines if the robot is deep inside the dock slot / funnel
+        (near the charger contacts, where in-place rotation would strike the dock
+        or Nav2 would abort with 'Start occupied')."""
+        if self._charging():
+            return True
+        if self._docked and self._status in ('charging', 'full', 'docked'):
+            return True
+        return self._is_spatially_in_dock_slot()
 
     def _set_status(self, status: str) -> None:
         if self._status != status:
