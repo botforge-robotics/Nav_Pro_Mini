@@ -540,8 +540,12 @@ async def execute_robot_voice_tool(
 
     if tool_name == "dock_robot":
         try:
-            from .docking import send_dock_goal
-            await send_dock_goal(bridge, True)
+            from .docking import send_dock_goal, await_dock_result
+            handle = await send_dock_goal(bridge, True)
+            if opts and 'spawn' in opts:
+                opts['spawn'](await_dock_result(bridge, handle))
+            else:
+                asyncio.create_task(await_dock_result(bridge, handle))
             reply = spoken or "Sure thing! Heading over to recharge now."
             return (reply, "dock")
         except Exception as exc:
@@ -549,8 +553,12 @@ async def execute_robot_voice_tool(
 
     if tool_name == "undock_robot":
         try:
-            from .docking import send_undock_goal
-            await send_undock_goal(bridge)
+            from .docking import send_undock_goal, await_undock_result
+            handle = await send_undock_goal(bridge)
+            if opts and 'spawn' in opts:
+                opts['spawn'](await_undock_result(bridge, handle))
+            else:
+                asyncio.create_task(await_undock_result(bridge, handle))
             reply = spoken or "No problem, rolling off the charging dock!"
             return (reply, "undock")
         except Exception as exc:
@@ -1183,6 +1191,7 @@ class VoiceLiveToggleHandler(BaseHandler):
             from ..gemini_live import get_live_session
             sess = get_live_session()
             gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
+            data = self.body()
 
             if not sess.active and not sess.connecting:
                 if not gemini_key:
@@ -1191,7 +1200,12 @@ class VoiceLiveToggleHandler(BaseHandler):
                 self.send({"active": True, "muted": False, "status": msg})
                 return
 
-            new_muted = sess.toggle_mute()
+            if "muted" in data:
+                sess.set_mute(bool(data["muted"]))
+                new_muted = sess.muted
+            else:
+                new_muted = sess.toggle_mute()
+
             self.send({
                 "active": sess.active,
                 "muted": new_muted,

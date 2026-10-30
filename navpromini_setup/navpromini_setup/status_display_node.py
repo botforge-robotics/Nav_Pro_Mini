@@ -200,6 +200,9 @@ class StatusDisplayNode(Node):
         if status != self._dock_status:
             self._dock_status = status
             self.get_logger().info(f'dock_status topic → {status}')
+            if status in ('charging', 'full', 'undocked') and self._state == 'docking':
+                self.get_logger().info(f'docking finished (dock_status={status}) — display state docking → ready')
+                self._state = 'ready'
             self._note_state_composed()
             self._compose_pending(self._state)
 
@@ -502,7 +505,7 @@ class StatusDisplayNode(Node):
         # method's already-intricate hint/mtime race handling untouched.
         display_state = 'boot' if state == 'ready' and not self._hardware_ready() else state
         text, led = STATE_FX.get(display_state, STATE_FX['boot'])
-        is_docking = (self._dock_status in DOCKING_STATES) or (display_state == 'docking') or (state == 'docking')
+        is_docking = (self._dock_status in DOCKING_STATES) or (display_state == 'docking' and self._dock_status not in ('charging', 'full', 'undocked'))
         if is_docking:
             self._pending_text = self._oled_ascii('Docking...')[:192]
             self._pending_led = 'solid,255,255,255'
@@ -514,7 +517,7 @@ class StatusDisplayNode(Node):
             # ONLY after fully set up (ready/nav) does battery animation have priority when docked & charging.
             if display_state in ('boot', 'setup', 'joining', 'mapping', 'error', 'offline'):
                 self._pending_led = led
-            elif self._charge_shown == 'charging':
+            elif self._charge_shown == 'charging' or self._dock_status == 'charging':
                 # Docked & Charging -> Breathing Green (Doc §1)
                 self._pending_led = 'breathe,0,255,0,1500'
             else:

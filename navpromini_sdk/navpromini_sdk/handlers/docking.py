@@ -90,6 +90,8 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
         bridge.emit_event('dock.completed' if ok else 'dock.failed',
                           {'message': message} if not ok else {})
         if ok:
+            if hasattr(bridge, 'publish_led_command'):
+                bridge.publish_led_command('breathe,0,255,0,1500')
             try:
                 from .navigation import relocalize_at_dock
                 await relocalize_at_dock(bridge)
@@ -105,6 +107,8 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
             bridge.release_video_stream()
         if hasattr(bridge, 'publish_display_state'):
             bridge.publish_display_state('ready')
+        if hasattr(bridge, 'publish_led_command'):
+            bridge.publish_led_command('breathe,0,255,0,1500' if TRACKER.state == 'docked' else 'solid,0,200,40')
 
 
 async def dock_robot(bridge, navigate_to_staging: bool = True, timeout: float = 600.0) -> dict:
@@ -164,6 +168,11 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
         TRACKER.finish('failed', str(exc))
         bridge.emit_event('dock.failed', {'operation': 'undock', 'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
+    finally:
+        if hasattr(bridge, 'publish_display_state'):
+            bridge.publish_display_state('ready')
+        if hasattr(bridge, 'publish_led_command'):
+            bridge.publish_led_command('solid,0,200,40')
 
 
 async def undock_robot(bridge, timeout: float = 180.0) -> dict:
@@ -264,8 +273,12 @@ class DockStatusHandler(BaseHandler):
         battery_fresh = (battery_data is not None) and (bat_age < 5.0)
         is_charging = bool(battery.get('charging')) and battery_fresh
         effective_state = dock_status or 'unknown'
-        if is_charging and TRACKER.state == 'docking':
+        if (is_charging or effective_state in ('charging', 'full')) and TRACKER.state == 'docking':
             TRACKER.finish('docked', 'Charging connection established')
+            if hasattr(self.bridge, 'publish_display_state'):
+                self.bridge.publish_display_state('ready')
+            if hasattr(self.bridge, 'publish_led_command'):
+                self.bridge.publish_led_command('breathe,0,255,0,1500' if is_charging else 'solid,0,200,40')
         if not is_charging and effective_state in ('charging', 'full'):
             effective_state = 'undocked'
         elif is_charging and effective_state in ('undocked', 'unknown'):
