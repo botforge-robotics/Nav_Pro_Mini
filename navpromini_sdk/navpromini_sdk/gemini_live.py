@@ -79,6 +79,7 @@ class GeminiLiveSession:
                 self.last_error = "Gemini API key is required"
                 return False, self.last_error
             self._stop_event.clear()
+            self.muted = False
             self.connecting = True
             self.last_error = ""
             self._bridge = bridge
@@ -156,19 +157,29 @@ class GeminiLiveSession:
     def _run_event_loop(self, api_key: str) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._session_loop(api_key))
-        except Exception as e:
-            logger.error(f"Gemini live session loop exception: {e}")
-            with self._lock:
-                self.last_error = str(e)
-                self.active = False
-                self.connecting = False
-        finally:
-            loop.close()
-            with self._lock:
-                self.active = False
-                self.connecting = False
+        backoff = 1.0
+        while not self._stop_event.is_set():
+            try:
+                loop.run_until_complete(self._session_loop(api_key))
+                backoff = 1.0
+            except Exception as e:
+                if self._stop_event.is_set():
+                    break
+                logger.warning(f"Gemini live session loop ended ({e}), reconnecting in {backoff:.1f}s...")
+                with self._lock:
+                    self.active = False
+                    self.connecting = True
+                time.sleep(backoff)
+                backoff = min(backoff * 1.5, 10.0)
+            else:
+                if self._stop_event.is_set():
+                    break
+                logger.info(f"Gemini live session closed, reconnecting in {backoff:.1f}s...")
+                time.sleep(backoff)
+        loop.close()
+        with self._lock:
+            self.active = False
+            self.connecting = False
 
     async def _session_loop(self, api_key: str) -> None:
         import websockets
@@ -198,7 +209,7 @@ class GeminiLiveSession:
             "   - navigate_to_road_node: Drive to a specific station or node number on the road network (e.g. 'go to node 1', 'drive to station 2')\n"
             "   - get_robot_telemetry: Check current battery %, charging state, position, or current map\n"
             "   - ignore_background_speech: When ambient speech is clearly background noise or chatter not directed at you.\n"
-            "5. TOOL CALLS: When calling an action tool, always provide the 'spoken_response' argument with a warm, natural confirmation in the user's spoken language."
+            "5. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human user to hear."
         )
 
         # Format tools for Gemini Live functionDeclarations
@@ -294,7 +305,6 @@ class GeminiLiveSession:
 
         try:
             while not self._stop_event.is_set():
-                # Read 100ms chunk without blocking event loop
                 data = await loop.run_in_executor(None, p_mic.stdout.read, chunk_size)
                 if not data:
                     await asyncio.sleep(0.01)
@@ -317,10 +327,16 @@ class GeminiLiveSession:
                     }
                 }
                 await ws.send(json.dumps(realtime_msg))
+        except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
+            pass
         finally:
             if p_mic:
-                try: p_mic.terminate()
-                except Exception: pass
+                try:
+                    p_mic.terminate()
+                    p_mic.wait(timeout=0.4)
+                except Exception:
+                    try: p_mic.kill()
+                    except Exception: pass
 
     async def _receiver_loop(self, ws: Any) -> None:
         """Receive audio playback chunks, barge-in interruptions, and tool calls from Gemini Live."""
@@ -345,6 +361,16 @@ class GeminiLiveSession:
                     logger.info("Barge-in detected: Gemini interrupted by user speech! Cutting off playback immediately.")
                     self._kill_player()
 
+                if server_content.get("turnComplete"):
+                    # Turn complete: flush/close paplay stdin so audio finishes naturally and frees player
+                    with self._player_lock:
+                        if self._player_proc and self._player_proc.stdin:
+                            try:
+                                self._player_proc.stdin.close()
+                            except Exception:
+                                pass
+                            self._player_proc = None
+
                 model_turn = server_content.get("modelTurn")
                 if model_turn:
                     parts = model_turn.get("parts", [])
@@ -365,17 +391,20 @@ class GeminiLiveSession:
                         # Text transcript chunk
                         if "text" in part and part["text"].strip():
                             text_chunk = part["text"].strip()
-                            with _VOICE_LOCK:
-                                if _CONVERSATION_HISTORY and _CONVERSATION_HISTORY[-1]["sender"] == "robot":
-                                    _CONVERSATION_HISTORY[-1]["text"] += " " + text_chunk
-                                else:
-                                    _CONVERSATION_HISTORY.append({
-                                        "id": f"robot_live_{int(time.time()*1000)}",
-                                        "sender": "robot",
-                                        "text": text_chunk,
-                                        "timestamp": time.time(),
-                                        "action": "gemini_live"
-                                    })
+                            if (not text_chunk.startswith("**") and
+                                "ignore_background_speech" not in text_chunk and
+                                "Acknowledging User" not in text_chunk):
+                                with _VOICE_LOCK:
+                                    if _CONVERSATION_HISTORY and _CONVERSATION_HISTORY[-1]["sender"] == "robot":
+                                        _CONVERSATION_HISTORY[-1]["text"] += " " + text_chunk
+                                    else:
+                                        _CONVERSATION_HISTORY.append({
+                                            "id": f"robot_live_{int(time.time()*1000)}",
+                                            "sender": "robot",
+                                            "text": text_chunk,
+                                            "timestamp": time.time(),
+                                            "action": "gemini_live"
+                                        })
 
             # 2. Handle Tool Calling (Robot actions: dock, stop, navigate, battery)
             tool_call = msg.get("toolCall")
@@ -392,14 +421,15 @@ class GeminiLiveSession:
                         self._bridge, self._opts, name, args
                     )
 
-                    with _VOICE_LOCK:
-                        _CONVERSATION_HISTORY.append({
-                            "id": f"tool_{int(time.time()*1000)}",
-                            "sender": "robot",
-                            "text": spoken_reply or f"Executing {name}...",
-                            "timestamp": time.time(),
-                            "action": action_tag
-                        })
+                    if action_tag != "ignored" and (spoken_reply or name != "ignore_background_speech"):
+                        with _VOICE_LOCK:
+                            _CONVERSATION_HISTORY.append({
+                                "id": f"tool_{int(time.time()*1000)}",
+                                "sender": "robot",
+                                "text": spoken_reply or f"Executing {name}...",
+                                "timestamp": time.time(),
+                                "action": action_tag
+                            })
 
                     responses.append({
                         "id": call_id,

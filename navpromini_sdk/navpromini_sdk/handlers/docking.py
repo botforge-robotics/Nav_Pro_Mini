@@ -218,12 +218,13 @@ class UndockHandler(BaseHandler):
 
 
 async def cancel_active_dock(bridge, reason: str = 'canceled') -> bool:
-    if TRACKER.state not in ('docking', 'undocking') or TRACKER.handle is None:
+    if TRACKER.state not in ('docking', 'undocking'):
         return False
-    try:
-        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
-    except Exception:
-        pass
+    if TRACKER.handle is not None:
+        try:
+            await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+        except Exception:
+            pass
     TRACKER.finish('canceled', reason)
     if hasattr(bridge, 'release_video_stream'):
         bridge.release_video_stream()
@@ -263,6 +264,8 @@ class DockStatusHandler(BaseHandler):
         battery_fresh = (battery_data is not None) and (bat_age < 5.0)
         is_charging = bool(battery.get('charging')) and battery_fresh
         effective_state = dock_status or 'unknown'
+        if is_charging and TRACKER.state == 'docking':
+            TRACKER.finish('docked', 'Charging connection established')
         if not is_charging and effective_state in ('charging', 'full'):
             effective_state = 'undocked'
         elif is_charging and effective_state in ('undocked', 'unknown'):
