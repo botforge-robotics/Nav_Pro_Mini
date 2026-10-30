@@ -262,12 +262,109 @@ def _split_into_utterances(text: str) -> list[str]:
     return [s for s in sentences if s]
 
 
+def _detect_neural_voice(text: str) -> str:
+    """Select the best Microsoft Edge neural voice based on language and script."""
+    # Devanagari script (Hindi, Marathi)
+    if any('\u0900' <= c <= '\u097F' for c in text):
+        return 'hi-IN-SwaraNeural'
+    # Telugu script
+    if any('\u0C00' <= c <= '\u0C7F' for c in text):
+        return 'te-IN-ShrutiNeural'
+    # Tamil script
+    if any('\u0B80' <= c <= '\u0BFF' for c in text):
+        return 'ta-IN-PallaviNeural'
+    # Default to natural, clear US English female assistant voice
+    return 'en-US-AriaNeural'
+
+
+def _stream_edge_tts(sentence: str, cancel_event: threading.Event) -> bool:
+    """Synthesize sentence using Microsoft Edge Neural TTS in-memory and stream directly to paplay."""
+    global _current_speech_proc
+    if cancel_event.is_set():
+        return True
+
+    try:
+        import asyncio
+        import edge_tts
+
+        voice = _detect_neural_voice(sentence)
+
+        async def _fetch_audio() -> bytes:
+            comm = edge_tts.Communicate(sentence, voice)
+            chunks: list[bytes] = []
+            async for c in comm.stream():
+                if cancel_event.is_set():
+                    break
+                if c["type"] == "audio":
+                    chunks.append(c["data"])
+            return b"".join(chunks)
+
+        loop = asyncio.new_event_loop()
+        try:
+            mp3_bytes = loop.run_until_complete(_fetch_audio())
+        finally:
+            loop.close()
+
+        if cancel_event.is_set() or not mp3_bytes:
+            return bool(mp3_bytes)
+
+        env = get_pulse_env()
+        p_ffmpeg = subprocess.Popen(
+            ['ffmpeg', '-v', '0', '-i', '-', '-f', 'wav', '-'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        p_pa = subprocess.Popen(
+            ['paplay'],
+            stdin=p_ffmpeg.stdout,
+            stderr=subprocess.DEVNULL,
+            env=env
+        )
+        p_ffmpeg.stdout.close()
+        with _audio_lock:
+            _current_speech_proc = p_pa
+
+        try:
+            p_ffmpeg.stdin.write(mp3_bytes)
+            p_ffmpeg.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+        while p_pa.poll() is None:
+            if cancel_event.is_set():
+                try: p_pa.terminate()
+                except Exception: pass
+                try: p_ffmpeg.terminate()
+                except Exception: pass
+                break
+            time.sleep(0.04)
+
+        try: p_ffmpeg.wait(timeout=1.0)
+        except Exception: pass
+
+        return True
+    except Exception:
+        return False
+
+
 def _stream_sentence_pcm(sentence: str, cancel_event: threading.Event) -> None:
-    """Stream speech in memory: pipe piper PCM output directly to paplay without saving any files to disk."""
+    """Stream speech in memory: primary Edge Neural Voice, with offline fallback to Piper TTS."""
     global _current_speech_proc
     if cancel_event.is_set():
         return
 
+    # 1. Primary: Microsoft Edge Neural Voice (Studio Quality, Human Intonation, Multilingual)
+    try:
+        if _stream_edge_tts(sentence, cancel_event):
+            return
+    except Exception:
+        pass
+
+    if cancel_event.is_set():
+        return
+
+    # 2. Offline Fallback: Local Piper TTS
     env = get_pulse_env()
     piper_cmd = [
         'piper',

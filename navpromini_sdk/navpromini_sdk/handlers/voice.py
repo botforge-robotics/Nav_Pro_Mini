@@ -60,12 +60,40 @@ def _get_secure_config_path() -> Path:
             continue
     return Path("/tmp/navpro_voice_config.json")
 
+def _sanitize_and_route_keys(groq_key: str, gemini_key: str) -> tuple[str, str]:
+    """Sanitize API keys and auto-detect mispasted keys (e.g. gsk_ in Gemini field)."""
+    groq = str(groq_key or "").strip()
+    gemini = str(gemini_key or "").strip()
+
+    # Clean accidental suffix from copy-paste (e.g. gsk_...allam-2-7b)
+    m_groq_in_groq = re.match(r'^(gsk_[A-Za-z0-9]{40,65})', groq)
+    if m_groq_in_groq:
+        groq = m_groq_in_groq.group(1)
+
+    m_groq_in_gemini = re.match(r'^(gsk_[A-Za-z0-9]{40,65})', gemini)
+    if m_groq_in_gemini:
+        if not groq:
+            groq = m_groq_in_gemini.group(1)
+        gemini = ""
+
+    m_gemini_in_groq = re.match(r'^(AIzaSy[A-Za-z0-9_\-]{30,50})', groq)
+    if m_gemini_in_groq:
+        if not gemini:
+            gemini = m_gemini_in_groq.group(1)
+        groq = ""
+
+    m_gemini_in_gemini = re.match(r'^(AIzaSy[A-Za-z0-9_\-]{30,50})', gemini)
+    if m_gemini_in_gemini:
+        gemini = m_gemini_in_gemini.group(1)
+
+    return groq, gemini
+
+
 def _load_persisted_config() -> dict[str, str]:
-    cfg = {
-        "groq_api_key": os.getenv("GROQ_API_KEY", "").strip(),
-        "gemini_api_key": os.getenv("GEMINI_API_KEY", "").strip(),
-        "model_preference": os.getenv("VOICE_MODEL_PREF", "groq").strip()
-    }
+    raw_groq = os.getenv("GROQ_API_KEY", "").strip()
+    raw_gemini = os.getenv("GEMINI_API_KEY", "").strip()
+    model_pref = os.getenv("VOICE_MODEL_PREF", "groq").strip()
+
     for p in _CONFIG_PATHS:
         if p.is_file():
             try:
@@ -73,25 +101,43 @@ def _load_persisted_config() -> dict[str, str]:
                     data = json.load(f)
                     if isinstance(data, dict):
                         if data.get("groq_api_key"):
-                            cfg["groq_api_key"] = str(data["groq_api_key"]).strip()
+                            raw_groq = str(data["groq_api_key"]).strip()
                         if data.get("gemini_api_key"):
-                            cfg["gemini_api_key"] = str(data["gemini_api_key"]).strip()
+                            raw_gemini = str(data["gemini_api_key"]).strip()
                         if data.get("model_preference"):
-                            cfg["model_preference"] = str(data["model_preference"]).strip()
+                            model_pref = str(data["model_preference"]).strip()
                 break
             except Exception:
                 pass
-    return cfg
+
+    groq, gemini = _sanitize_and_route_keys(raw_groq, raw_gemini)
+    if groq and not gemini and model_pref == "gemini":
+        model_pref = "groq"
+    elif gemini and not groq and model_pref == "groq":
+        model_pref = "gemini"
+
+    return {
+        "groq_api_key": groq,
+        "gemini_api_key": gemini,
+        "model_preference": model_pref
+    }
 
 def _save_persisted_config(cfg: dict[str, str]) -> None:
     target_path = _get_secure_config_path()
+    groq, gemini = _sanitize_and_route_keys(cfg.get("groq_api_key", ""), cfg.get("gemini_api_key", ""))
+    pref = cfg.get("model_preference", "groq")
+    if groq and not gemini and pref == "gemini":
+        pref = "groq"
+    elif gemini and not groq and pref == "groq":
+        pref = "gemini"
+
     try:
         temp_fd, temp_path = tempfile.mkstemp(prefix="voice_cfg_", dir=str(target_path.parent))
         with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
             json.dump({
-                "groq_api_key": cfg.get("groq_api_key", ""),
-                "gemini_api_key": cfg.get("gemini_api_key", ""),
-                "model_preference": cfg.get("model_preference", "groq"),
+                "groq_api_key": groq,
+                "gemini_api_key": gemini,
+                "model_preference": pref,
                 "updated_at": time.time()
             }, f, indent=2)
         os.chmod(temp_path, 0o600)  # Secure: rw------- (owner only)
@@ -557,38 +603,50 @@ async def _query_llm_with_tool_calling(
     if groq_key and (pref == "groq" or not gemini_key):
         def _call_groq():
             import requests
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_text}
-                    ],
-                    "tools": ROBOT_OPENAI_TOOLS,
-                    "tool_choice": "auto",
-                    "max_tokens": 120,
-                    "temperature": 0.3
-                },
-                timeout=5.5
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                choice = data.get("choices", [{}])[0].get("message", {})
-                tool_calls = choice.get("tool_calls", [])
-                if tool_calls:
-                    fn = tool_calls[0].get("function", {})
-                    name = fn.get("name", "")
-                    raw_args = fn.get("arguments", "{}")
-                    try:
-                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    except Exception:
-                        args = {}
-                    return ("tool_call", name, args)
-                content = choice.get("content", "")
-                if content:
-                    return ("text", content.strip(), None)
+            models_to_try = [
+                "llama-3.3-70b-versatile",
+                "qwen/qwen3.8-27b",
+                "llama-3.1-8b-instant",
+                "allam-2-7b"
+            ]
+            for m in models_to_try:
+                try:
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": m,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_text}
+                            ],
+                            "tools": ROBOT_OPENAI_TOOLS,
+                            "tool_choice": "auto",
+                            "max_tokens": 120,
+                            "temperature": 0.3
+                        },
+                        timeout=5.5
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        choice = data.get("choices", [{}])[0].get("message", {})
+                        tool_calls = choice.get("tool_calls", [])
+                        if tool_calls:
+                            fn = tool_calls[0].get("function", {})
+                            name = fn.get("name", "")
+                            raw_args = fn.get("arguments", "{}")
+                            try:
+                                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                            except Exception:
+                                args = {}
+                            return ("tool_call", name, args)
+                        content = choice.get("content", "")
+                        if content:
+                            return ("text", content.strip(), None)
+                    elif resp.status_code in (400, 404):
+                        continue
+                except Exception:
+                    continue
             return None
 
         try:
@@ -1030,6 +1088,7 @@ class VoiceConfigHandler(BaseHandler):
         })
 
     def post(self) -> None:
+        global _VOICE_CONFIG
         data = self.body()
         changed = False
         if "groq_api_key" in data:
@@ -1046,6 +1105,7 @@ class VoiceConfigHandler(BaseHandler):
 
         if changed:
             _save_persisted_config(_VOICE_CONFIG)
+            _VOICE_CONFIG = _load_persisted_config()
 
         groq_key = _VOICE_CONFIG.get("groq_api_key", "")
         gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
