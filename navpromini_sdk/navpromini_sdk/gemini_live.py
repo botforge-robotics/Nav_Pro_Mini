@@ -127,6 +127,14 @@ class GeminiLiveSession:
         if muted:
             self._kill_player()
 
+    def unpause_and_listen(self) -> None:
+        """Instant Barge-In: kill any playing audio and ensure listening state."""
+        self._kill_player()
+        with self._lock:
+            self.muted = False
+        if self._bridge and hasattr(self._bridge, 'publish_led_command'):
+            self._bridge.publish_led_command('pulse,0,255,160')
+
     def _kill_player(self) -> None:
         with self._player_lock:
             if self._player_proc is not None:
@@ -143,7 +151,9 @@ class GeminiLiveSession:
     def _ensure_player(self) -> Optional[subprocess.Popen]:
         with self._player_lock:
             if self._player_proc is not None and self._player_proc.poll() is None:
-                return self._player_proc
+                if self._player_proc.stdin and not self._player_proc.stdin.closed:
+                    return self._player_proc
+                self._kill_player()
 
             env = get_pulse_env()
             cmd = ['paplay', '--raw', '--rate', '24000', '--channels', '1', '--format', 's16le', '--latency-msec=30']
@@ -151,6 +161,7 @@ class GeminiLiveSession:
                 self._player_proc = subprocess.Popen(
                     cmd,
                     stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     env=env,
                     bufsize=0
@@ -297,9 +308,32 @@ class GeminiLiveSession:
             for t in pending:
                 t.cancel()
 
+    def _setup_echo_cancellation(self, env: dict[str, str]) -> None:
+        """Ensure PulseAudio WebRTC Acoustic Echo Cancellation module is loaded for full-duplex."""
+        try:
+            res = subprocess.run(['pactl', 'list', 'modules', 'short'], capture_output=True, text=True, env=env)
+            if 'module-echo-cancel' not in res.stdout:
+                subprocess.run(['pactl', 'load-module', 'module-echo-cancel'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Select echo-cancelled source & sink as defaults
+            src_res = subprocess.run(['pactl', 'list', 'sources', 'short'], capture_output=True, text=True, env=env)
+            for line in src_res.stdout.splitlines():
+                parts = line.split('\t')
+                if len(parts) >= 2 and 'echo-cancel' in parts[1]:
+                    subprocess.run(['pactl', 'set-default-source', parts[1]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    break
+            sink_res = subprocess.run(['pactl', 'list', 'sinks', 'short'], capture_output=True, text=True, env=env)
+            for line in sink_res.stdout.splitlines():
+                parts = line.split('\t')
+                if len(parts) >= 2 and 'echo-cancel' in parts[1]:
+                    subprocess.run(['pactl', 'set-default-sink', parts[1]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    break
+        except Exception as e:
+            logger.warning(f"Could not initialize echo cancellation: {e}")
+
     async def _mic_sender_loop(self, ws: Any) -> None:
-        """Stream 16kHz PCM audio continuously from microphone to Gemini Live."""
+        """Stream 16kHz PCM audio continuously from microphone to Gemini Live (Full-Duplex)."""
         env = get_pulse_env()
+        self._setup_echo_cancellation(env)
         cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=20', '--process-time-msec=20']
 
         # Ensure microphone capture volume is at optimal unity gain (100% to prevent distortion and reduce fan noise floor)
@@ -318,7 +352,7 @@ class GeminiLiveSession:
                 env=env,
                 bufsize=0
             )
-            print("[GeminiLive] Started microphone capture using parec (PulseAudio)", flush=True)
+            print("[GeminiLive] Started microphone capture using parec (PulseAudio Full-Duplex)", flush=True)
         except Exception as e:
             logger.error(f"Failed to start mic capture for Gemini Live mic stream: {e}")
             return
@@ -353,14 +387,11 @@ class GeminiLiveSession:
                     continue
 
                 if self.muted:
-                    # When muted, do not send user speech to Gemini
+                    # When explicitly muted, do not send user speech to Gemini
                     continue
 
-                # Echo prevention: if robot speaker is currently playing Aria's voice,
-                # do not feed the robot's own speaker sound back into the microphone
-                if self.is_speaking:
-                    continue
-
+                # Full-Duplex continuous audio stream to Gemini Live:
+                # WebRTC AEC in PulseAudio cancels speaker output, allowing natural barge-in at any time!
                 b64_audio = base64.b64encode(data).decode('ascii')
                 realtime_msg = {
                     "realtimeInput": {

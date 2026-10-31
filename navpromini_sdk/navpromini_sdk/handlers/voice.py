@@ -1317,12 +1317,14 @@ class VoiceLiveToggleHandler(BaseHandler):
                 sess.set_mute(bool(data["muted"]))
                 new_muted = sess.muted
             else:
-                new_muted = sess.toggle_mute()
+                # Finger tap on the live button means: Barge-in / Listen Now (never accidentally mute!)
+                sess.unpause_and_listen()
+                new_muted = False
 
             self.send({
                 "active": sess.active,
                 "muted": new_muted,
-                "message": "Live assistant muted" if new_muted else "Live assistant active & listening"
+                "message": "Live assistant muted" if new_muted else "Aria is listening to you"
             })
         except ApiError:
             raise
