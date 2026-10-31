@@ -126,6 +126,11 @@ class GeminiLiveSession:
             self.muted = muted
         if muted:
             self._kill_player()
+            if self._bridge and hasattr(self._bridge, 'publish_led_command'):
+                self._bridge.publish_led_command('solid,255,60,0')  # Orange = muted
+        else:
+            if self._bridge and hasattr(self._bridge, 'publish_led_command'):
+                self._bridge.publish_led_command('pulse,0,255,160')  # Cyan/green = listening
 
     def unpause_and_listen(self) -> None:
         """Instant Barge-In: kill any playing audio and ensure listening state."""
@@ -308,38 +313,77 @@ class GeminiLiveSession:
             for t in pending:
                 t.cancel()
 
-    def _setup_echo_cancellation(self, env: dict[str, str]) -> None:
-        """Ensure PulseAudio WebRTC Acoustic Echo Cancellation module is loaded for full-duplex."""
+    @staticmethod
+    def _remove_echo_cancellation(env: dict[str, str]) -> None:
+        """Remove PulseAudio echo cancellation and restore raw hardware defaults.
+
+        Echo-cancel virtual source severely attenuates mic audio making Gemini's
+        VAD unable to detect speech. We use the raw hardware mic directly.
+        """
         try:
+            # Unload all echo-cancel modules
             res = subprocess.run(['pactl', 'list', 'modules', 'short'], capture_output=True, text=True, env=env)
-            if 'module-echo-cancel' not in res.stdout:
-                subprocess.run(['pactl', 'load-module', 'module-echo-cancel'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            # Select echo-cancelled source & sink as defaults
+            for line in res.stdout.splitlines():
+                parts = line.split('\t')
+                if len(parts) >= 2 and 'echo-cancel' in parts[1]:
+                    module_id = parts[0].strip()
+                    subprocess.run(['pactl', 'unload-module', module_id], env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info(f"Unloaded module-echo-cancel (id={module_id})")
+
+            # Restore raw hardware defaults
             src_res = subprocess.run(['pactl', 'list', 'sources', 'short'], capture_output=True, text=True, env=env)
             for line in src_res.stdout.splitlines():
                 parts = line.split('\t')
-                if len(parts) >= 2 and 'echo-cancel' in parts[1]:
-                    subprocess.run(['pactl', 'set-default-source', parts[1]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if len(parts) >= 2 and 'echo-cancel' not in parts[1] and 'monitor' not in parts[1] and 'usb' in parts[1].lower():
+                    subprocess.run(['pactl', 'set-default-source', parts[1]], env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info(f"Set default source to raw hardware: {parts[1]}")
                     break
+
             sink_res = subprocess.run(['pactl', 'list', 'sinks', 'short'], capture_output=True, text=True, env=env)
             for line in sink_res.stdout.splitlines():
                 parts = line.split('\t')
-                if len(parts) >= 2 and 'echo-cancel' in parts[1]:
-                    subprocess.run(['pactl', 'set-default-sink', parts[1]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if len(parts) >= 2 and 'echo-cancel' not in parts[1] and 'hdmi' in parts[1].lower():
+                    subprocess.run(['pactl', 'set-default-sink', parts[1]], env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info(f"Set default sink to raw hardware: {parts[1]}")
                     break
         except Exception as e:
-            logger.warning(f"Could not initialize echo cancellation: {e}")
+            logger.warning(f"Could not remove echo cancellation: {e}")
 
     async def _mic_sender_loop(self, ws: Any) -> None:
         """Stream 16kHz PCM audio continuously from microphone to Gemini Live (Full-Duplex)."""
         env = get_pulse_env()
-        self._setup_echo_cancellation(env)
-        cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=20', '--process-time-msec=20']
 
-        # Ensure microphone capture volume is at optimal unity gain (100% to prevent distortion and reduce fan noise floor)
+        # CRITICAL: Remove echo cancellation — it attenuates mic audio below Gemini's VAD threshold
+        self._remove_echo_cancellation(env)
+
+        # Find the raw USB hardware mic source name (NOT echo-cancel virtual device)
+        hw_source = None
         try:
-            subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '100%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '100%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            src_res = subprocess.run(['pactl', 'list', 'sources', 'short'], capture_output=True, text=True, env=env)
+            for line in src_res.stdout.splitlines():
+                parts = line.split('\t')
+                if len(parts) >= 2 and 'usb' in parts[1].lower() and 'echo-cancel' not in parts[1] and 'monitor' not in parts[1]:
+                    hw_source = parts[1]
+                    break
+        except Exception:
+            pass
+
+        cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=20', '--process-time-msec=20']
+        if hw_source:
+            cmd.extend(['--device', hw_source])
+            logger.info(f"Using raw hardware mic: {hw_source}")
+        else:
+            logger.info("Using default source for mic capture")
+
+        # Boost microphone volume to 150% for strong signal to Gemini VAD
+        try:
+            subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '150%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if hw_source:
+                subprocess.run(['pactl', 'set-source-volume', hw_source, '150%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '150%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
@@ -359,6 +403,8 @@ class GeminiLiveSession:
 
         chunk_size = 1600  # 50 ms of 16kHz 16-bit mono PCM (800 samples * 2 bytes)
         loop = asyncio.get_event_loop()
+        _diag_count = 0
+        _diag_rms_sum = 0.0
 
         def _read_exact(n: int) -> bytes:
             buf = bytearray()
@@ -391,7 +437,21 @@ class GeminiLiveSession:
                     continue
 
                 # Full-Duplex continuous audio stream to Gemini Live:
-                # WebRTC AEC in PulseAudio cancels speaker output, allowing natural barge-in at any time!
+                # Raw hardware mic — no echo cancellation, no gating, no blocking.
+                import struct
+                n_samples = len(data) // 2
+                if n_samples > 0:
+                    samples = struct.unpack(f'<{n_samples}h', data)
+                    rms = (sum(s * s for s in samples) / n_samples) ** 0.5
+                    _diag_count += 1
+                    _diag_rms_sum += rms
+                    # Log RMS every ~2 seconds (40 chunks of 50ms)
+                    if _diag_count % 40 == 0:
+                        avg_rms = _diag_rms_sum / 40
+                        peak = max(abs(s) for s in samples)
+                        print(f"[GeminiLive] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
+                        _diag_rms_sum = 0.0
+
                 b64_audio = base64.b64encode(data).decode('ascii')
                 realtime_msg = {
                     "realtimeInput": {
