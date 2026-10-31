@@ -378,12 +378,12 @@ class GeminiLiveSession:
         else:
             logger.info("Using default source for mic capture")
 
-        # Boost microphone volume to 150% for strong signal to Gemini VAD
+        # Set microphone volume to 80% (optimal dynamic range and 20 dB SNR above ambient fan floor)
         try:
-            subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '150%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '80%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if hw_source:
-                subprocess.run(['pactl', 'set-source-volume', hw_source, '150%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '150%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(['pactl', 'set-source-volume', hw_source, '80%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '80%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
@@ -500,16 +500,7 @@ class GeminiLiveSession:
                     print("[GeminiLive] User barge-in detected: interrupting playback!", flush=True)
                     self._kill_player()
 
-                if server_content.get("turnComplete"):
-                    print("[GeminiLive] Model turn complete", flush=True)
-                    # Turn complete: flush/close paplay stdin so audio finishes naturally and frees player
-                    with self._player_lock:
-                        if self._player_proc and self._player_proc.stdin and not self._player_proc.stdin.closed:
-                            try:
-                                self._player_proc.stdin.close()
-                            except Exception:
-                                pass
-
+                # Process Model Turn Audio & Text FIRST before turnComplete flags
                 model_turn = server_content.get("modelTurn")
                 if model_turn:
                     parts = model_turn.get("parts", [])
@@ -529,7 +520,10 @@ class GeminiLiveSession:
                                 try:
                                     player.stdin.write(pcm_bytes)
                                     player.stdin.flush()
-                                except (BrokenPipeError, OSError):
+                                    # Print sample chunk notification
+                                    print(f"[GeminiLive] Playing audio chunk ({len(pcm_bytes)} bytes)", flush=True)
+                                except Exception as e:
+                                    print(f"[GeminiLive] Audio write error: {e}", flush=True)
                                     self._kill_player()
 
                         # Text transcript chunk
@@ -538,6 +532,7 @@ class GeminiLiveSession:
                             if (not text_chunk.startswith("**") and
                                 "ignore_background_speech" not in text_chunk and
                                 "Acknowledging User" not in text_chunk):
+                                print(f"[GeminiLive] Aria transcript: {text_chunk}", flush=True)
                                 with _VOICE_LOCK:
                                     if _CONVERSATION_HISTORY and _CONVERSATION_HISTORY[-1]["sender"] == "robot":
                                         _CONVERSATION_HISTORY[-1]["text"] += " " + text_chunk
@@ -549,6 +544,16 @@ class GeminiLiveSession:
                                             "timestamp": time.time(),
                                             "action": "gemini_live"
                                         })
+
+                if server_content.get("turnComplete"):
+                    print("[GeminiLive] Model turn complete", flush=True)
+                    # Turn complete: flush player buffer so audio finishes playing smoothly
+                    with self._player_lock:
+                        if self._player_proc and self._player_proc.stdin and not self._player_proc.stdin.closed:
+                            try:
+                                self._player_proc.stdin.flush()
+                            except Exception:
+                                pass
 
             # 2. Handle Tool Calling (Robot actions: dock, stop, navigate, battery)
             tool_call = msg.get("toolCall")
