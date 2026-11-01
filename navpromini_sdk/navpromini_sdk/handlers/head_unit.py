@@ -150,6 +150,7 @@ async def _head_mic_ws_handler(websocket: Any):
         async for message in websocket:
             if isinstance(message, bytes) and len(message) > 0:
                 with _HEAD_UNIT_LOCK:
+                    _HEAD_UNIT_STATE["connected"] = True
                     _HEAD_UNIT_STATE["last_seen"] = time.time()
                     _HEAD_UNIT_STATE["streaming_audio"] = True
 
@@ -219,7 +220,9 @@ class HeadUnitStatusHandler(BaseHandler):
         ensure_head_unit_services()
         with _HEAD_UNIT_LOCK:
             # Check timeout (if no packet in 4s, mark inactive)
-            if _HEAD_UNIT_STATE["connected"] and (time.time() - _HEAD_UNIT_STATE["last_seen"] > 4.0):
+            if _HEAD_UNIT_STATE["last_seen"] > 0 and (time.time() - _HEAD_UNIT_STATE["last_seen"] <= 4.0):
+                _HEAD_UNIT_STATE["connected"] = True
+            else:
                 _HEAD_UNIT_STATE["connected"] = False
                 _HEAD_UNIT_STATE["streaming_audio"] = False
             data = dict(_HEAD_UNIT_STATE)
