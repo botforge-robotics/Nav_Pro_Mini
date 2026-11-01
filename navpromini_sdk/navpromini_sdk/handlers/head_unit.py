@@ -223,7 +223,7 @@ async def _head_mic_ws_handler(websocket: Any):
 
 
 async def _start_head_mic_ws():
-    async with websockets.serve(_head_mic_ws_handler, "0.0.0.0", HEAD_UNIT_WS_PORT):
+    async with websockets.serve(_head_mic_ws_handler, "0.0.0.0", HEAD_UNIT_WS_PORT, ping_interval=3, ping_timeout=3):
         logger.info(f"Head Unit Audio WebSocket server listening on port {HEAD_UNIT_WS_PORT}")
         await asyncio.get_running_loop().create_future()
 
