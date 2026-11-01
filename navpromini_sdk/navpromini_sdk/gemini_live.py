@@ -256,19 +256,24 @@ class GeminiLiveSession:
             "1. YOU ARE THE ROBOT: Speak exclusively in the first person ('I', 'me', 'my', 'myself'). "
             "NEVER refer to yourself as 'the robot' or 'this robot', and NEVER say 'send the robot' or 'where do you want to send the robot'. "
             "Instead, always say: 'Where should I go?', 'Where would you like me to take you?', 'How may I assist you?', or 'Right away, I am heading there now!'.\n"
-            "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, I am stopping here for you!', 'Certainly, heading over to recharge myself!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
+            "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, I am stopping here for you!', 'Certainly, stepping off the charging dock for you!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
             "3. BRISK & FAST: Speak concisely (1 short, natural spoken sentence per turn). Everything you say will be spoken out loud immediately. Avoid lists or formatting.\n"
-            "4. MULTILINGUAL: Understand the guest in ANY language (English, Hindi, Telugu, Tamil, etc.) and always reply graciously in their spoken language (e.g. in Telugu: 'తప్పకుండా, ఇప్పుడే ఆగుతున్నాను!').\n"
-            "5. NO UNNECESSARY TOOL CALLS: Answer questions about your battery, location, charging, destinations, or status DIRECTLY with your voice using your status info above. ONLY call physical action tools when the guest commands you to move or stop.\n"
-            "6. DESTINATION INQUIRIES: If the guest asks where you can go or where you can take them, mention the known places and stations from your status above, and graciously ask: 'Where would you like me to take you?'. Never ask where to send the robot.\n"
-            "7. PHYSICAL ROBOT TOOLS:\n"
-            "   - dock_robot: Return to charging dock, latch, and charge (e.g. 'dock', 'charge', 'డాల్ కి వెళ్లు')\n"
-            "   - undock_robot: Disengage and roll forward off the charging dock\n"
-            "   - emergency_stop: Immediately halt all motion, stop motors, and cancel active navigation (e.g. 'stop', 'halt', 'ఆగు', 'రోకో')\n"
-            "   - navigate_to_destination: Navigate myself to a specific destination, waypoint, or station (e.g. 'take me to kitchen', 'go to office', 'drive to node 2')\n"
-            "   - navigate_to_road_node: Drive to a specific station or node number on the road network\n"
-            "8. ALWAYS TALK BACK: When any guest speaks, always answer graciously out loud. If their voice was too faint or unclear, politely ask them to repeat (e.g. 'Pardon me, I didn't quite catch that—could you please say that again?'). NEVER stay silent!\n"
-            "9. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human guest to hear."
+            "4. LANGUAGE & VOICE CONSISTENCY (NO SPLIT PERSONALITY):\n"
+            "   - Your default and primary language is ENGLISH. Always speak English with a consistent, warm, natural, friendly female tone.\n"
+            "   - NEVER switch languages randomly or change accents mid-conversation!\n"
+            "   - DO NOT switch to Hindi, Telugu, or any other language unless the guest specifically and clearly addresses you in that language for the entire sentence.\n"
+            "   - If you hear ambient background noise, static, or accented English, DO NOT interpret it as a foreign language; stay firmly in English.\n"
+            "   - Maintain one unified, steady, charming Aria persona at all times.\n"
+            "5. PHYSICAL ACTION TOOLS (MANDATORY TO CALL ON MOTION COMMANDS):\n"
+            "   - When the user asks you to move, undock, dock, stop, or navigate, you MUST invoke the appropriate tool!\n"
+            "   - 'can you come out from charger', 'come off charger', 'undock', 'leave charger', 'step off dock', 'move off charger' -> MUST CALL undock_robot!\n"
+            "   - 'dock', 'go to charger', 'charge yourself', 'park in dock', 'return to charging station' -> MUST CALL dock_robot!\n"
+            "   - 'stop', 'halt', 'freeze', 'cancel' -> MUST CALL emergency_stop!\n"
+            "   - 'take me to [destination]', 'go to [destination]' -> MUST CALL navigate_to_destination!\n"
+            "   - ONLY answer with pure voice without tools when the guest is merely asking an informational question (e.g. 'what is your battery level?', 'where are you?').\n"
+            "6. DESTINATION INQUIRIES: If the guest asks where you can go or what places are available, ONLY mention the Saved Named Locations from your status above (e.g. Kitchen, Office, Charging Dock), and ask: 'Where would you like me to take you?'. NEVER recite raw graph node numbers or 'Node 1, Node 2' to guests!\n"
+            "7. ALWAYS TALK BACK: When any guest speaks, always answer graciously out loud. If their voice was too faint or unclear, politely ask them to repeat. NEVER stay silent!\n"
+            "8. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human guest to hear."
         )
 
         # Format tools for Gemini Live functionDeclarations (Only physical motion tools to ensure maximum speed!)
@@ -309,6 +314,8 @@ class GeminiLiveSession:
                         "thinkingBudget": 0
                     }
                 },
+                "inputAudioTranscription": {},
+                "outputAudioTranscription": {},
                 "systemInstruction": {
                     "parts": [{"text": system_prompt}]
                 },
@@ -516,12 +523,27 @@ class GeminiLiveSession:
                     print(f"[GeminiLive] [{src_name}] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
                     _diag_rms_sum = 0.0
 
-                # Real-time user speaking detection (RMS > 280) for UI synchronization
-                is_user_spk = bool(rms > 280.0 and not self.is_speaking)
+                # Ambient-adaptive voice sensitivity tracking (adapts to room acoustic floor)
+                amb_floor = getattr(self, '_ambient_floor', 85.0)
+                if not self.is_speaking:
+                    if rms < amb_floor * 1.5:
+                        amb_floor = 0.94 * amb_floor + 0.06 * rms
+                    elif rms < amb_floor:
+                        amb_floor = 0.85 * amb_floor + 0.15 * rms
+                self._ambient_floor = max(40.0, min(amb_floor, 300.0))
+
+                # Dynamic speech detection threshold (ambient adopting)
+                speech_threshold = max(95.0, min(self._ambient_floor + 35.0, self._ambient_floor * 1.35))
+                now_time = time.time()
+                raw_spk = bool(rms > speech_threshold and not self.is_speaking)
+                if raw_spk:
+                    self._user_spk_hangover = now_time + 0.38
+
+                is_user_spk = bool(now_time < getattr(self, '_user_spk_hangover', 0.0) and not self.is_speaking)
                 if is_user_spk != getattr(self, '_prev_user_speaking', False):
                     self._prev_user_speaking = is_user_spk
                     if self._bridge and hasattr(self._bridge, 'emit_event'):
-                        norm_level = float(min(1.0, max(0.0, (rms - 80.0) / 3500.0)))
+                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 2200.0)))
                         self._bridge.emit_event('voice.user_speaking', {
                             'speaking': is_user_spk,
                             'level': norm_level
@@ -563,7 +585,7 @@ class GeminiLiveSession:
                 logger.warn(f"Gemini live recv ended: {e}")
                 break
 
-            # 1. Handle Barge-in Interruption (User spoke while Gemini was speaking)
+            # 1. Handle Server Content (User & Model Transcripts, Audio, Barge-in)
             server_content = msg.get("serverContent")
             if server_content:
                 if server_content.get("interrupted"):
@@ -573,6 +595,34 @@ class GeminiLiveSession:
                         self._is_speaking_state = False
                         if self._bridge and hasattr(self._bridge, 'emit_event'):
                             self._bridge.emit_event('voice.speaking', {'speaking': False})
+
+                # Capture User Speech Transcription (appears on right side of chat)
+                user_trans = server_content.get("inputTranscription") or server_content.get("interimInputTranscription")
+                if user_trans and isinstance(user_trans, dict):
+                    u_text = user_trans.get("text", "").strip()
+                    if u_text:
+                        print(f"[GeminiLive] Human transcript: {u_text}", flush=True)
+                        now_ts = time.time()
+                        with _VOICE_LOCK:
+                            if (_CONVERSATION_HISTORY and
+                                _CONVERSATION_HISTORY[-1].get("sender") == "user" and
+                                (now_ts - _CONVERSATION_HISTORY[-1].get("timestamp", 0)) < 4.0):
+                                _CONVERSATION_HISTORY[-1]["text"] = u_text
+                                _CONVERSATION_HISTORY[-1]["timestamp"] = now_ts
+                            else:
+                                _CONVERSATION_HISTORY.append({
+                                    "id": f"user_live_{int(now_ts*1000)}",
+                                    "sender": "user",
+                                    "text": u_text,
+                                    "timestamp": now_ts,
+                                    "action": None
+                                })
+                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                            self._bridge.emit_event('voice.transcript', {
+                                'sender': 'user',
+                                'text': u_text,
+                                'timestamp': now_ts
+                            })
 
                 # Process Model Turn Audio & Text FIRST before turnComplete flags
                 model_turn = server_content.get("modelTurn")
@@ -629,6 +679,11 @@ class GeminiLiveSession:
                                             "timestamp": time.time(),
                                             "action": "gemini_live"
                                         })
+                                if self._bridge and hasattr(self._bridge, 'emit_event'):
+                                    self._bridge.emit_event('voice.transcript', {
+                                        'sender': 'robot',
+                                        'text': text_chunk
+                                    })
 
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
@@ -644,7 +699,7 @@ class GeminiLiveSession:
                             except Exception:
                                 pass
 
-            # 2. Handle Tool Calling (Robot actions: dock, stop, navigate, battery)
+            # 2. Handle Tool Calling (Robot actions: undock, dock, stop, navigate)
             tool_call = msg.get("toolCall")
             if tool_call:
                 function_calls = tool_call.get("functionCalls", [])
@@ -662,6 +717,14 @@ class GeminiLiveSession:
                         self._bridge, self._opts, name, args
                     )
 
+                    # Immediate vocal feedback using onboard speech synthesizer
+                    if spoken_reply:
+                        try:
+                            from ..audio import play_speech
+                            play_speech(spoken_reply, wait=False)
+                        except Exception:
+                            pass
+
                     if action_tag != "ignored" and (spoken_reply or name != "ignore_background_speech"):
                         with _VOICE_LOCK:
                             _CONVERSATION_HISTORY.append({
@@ -671,15 +734,20 @@ class GeminiLiveSession:
                                 "timestamp": time.time(),
                                 "action": action_tag
                             })
+                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                            self._bridge.emit_event('voice.transcript', {
+                                'sender': 'robot',
+                                'text': spoken_reply or f"Executing {name}..."
+                            })
 
                     responses.append({
                         "id": call_id,
                         "name": name,
                         "response": {
-                            "output": {
+                            "result": {
                                 "status": "success",
                                 "action": action_tag,
-                                "result": spoken_reply or "Action executed successfully."
+                                "message": spoken_reply or "Action executed successfully."
                             }
                         }
                     })

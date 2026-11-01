@@ -407,13 +407,13 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "dock_robot",
-            "description": "Return myself to my charging station and dock to recharge. Call this whenever the guest asks me to dock, charge, recharge, park, or go to dock, in ANY language.",
+            "description": "Return myself to my charging station and dock to recharge. Call immediately whenever the guest asks me to dock, charge, recharge, park in dock, go to charger, or return to charging station, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "spoken_response": {
                         "type": "string",
-                        "description": "Short 1-sentence gracious first-person confirmation spoken to the guest in their language (e.g. 'Right away, I am heading over to recharge myself now!', 'తప్పకుండా, ఇప్పుడే ఛార్జింగ్ డాక్ వద్దకు వెళ్తున్నాను.')."
+                        "description": "Short 1-sentence gracious first-person confirmation spoken to the guest in their language (e.g. 'Right away, I am heading over to recharge myself now!')."
                     }
                 },
                 "required": ["spoken_response"]
@@ -424,7 +424,7 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "undock_robot",
-            "description": "Disengage and roll forward off my charging dock. Call when the guest wants me to undock or step off the dock, in ANY language.",
+            "description": "Disengage, roll forward, and come out of the charging dock. Call immediately whenever the guest asks me to come out from charger, come off charger, undock, step off the dock, leave charger, drive out of charger, or move away from charger, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -441,7 +441,7 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "emergency_stop",
-            "description": "CRITICAL SAFETY: Immediately halt myself, stop my motors, and abort active navigation goals. Call when the guest says stop, halt, freeze, cancel, or roko, in ANY language.",
+            "description": "CRITICAL SAFETY: Immediately halt myself, stop my motors, and abort active navigation goals. Call when the guest says stop, halt, freeze, cancel, or wait here, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -458,13 +458,13 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "navigate_to_destination",
-            "description": "Navigate myself to a specific destination, waypoint, or station (e.g. 'kitchen', 'office', 'station 1', 'node 2'). Call when the guest requests going to a place, room, station, or waypoint, in ANY language.",
+            "description": "Navigate myself to a specific saved place, room, or waypoint (e.g. 'kitchen', 'office', 'charging dock'). Call when the guest requests going to, driving to, or visiting a place or room, in ANY language.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "destination": {
                         "type": "string",
-                        "description": "Destination name, station number, or waypoint (e.g. 'kitchen', 'office', '1', 'station 2')."
+                        "description": "Destination name or waypoint (e.g. 'kitchen', 'office', 'charging dock')."
                     },
                     "spoken_response": {
                         "type": "string",
@@ -479,7 +479,7 @@ ROBOT_OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "navigate_to_road_node",
-            "description": "Navigate myself to a specific station or node number on the road network (e.g. node 1, node 2).",
+            "description": "Navigate myself to a specific road network station or node number (e.g. node 1, node 2). Only call if the user explicitly asks for a node number.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -570,45 +570,41 @@ def _build_robot_context_str(bridge: Any, opts: dict[str, Any]) -> str:
 
     dock_st = dock_raw if isinstance(dock_raw, dict) else {}
     is_chg = bool(dock_st.get('charging') or (batt and batt.get('charging')))
-    dock_str = "Docked & Charging" if is_chg else "Discharging / Off dock"
+    dock_str = "Docked & Charging on Charger" if is_chg else "Discharging / Off dock"
 
     pose_str = "unknown"
     if pose and isinstance(pose, dict) and 'x' in pose:
         pose_str = f"x={pose['x']:.2f}, y={pose['y']:.2f}"
 
-    places_str = ""
-    stations_str = ""
+    saved_locations = []
     if store:
         try:
             wps = store.list_waypoints(current_map)
-            wp_names = [w['name'] for w in wps if w.get('name') and w.get('name') not in ('Charging Dock', 'Dock Standoff')]
-            if wp_names:
-                places_str = f"Known places: {', '.join(wp_names)}. "
+            for w in wps:
+                name = w.get('name')
+                if name and name not in ('Dock Standoff',):
+                    display_name = name.title() if name.islower() else name
+                    if display_name not in saved_locations:
+                        saved_locations.append(display_name)
         except Exception:
             pass
-        try:
-            rn = store.get_road_network(current_map)
-            if not rn:
-                from .road_network import read_roadnet_file
-                rn = read_roadnet_file(current_map)
-            if rn and 'features' in rn:
-                node_names = []
-                for f in rn['features']:
-                    if f.get('geometry', {}).get('type') == 'Point':
-                        p = f.get('properties', {})
-                        node_names.append(str(p.get('name') or f"Node {p.get('id', '')}"))
-                if node_names:
-                    stations_str = f"Road network stations: {', '.join(node_names)}. "
-        except Exception:
-            pass
+
+    if not saved_locations:
+        saved_locations = ["Kitchen", "Office", "Charging Dock"]
+
+    locations_str = f"Saved Named Locations: {', '.join(saved_locations)}."
 
     from .head_unit import is_aria_sense_active
     mic_status = "Aria Sense Top Microphone is PRIMARY ACTIVE (clear 16kHz audio input)" if is_aria_sense_active() else "Chassis microphone is active"
 
     return (
-        f"[CURRENT STATUS OF ARIA: My Battery: {pct:.0f}%, My Docking State: {dock_str}, Active Map: '{current_map}', "
-        f"My Position: {pose_str}. Audio input: {mic_status}. {places_str}{stations_str}"
-        "Use this status directly when answering questions about your power, location, available destinations, or battery!]"
+        f"[CURRENT STATUS OF ARIA:\n"
+        f"- My Battery: {pct:.0f}%\n"
+        f"- My Docking State: {dock_str}\n"
+        f"- Active Map: '{current_map}'\n"
+        f"- {locations_str}\n"
+        f"- Audio input: {mic_status}\n"
+        f"CRITICAL DESTINATION RULE: When guests ask where you can go or what places are available, ALWAYS announce the human-friendly Saved Named Locations ({', '.join(saved_locations)}). NEVER recite raw graph node numbers or 'Node 1, Node 2' to guests!]"
     )
 
 
