@@ -219,8 +219,9 @@ class HeadUnitStatusHandler(BaseHandler):
     async def get(self) -> None:
         ensure_head_unit_services()
         with _HEAD_UNIT_LOCK:
-            # Check timeout (if no packet in 4s, mark inactive)
-            if _HEAD_UNIT_STATE["last_seen"] > 0 and (time.time() - _HEAD_UNIT_STATE["last_seen"] <= 4.0):
+            # Check timeout (if no packet in 6s, mark inactive)
+            now = time.time()
+            if _HEAD_UNIT_STATE["last_seen"] > 0 and (now - _HEAD_UNIT_STATE["last_seen"] <= 6.0):
                 _HEAD_UNIT_STATE["connected"] = True
             else:
                 _HEAD_UNIT_STATE["connected"] = False
@@ -368,11 +369,10 @@ class HeadUnitPairHandler(BaseHandler):
             "robot_token": _HEAD_UNIT_STATE["paired_token"]
         })
 
-        # Send configuration payload over BLE using gatttool / bluetoothctl or python script
+        # Send configuration payload over BLE using BleakClient
         success = False
         err_msg = ""
         try:
-            # Write payload to characteristic beb5483e-36e1-4688-b7f5-ea07361b26a8
             py_code = f"""
 import asyncio
 from bleak import BleakClient
@@ -380,7 +380,7 @@ from bleak import BleakClient
 UUID_CONFIG = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 async def send():
     async with BleakClient("{target_mac}", timeout=10.0) as client:
-        await client.write_gatt_char(UUID_CONFIG, {repr(payload)}.encode('utf-8'))
+        await client.write_gatt_char(UUID_CONFIG, {repr(payload)}.encode('utf-8'), response=True)
         print("PROVISIONED_OK")
 
 asyncio.run(send())
@@ -390,17 +390,21 @@ asyncio.run(send())
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
-            out, err = await proc.communicate()
-            if b"PROVISIONED_OK" in out:
-                success = True
-            else:
-                err_msg = err.decode('utf-8', errors='ignore')
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=12.0)
+                if b"PROVISIONED_OK" in out:
+                    success = True
+                else:
+                    err_msg = err.decode('utf-8', errors='ignore').strip()
+            except asyncio.TimeoutError:
+                proc.kill()
+                err_msg = "Bluetooth transmission timed out"
         except Exception as e:
             err_msg = str(e)
 
         if not success:
-            # Fallback: Send instruction via gatttool or report ready
-            logger.warning(f"BLE write attempt note: {err_msg}")
+            logger.warning(f"BLE write to Aria Sense {target_mac} failed: {err_msg}")
+            raise ApiError(500, "ble_write_failed", f"Could not reach Aria Sense via Bluetooth ({err_msg or 'timeout'}). Ensure it is powered on and within range.")
 
         with _HEAD_UNIT_LOCK:
             _HEAD_UNIT_STATE["mac"] = target_mac
@@ -410,5 +414,5 @@ asyncio.run(send())
             "target_mac": target_mac,
             "target_ssid": ssid,
             "robot_ip": robot_ip,
-            "message": f"Sent Wi-Fi credentials ({ssid}) to Aria Sense. Waiting for it to connect..."
+            "message": f"Credentials accepted by Aria Sense! Connecting to '{ssid}'..."
         })
