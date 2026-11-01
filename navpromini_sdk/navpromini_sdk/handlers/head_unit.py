@@ -186,12 +186,16 @@ async def _head_mic_ws_handler(websocket: Any):
                     _HEAD_UNIT_STATE["last_seen"] = time.time()
                     _HEAD_UNIT_STATE["streaming_audio"] = True
 
-                    # Fast RMS calculation for UI audio meter
-                    n_samples = len(message) // 2
-                    if n_samples > 0:
-                        samples = struct.unpack(f'<{n_samples}h', message)
-                        rms = (sum(s * s for s in samples) / n_samples) ** 0.5
-                        _HEAD_UNIT_STATE["audio_rms"] = float(rms)
+                    # Fast RMS calculation for UI audio meter (throttled to ~4 Hz with DC removal)
+                    _meter_cnt = getattr(_head_mic_ws_handler, "_meter_cnt", 0) + 1
+                    _head_mic_ws_handler._meter_cnt = _meter_cnt
+                    if _meter_cnt % 8 == 0:
+                        n_samples = len(message) // 2
+                        if n_samples > 0:
+                            samples = struct.unpack(f'<{n_samples}h', message)
+                            mean_s = sum(samples) / n_samples
+                            rms = (sum((s - mean_s) ** 2 for s in samples) / n_samples) ** 0.5
+                            _HEAD_UNIT_STATE["audio_rms"] = float(rms)
 
                 # Push to single-turn recording subscribers
                 for q in list(_HEAD_MIC_RECORDING_SUBSCRIBERS):

@@ -68,11 +68,12 @@ class GeminiLiveSession:
         """Inject 16kHz PCM audio chunk from the wireless Aria Sense module."""
         if self._loop and self._head_mic_queue and not self.muted:
             def _push():
-                if self._head_mic_queue.full():
+                # Keep queue ultra-tight: max 2 packets (~64ms max buffer) for instant zero-latency speech
+                while self._head_mic_queue.qsize() >= 2:
                     try:
                         self._head_mic_queue.get_nowait()
                     except Exception:
-                        pass
+                        break
                 try:
                     self._head_mic_queue.put_nowait(pcm_data)
                 except Exception:
@@ -205,7 +206,7 @@ class GeminiLiveSession:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
-        self._head_mic_queue = asyncio.Queue(maxsize=150)
+        self._head_mic_queue = asyncio.Queue(maxsize=3)
         backoff = 1.0
         while not self._stop_event.is_set():
             try:
@@ -463,6 +464,15 @@ class GeminiLiveSession:
 
                     try:
                         data = await asyncio.wait_for(self._head_mic_queue.get(), timeout=0.08)
+                        # Zero-latency backlog drain: batch up to 2 extra accumulated chunks (~96ms max)
+                        extra_chunks = []
+                        while not self._head_mic_queue.empty() and len(extra_chunks) < 2:
+                            try:
+                                extra_chunks.append(self._head_mic_queue.get_nowait())
+                            except Exception:
+                                break
+                        if extra_chunks:
+                            data = data + b"".join(extra_chunks)
                     except asyncio.TimeoutError:
                         data = b''
                 else:
@@ -484,22 +494,24 @@ class GeminiLiveSession:
                 if self.muted:
                     continue
 
-                # Measure RMS for diagnostic logs
-                import struct
-                n_samples = len(data) // 2
-                if n_samples > 0:
-                    samples = struct.unpack(f'<{n_samples}h', data)
-                    rms = (sum(s * s for s in samples) / n_samples) ** 0.5
-                    _diag_count += 1
-                    _diag_rms_sum += rms
-                    if _diag_count % 40 == 0:
-                        avg_rms = _diag_rms_sum / 40
-                        peak = max(abs(s) for s in samples)
-                        src_name = "Aria-Sense" if active_source == "aria_sense" else "Chassis-Mic"
-                        print(f"[GeminiLive] [{src_name}] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
-                        _diag_rms_sum = 0.0
+                # Remove hardware DC offset so Gemini VAD detects speech boundaries with zero delay
+                import numpy as np
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                mean_offset = float(np.mean(samples)) if len(samples) > 0 else 0.0
+                samples = samples - mean_offset
+                rms = float(np.sqrt(np.mean(samples ** 2))) if len(samples) > 0 else 0.0
+                peak = int(np.max(np.abs(samples))) if len(samples) > 0 else 0
+                clean_pcm = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
-                b64_audio = base64.b64encode(data).decode('ascii')
+                _diag_count += 1
+                _diag_rms_sum += rms
+                if _diag_count % 30 == 0:
+                    avg_rms = _diag_rms_sum / 30
+                    src_name = "Aria-Sense" if active_source == "aria_sense" else "Chassis-Mic"
+                    print(f"[GeminiLive] [{src_name}] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
+                    _diag_rms_sum = 0.0
+
+                b64_audio = base64.b64encode(clean_pcm).decode('ascii')
                 realtime_msg = {
                     "realtimeInput": {
                         "mediaChunks": [
@@ -562,8 +574,10 @@ class GeminiLiveSession:
                                 try:
                                     player.stdin.write(pcm_bytes)
                                     player.stdin.flush()
-                                    # Print sample chunk notification
-                                    print(f"[GeminiLive] Playing audio chunk ({len(pcm_bytes)} bytes)", flush=True)
+                                    _play_chunk_cnt = getattr(self, '_play_chunk_cnt', 0) + 1
+                                    self._play_chunk_cnt = _play_chunk_cnt
+                                    if _play_chunk_cnt == 1 or _play_chunk_cnt % 25 == 0:
+                                        print(f"[GeminiLive] Playing audio ({len(pcm_bytes)} B, chunk #{_play_chunk_cnt})", flush=True)
                                 except Exception as e:
                                     print(f"[GeminiLive] Audio write error: {e}", flush=True)
                                     self._kill_player()
