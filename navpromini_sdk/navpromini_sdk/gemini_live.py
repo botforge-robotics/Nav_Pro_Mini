@@ -32,6 +32,152 @@ GEMINI_LIVE_MODELS = [
     "models/gemini-2.0-flash-exp",
 ]
 
+# ---------------------------------------------------------------------------
+# Indic Script (Telugu / Devanagari) to Latin English Transliteration
+# ---------------------------------------------------------------------------
+TELUGU_MAP = {
+    0x0C05: 'a', 0x0C06: 'aa', 0x0C07: 'i', 0x0C08: 'ee', 0x0C09: 'u', 0x0C0A: 'oo',
+    0x0C0B: 'ru', 0x0C0E: 'e', 0x0C0F: 'e', 0x0C10: 'ai', 0x0C12: 'o', 0x0C13: 'o', 0x0C14: 'au',
+    0x0C02: 'm', 0x0C03: 'h',
+    0x0C15: 'k', 0x0C16: 'kh', 0x0C17: 'g', 0x0C18: 'gh', 0x0C19: 'ng',
+    0x0C1A: 'ch', 0x0C1B: 'chh', 0x0C1C: 'j', 0x0C1D: 'jh', 0x0C1E: 'ny',
+    0x0C1F: 't', 0x0C20: 'th', 0x0C21: 'd', 0x0C22: 'dh', 0x0C23: 'n',
+    0x0C24: 'th', 0x0C25: 'th', 0x0C26: 'd', 0x0C27: 'dh', 0x0C28: 'n',
+    0x0C29: 'p', 0x0C2A: 'ph', 0x0C2B: 'b', 0x0C2C: 'bh', 0x0C2D: 'm',
+    0x0C2E: 'y', 0x0C2F: 'r', 0x0C30: 'r', 0x0C31: 'rr', 0x0C32: 'l', 0x0C33: 'l', 0x0C35: 'v',
+    0x0C36: 'sh', 0x0C37: 'sh', 0x0C38: 's', 0x0C39: 'h',
+    0x0C3E: 'a', 0x0C3F: 'i', 0x0C40: 'ee', 0x0C41: 'u', 0x0C42: 'oo',
+    0x0C43: 'ru', 0x0C46: 'e', 0x0C47: 'e', 0x0C48: 'ai', 0x0C4A: 'o', 0x0C4B: 'o', 0x0C4C: 'au',
+    0x0C4D: ''  # virama
+}
+
+DEVA_MAP = {
+    0x0905: 'a', 0x0906: 'aa', 0x0907: 'i', 0x0908: 'ee', 0x0909: 'u', 0x090A: 'oo',
+    0x090B: 'ru', 0x090E: 'e', 0x090F: 'e', 0x0910: 'ai', 0x0912: 'o', 0x0913: 'o', 0x0914: 'au',
+    0x0902: 'm', 0x0903: 'h',
+    0x0915: 'k', 0x0916: 'kh', 0x0917: 'g', 0x0918: 'gh', 0x0919: 'ng',
+    0x091A: 'ch', 0x091B: 'chh', 0x091C: 'j', 0x091D: 'jh', 0x091E: 'ny',
+    0x091F: 't', 0x0920: 'th', 0x0921: 'd', 0x0922: 'dh', 0x0923: 'n',
+    0x0924: 'th', 0x0925: 'th', 0x0926: 'd', 0x0927: 'dh', 0x0928: 'n',
+    0x0929: 'n', 0x092A: 'p', 0x092B: 'ph', 0x092C: 'b', 0x092D: 'bh', 0x092E: 'm',
+    0x092F: 'y', 0x0930: 'r', 0x0931: 'r', 0x0932: 'l', 0x0933: 'l', 0x0934: 'l', 0x0935: 'v',
+    0x0936: 'sh', 0x0937: 'sh', 0x0938: 's', 0x0939: 'h',
+    0x093E: 'a', 0x093F: 'i', 0x0940: 'ee', 0x0941: 'u', 0x0942: 'oo',
+    0x0943: 'ru', 0x0947: 'e', 0x0948: 'ai', 0x094B: 'o', 0x094C: 'au',
+    0x094D: ''  # virama
+}
+
+COMMON_INDIC_WORDS = {
+    'గుడ్ మార్నింగ్': 'Good morning',
+    'గుడ్ ఈవినింగ్': 'Good evening',
+    'గుడ్ జాబ్': 'Good job',
+    'గుడ్': 'Good',
+    'హలో': 'Hello',
+    'హాయ్': 'Hi',
+    'వాట్ ఈజ్ యువర్': 'What is your',
+    'వాట్ ఈజ్ ద': 'What is the',
+    'వాట్ ఈజ్': 'What is',
+    'వాట్': 'What',
+    'ఈజ్': 'is',
+    'యువర్': 'your',
+    'ద': 'the',
+    'బ్యాటరీ': 'battery',
+    'లెవెల్': 'level',
+    'పర్సెంటేజ్': 'percentage',
+    'పర్సంటేజ్': 'percentage',
+    'ఆఫీస్': 'office',
+    'కిచెన్': 'kitchen',
+    'డాక్': 'dock',
+    'స్టాప్': 'stop',
+    'కెన్ యు': 'Can you',
+    'కమ్ అవుట్ ఫ్రమ్': 'come out from',
+    'కమ్ అవుట్': 'come out',
+    'కమ్': 'come',
+    'అవుట్': 'out',
+    'ఫ్రమ్': 'from',
+    'ఛార్జర్': 'charger',
+    'గో టు': 'go to',
+    'గో': 'go',
+    'టు': 'to',
+    'गुड मॉर्निंग': 'Good morning',
+    'गुड': 'Good',
+    'हेलो': 'Hello',
+    'हाय': 'Hi',
+    'बैटरी': 'battery',
+    'ऑफिस': 'office',
+    'किचन': 'kitchen',
+    'स्टॉप': 'stop',
+    'डॉकिंग': 'docking',
+    'कम आउट': 'come out',
+    'चार्जर': 'charger',
+}
+
+def indic_to_latin(text: str) -> str:
+    """Convert any Telugu or Devanagari script phonetics cleanly into Latin English."""
+    if not text:
+        return text
+    has_indic = any(0x0900 <= ord(c) <= 0x0C7F for c in text)
+    if not has_indic:
+        return text
+
+    res = text
+    for k, v in sorted(COMMON_INDIC_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
+        if k in res:
+            res = res.replace(k, v)
+
+    if not any(0x0900 <= ord(c) <= 0x0C7F for c in res):
+        return res
+
+    out = []
+    i = 0
+    chars = list(res)
+    while i < len(chars):
+        c = chars[i]
+        code = ord(c)
+        if code in TELUGU_MAP:
+            trans = TELUGU_MAP[code]
+            is_cons = 0x0C15 <= code <= 0x0C39
+            if is_cons:
+                if i + 1 < len(chars):
+                    next_code = ord(chars[i+1])
+                    if next_code == 0x0C4D:
+                        out.append(trans)
+                        i += 2
+                        continue
+                    elif 0x0C3E <= next_code <= 0x0C4C:
+                        vowel = TELUGU_MAP.get(next_code, '')
+                        out.append(trans + vowel)
+                        i += 2
+                        continue
+                out.append(trans + 'a')
+            else:
+                out.append(trans)
+        elif code in DEVA_MAP:
+            trans = DEVA_MAP[code]
+            is_cons = 0x0915 <= code <= 0x0939
+            if is_cons:
+                if i + 1 < len(chars):
+                    next_code = ord(chars[i+1])
+                    if next_code == 0x094D:
+                        out.append(trans)
+                        i += 2
+                        continue
+                    elif 0x093E <= next_code <= 0x094C:
+                        vowel = DEVA_MAP.get(next_code, '')
+                        out.append(trans + vowel)
+                        i += 2
+                        continue
+                out.append(trans + 'a')
+            else:
+                out.append(trans)
+        else:
+            out.append(c)
+        i += 1
+    result = ''.join(out)
+    if result and result[0].islower():
+        result = result[0].upper() + result[1:]
+    return result
+
 
 def get_pulse_env() -> dict[str, str]:
     env = dict(os.environ)
@@ -195,6 +341,7 @@ class GeminiLiveSession:
                 self._player_proc = None
             self._playback_end_time = 0.0
             self._is_speaking_state = False
+            self._server_turn_active = False
 
     def _ensure_player(self) -> Optional[subprocess.Popen]:
         with self._player_lock:
@@ -223,8 +370,10 @@ class GeminiLiveSession:
     async def _finish_speech_after_delay(self, delay: float) -> None:
         if delay > 0:
             await asyncio.sleep(delay)
-        if not self.is_speaking and getattr(self, '_is_speaking_state', False):
+        if not self.is_speaking:
             self._is_speaking_state = False
+            self._server_turn_active = False
+            self._kill_player()
             if self._bridge and hasattr(self._bridge, 'emit_event'):
                 self._bridge.emit_event('voice.speaking', {'speaking': False})
 
@@ -233,6 +382,7 @@ class GeminiLiveSession:
         asyncio.set_event_loop(loop)
         self._loop = loop
         self._head_mic_queue = asyncio.Queue(maxsize=50)
+        self._server_turn_active = False
         self._tool_call_pending = False
         self._playback_end_time = 0.0
         backoff = 1.0
@@ -261,7 +411,6 @@ class GeminiLiveSession:
 
     async def _session_loop(self, api_key: str) -> None:
         from .handlers.voice import (
-            ROBOT_OPENAI_TOOLS,
             _build_robot_context_str,
             execute_robot_voice_tool,
             _VOICE_LOCK,
@@ -279,12 +428,12 @@ class GeminiLiveSession:
             "1. YOU ARE THE ROBOT: Speak exclusively in the first person ('I', 'me', 'my', 'myself'). "
             "NEVER refer to yourself as 'the robot' or 'this robot', and NEVER say 'send the robot' or 'where do you want to send the robot'. "
             "Instead, always say: 'Where should I go?', 'Where would you like me to take you?', 'How may I assist you?', or 'Right away, I am heading there now!'.\n"
-            "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, I am stopping here for you!', 'Certainly, stepping off the charging dock for you!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
+            "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, stopping here for you!', 'Certainly, stepping off the charging dock for you!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
             "3. BRISK & FAST: Speak concisely (1 short, natural spoken sentence per turn). Everything you say will be spoken out loud immediately. Avoid lists or formatting.\n"
             "4. ABSOLUTE LANGUAGE CONSISTENCY - ENGLISH ONLY:\n"
             "   - You MUST ALWAYS speak and converse in ENGLISH with a warm, natural, friendly female tone.\n"
-            "   - Even if you see Devanagari transliteration or accented phonetics from speech-to-text, DO NOT switch to Hindi, Telugu, or any other language! The user is speaking English with an Indian accent.\n"
-            "   - NEVER switch languages randomly or change accents mid-conversation! Maintain one unified, steady, charming Aria persona at all times.\n"
+            "   - ALL guest speech is English. Even if you detect an Indian accent or phonetic transliteration, DO NOT switch to Hindi, Telugu, or any other language! ALWAYS reply in English.\n"
+            "   - NEVER switch languages or change accents mid-conversation! Maintain one unified, steady, charming Aria persona at all times.\n"
             "5. PHYSICAL ACTION TOOLS (MANDATORY TO CALL ON MOTION COMMANDS):\n"
             "   - When the user asks you to move, undock, dock, stop, or navigate, you MUST invoke the appropriate tool!\n"
             "   - 'can you come out from charger', 'come off charger', 'undock', 'leave charger', 'step off dock', 'move off charger' -> MUST CALL undock_robot!\n"
@@ -292,32 +441,52 @@ class GeminiLiveSession:
             "   - 'stop', 'halt', 'freeze', 'cancel' -> MUST CALL emergency_stop!\n"
             "   - 'take me to [destination]', 'go to [destination]', 'can you go to [destination]' -> MUST CALL navigate_to_destination!\n"
             "   - ONLY answer with pure voice without tools when the guest is merely asking an informational question (e.g. 'what is your battery level?', 'where are you?').\n"
-            "6. DESTINATION INQUIRIES: If the guest asks where you can go or what places are available, ONLY mention the Saved Named Locations from your status above (e.g. Kitchen, Office, Charging Dock), and ask: 'Where would you like me to take you?'. NEVER recite raw graph node numbers or 'Node 1, Node 2' to guests!\n"
+            "6. DESTINATION INQUIRIES: If the guest asks where you can go or what places are available, ONLY announce the Saved Named Locations from your status above (e.g. Kitchen, Office, Charging Dock), and ask: 'Where would you like me to take you?'. NEVER recite raw graph node numbers or 'Node 1, Node 2' to guests!\n"
             "7. ALWAYS TALK BACK: When any guest speaks, always answer graciously out loud. If their voice was too faint or unclear, politely ask them to repeat. NEVER stay silent!\n"
             "8. NO META-REASONING: Do NOT speak internal thoughts, analysis, or prefixes like 'Acknowledging User's Statement'. Only speak what you want the human guest to hear."
         )
 
-        # Format tools for Gemini Live functionDeclarations (Only physical motion tools to ensure maximum speed!)
-        function_decls = []
-        for t in ROBOT_OPENAI_TOOLS:
-            fn = t["function"]
-            if fn["name"] in ("ignore_background_speech", "get_robot_telemetry"):
-                continue  # Never delay Gemini Live with non-physical tool round-trips!
-            props = {}
-            for k, v in fn["parameters"]["properties"].items():
-                props[k] = {
-                    "type": "INTEGER" if v.get("type") == "integer" else "STRING",
-                    "description": v.get("description", "")
-                }
-            function_decls.append({
-                "name": fn["name"],
-                "description": fn["description"],
+        # Explicit tool declarations for Gemini Live (Only physical motion tools)
+        function_decls = [
+            {
+                "name": "dock_robot",
+                "description": "Return myself to my charging station and dock to recharge. Call immediately whenever the guest asks me to dock, charge, recharge, park in dock, go to charger, or return to charging station.",
                 "parameters": {
                     "type": "OBJECT",
-                    "properties": props,
-                    "required": fn["parameters"].get("required", [])
+                    "properties": {}
                 }
-            })
+            },
+            {
+                "name": "undock_robot",
+                "description": "Disengage, roll forward, and come out of the charging dock. Call immediately whenever the guest asks me to come out from charger, come off charger, undock, step off the dock, leave charger, drive out of charger, or move away from charger.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "emergency_stop",
+                "description": "CRITICAL SAFETY: Immediately halt myself, stop my motors, and abort active navigation goals. Call when the guest says stop, halt, freeze, cancel, or wait here.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "navigate_to_destination",
+                "description": "Navigate myself to a specific saved place, room, or waypoint (e.g. 'Kitchen', 'Office', 'Charging Dock'). Call when the guest requests going to, driving to, or visiting a place or room.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "destination": {
+                            "type": "STRING",
+                            "description": "Destination name or waypoint (e.g. 'Kitchen', 'Office', 'Charging Dock')."
+                        }
+                    },
+                    "required": ["destination"]
+                }
+            }
+        ]
 
         setup_message = {
             "setup": {
@@ -518,11 +687,14 @@ class GeminiLiveSession:
                     _ensure_chassis_mic()
                     data = await loop.run_in_executor(None, _read_chassis_chunk, 1024)
 
-                # Echo suppression & tool pause:
-                # 1. Do not send mic packets to Gemini while a tool is executing (prevents 1011 server crash)
+                # Echo suppression & server turn pause:
+                # 1. Do not send mic packets to Gemini while server is generating a turn or a tool is executing (prevents 1011 server crash)
                 # 2. Suppress mic packets while robot is actively speaking to prevent acoustic self-interruption
                 now_time = time.time()
-                if getattr(self, '_tool_call_pending', False) or self.is_speaking or (now_time - getattr(self, '_playback_end_time', 0.0)) < 0.35:
+                if (getattr(self, '_server_turn_active', False) or 
+                    getattr(self, '_tool_call_pending', False) or 
+                    self.is_speaking or 
+                    (now_time - getattr(self, '_playback_end_time', 0.0)) < 0.25):
                     if self._head_mic_queue:
                         while not self._head_mic_queue.empty():
                             try:
@@ -626,23 +798,27 @@ class GeminiLiveSession:
                 if server_content.get("interrupted"):
                     print("[GeminiLive] User barge-in detected: interrupting playback!", flush=True)
                     self._kill_player()
+                    self._server_turn_active = False
                     if getattr(self, '_is_speaking_state', False):
                         self._is_speaking_state = False
                         if self._bridge and hasattr(self._bridge, 'emit_event'):
                             self._bridge.emit_event('voice.speaking', {'speaking': False})
 
-                # Capture User Speech Transcription (accumulate partials so full sentence appears on right side)
+                # Capture User Speech Transcription (transliterate any Indic phonetics to clean Latin English)
                 user_trans = server_content.get("inputTranscription") or server_content.get("interimInputTranscription")
                 if user_trans and isinstance(user_trans, dict):
-                    u_text = user_trans.get("text", "").strip()
-                    if u_text:
-                        print(f"[GeminiLive] Human transcript: {u_text}", flush=True)
+                    raw_u_text = user_trans.get("text", "").strip()
+                    if raw_u_text:
+                        self._server_turn_active = True
+                        u_text = indic_to_latin(raw_u_text)
+                        print(f"[GeminiLive] Human transcript: {u_text} (raw: {raw_u_text})", flush=True)
                         now_ts = time.time()
                         full_user_text = u_text
+                        user_msg_id = ""
                         with _VOICE_LOCK:
                             if (_CONVERSATION_HISTORY and
                                 _CONVERSATION_HISTORY[-1].get("sender") == "user" and
-                                (now_ts - _CONVERSATION_HISTORY[-1].get("timestamp", 0)) < 3.5):
+                                (now_ts - _CONVERSATION_HISTORY[-1].get("timestamp", 0)) < 4.0):
                                 prev_txt = _CONVERSATION_HISTORY[-1]["text"]
                                 if prev_txt != u_text and not prev_txt.endswith(u_text):
                                     full_user_text = (prev_txt + " " + u_text).strip()
@@ -650,9 +826,11 @@ class GeminiLiveSession:
                                     full_user_text = prev_txt
                                 _CONVERSATION_HISTORY[-1]["text"] = full_user_text
                                 _CONVERSATION_HISTORY[-1]["timestamp"] = now_ts
+                                user_msg_id = _CONVERSATION_HISTORY[-1]["id"]
                             else:
+                                user_msg_id = f"user_live_{int(now_ts*1000)}"
                                 _CONVERSATION_HISTORY.append({
-                                    "id": f"user_live_{int(now_ts*1000)}",
+                                    "id": user_msg_id,
                                     "sender": "user",
                                     "text": full_user_text,
                                     "timestamp": now_ts,
@@ -660,14 +838,24 @@ class GeminiLiveSession:
                                 })
                         if self._bridge and hasattr(self._bridge, 'emit_event'):
                             self._bridge.emit_event('voice.transcript', {
+                                'id': user_msg_id,
                                 'sender': 'user',
                                 'text': full_user_text,
                                 'timestamp': now_ts
                             })
 
+                # Capture Robot Spoken Transcript from outputAudioTranscription or outputTranscription
+                robot_trans = server_content.get("outputAudioTranscription") or server_content.get("outputTranscription")
+                r_text = ""
+                if robot_trans and isinstance(robot_trans, dict):
+                    r_text = robot_trans.get("text", "").strip()
+                elif isinstance(robot_trans, str):
+                    r_text = robot_trans.strip()
+
                 # Process Model Turn Audio & Text FIRST before turnComplete flags
                 model_turn = server_content.get("modelTurn")
                 if model_turn:
+                    self._server_turn_active = True
                     parts = model_turn.get("parts", [])
                     for part in parts:
                         # Audio stream chunk (Gemini Multimodal Live returns inlineData with audio/pcm;rate=24000)
@@ -681,7 +869,7 @@ class GeminiLiveSession:
                         if b64_pcm and not self.muted:
                             pcm_bytes = base64.b64decode(b64_pcm)
                             player = self._ensure_player()
-                            if player and player.stdin:
+                            if player and player.stdin and not player.stdin.closed:
                                 try:
                                     player.stdin.write(pcm_bytes)
                                     player.stdin.flush()
@@ -706,37 +894,56 @@ class GeminiLiveSession:
                                         if self._bridge and hasattr(self._bridge, 'emit_event'):
                                             self._bridge.emit_event('voice.speaking', {'speaking': False})
 
-                        # Text transcript chunk
+                        # Text transcript chunk from modelTurn part
                         if "text" in part and part["text"].strip():
                             text_chunk = part["text"].strip()
-                            if (not text_chunk.startswith("**") and
-                                "ignore_background_speech" not in text_chunk and
-                                "Acknowledging User" not in text_chunk):
-                                print(f"[GeminiLive] Aria transcript: {text_chunk}", flush=True)
-                                with _VOICE_LOCK:
-                                    if _CONVERSATION_HISTORY and _CONVERSATION_HISTORY[-1]["sender"] == "robot":
-                                        _CONVERSATION_HISTORY[-1]["text"] += " " + text_chunk
-                                    else:
-                                        _CONVERSATION_HISTORY.append({
-                                            "id": f"robot_live_{int(time.time()*1000)}",
-                                            "sender": "robot",
-                                            "text": text_chunk,
-                                            "timestamp": time.time(),
-                                            "action": "gemini_live"
-                                        })
-                                if self._bridge and hasattr(self._bridge, 'emit_event'):
-                                    self._bridge.emit_event('voice.transcript', {
-                                        'sender': 'robot',
-                                        'text': text_chunk
-                                    })
+                            if not r_text:
+                                r_text = text_chunk
+
+                # Emit robot speech transcript for UI bubble display
+                if r_text and not r_text.startswith("**") and "ignore_background_speech" not in r_text:
+                    clean_r_text = indic_to_latin(r_text)
+                    print(f"[GeminiLive] Aria transcript: {clean_r_text}", flush=True)
+                    now_ts = time.time()
+                    robot_msg_id = ""
+                    with _VOICE_LOCK:
+                        if (_CONVERSATION_HISTORY and
+                            _CONVERSATION_HISTORY[-1].get("sender") == "robot" and
+                            (now_ts - _CONVERSATION_HISTORY[-1].get("timestamp", 0)) < 4.0):
+                            prev_txt = _CONVERSATION_HISTORY[-1]["text"]
+                            if prev_txt != clean_r_text and not prev_txt.endswith(clean_r_text):
+                                full_robot_text = (prev_txt + " " + clean_r_text).strip()
+                            else:
+                                full_robot_text = prev_txt
+                            _CONVERSATION_HISTORY[-1]["text"] = full_robot_text
+                            _CONVERSATION_HISTORY[-1]["timestamp"] = now_ts
+                            robot_msg_id = _CONVERSATION_HISTORY[-1]["id"]
+                        else:
+                            robot_msg_id = f"robot_live_{int(now_ts*1000)}"
+                            full_robot_text = clean_r_text
+                            _CONVERSATION_HISTORY.append({
+                                "id": robot_msg_id,
+                                "sender": "robot",
+                                "text": full_robot_text,
+                                "timestamp": now_ts,
+                                "action": "gemini_live"
+                            })
+                    if self._bridge and hasattr(self._bridge, 'emit_event'):
+                        self._bridge.emit_event('voice.transcript', {
+                            'id': robot_msg_id,
+                            'sender': 'robot',
+                            'text': full_robot_text,
+                            'timestamp': now_ts
+                        })
 
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
-                    # Turn complete: flush player buffer so audio finishes playing smoothly
+                    # Turn complete: flush and close player buffer so paplay finishes playing and exits cleanly
                     with self._player_lock:
                         if self._player_proc and self._player_proc.stdin and not self._player_proc.stdin.closed:
                             try:
                                 self._player_proc.stdin.flush()
+                                self._player_proc.stdin.close()
                             except Exception:
                                 pass
                     finish_delay = max(0.0, getattr(self, '_playback_end_time', 0.0) - time.time())
@@ -745,6 +952,7 @@ class GeminiLiveSession:
             # 2. Handle Tool Calling (Robot actions: undock, dock, stop, navigate)
             tool_call = msg.get("toolCall")
             if tool_call:
+                self._server_turn_active = True
                 self._tool_call_pending = True
                 try:
                     function_calls = tool_call.get("functionCalls", [])
@@ -762,26 +970,30 @@ class GeminiLiveSession:
                             self._bridge, self._opts, name, args
                         )
 
-                        if action_tag != "ignored" and (spoken_reply or name != "ignore_background_speech"):
-                            with _VOICE_LOCK:
-                                _CONVERSATION_HISTORY.append({
-                                    "id": f"tool_{int(time.time()*1000)}",
-                                    "sender": "robot",
-                                    "text": spoken_reply or f"Executing {name}...",
-                                    "timestamp": time.time(),
-                                    "action": action_tag
-                                })
-                            if self._bridge and hasattr(self._bridge, 'emit_event'):
-                                self._bridge.emit_event('voice.transcript', {
-                                    'sender': 'robot',
-                                    'text': spoken_reply or f"Executing {name}..."
-                                })
+                        tool_msg = spoken_reply or f"Executing {name}..."
+                        now_ts = time.time()
+                        tool_msg_id = f"tool_{int(now_ts*1000)}"
+                        with _VOICE_LOCK:
+                            _CONVERSATION_HISTORY.append({
+                                "id": tool_msg_id,
+                                "sender": "robot",
+                                "text": tool_msg,
+                                "timestamp": now_ts,
+                                "action": action_tag
+                            })
+                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                            self._bridge.emit_event('voice.transcript', {
+                                'id': tool_msg_id,
+                                'sender': 'robot',
+                                'text': tool_msg,
+                                'timestamp': now_ts
+                            })
 
                         responses.append({
                             "id": call_id,
                             "name": name,
                             "response": {
-                                "result": {
+                                "output": {
                                     "status": "success",
                                     "action": action_tag,
                                     "message": spoken_reply or "Action executed successfully."
@@ -796,8 +1008,7 @@ class GeminiLiveSession:
                         }
                     }
                     await ws.send(json.dumps(tool_response_msg))
-                    # Settle delay so Gemini Live processes toolResponse before mic stream resumes
-                    await asyncio.sleep(0.12)
+                    print(f"[GeminiLive] Tool response sent for {name}: {responses[0]['response']}", flush=True)
                 finally:
                     self._tool_call_pending = False
 
