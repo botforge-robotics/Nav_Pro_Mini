@@ -875,30 +875,38 @@ async def await_navigate_result(bridge, handle, target: dict, timeout: float = 3
     try:
         wrapped = await ros_future(handle.get_result_async(), timeout=timeout)
         status = getattr(wrapped, 'status', None)
+        is_current = (TRACKER.handle == handle)
         if status == 4:
-            TRACKER.finish('succeeded')
-            bridge.emit_event('navigation.completed', {'target': target})
-            bridge.publish_empty_plan()
+            if is_current:
+                TRACKER.finish('succeeded')
+                bridge.emit_event('navigation.completed', {'target': target})
+                bridge.publish_empty_plan()
             return {'ok': True, 'message': ''}
         if status == 5:
-            TRACKER.finish('canceled', 'Goal was canceled')
-            bridge.emit_event('navigation.cancelled', {'target': target})
-            bridge.publish_empty_plan()
+            if is_current:
+                TRACKER.finish('canceled', 'Goal was canceled')
+                bridge.emit_event('navigation.cancelled', {'target': target})
+                bridge.publish_empty_plan()
+            else:
+                bridge.get_logger().info(f'Superseded navigation goal ({target}) was canceled; ignoring result.')
             return {'ok': False, 'message': 'Goal was canceled'}
         message = f'Navigation ended with status {status}'
-        TRACKER.finish('failed', message)
-        bridge.emit_event('navigation.failed', {'target': target, 'message': message})
-        bridge.publish_empty_plan()
+        if is_current:
+            TRACKER.finish('failed', message)
+            bridge.emit_event('navigation.failed', {'target': target, 'message': message})
+            bridge.publish_empty_plan()
         return {'ok': False, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        TRACKER.finish('failed', str(exc))
-        bridge.emit_event('navigation.failed', {'target': target, 'message': str(exc)})
-        bridge.publish_empty_plan()
+        if TRACKER.handle == handle:
+            TRACKER.finish('failed', str(exc))
+            bridge.emit_event('navigation.failed', {'target': target, 'message': str(exc)})
+            bridge.publish_empty_plan()
         return {'ok': False, 'message': str(exc)}
     finally:
-        bridge.reset_speed_limit()
-        if ACTIVE_DYNAMIC_CLOSED_EDGES:
-            asyncio.create_task(_reopen_edges(bridge, list(ACTIVE_DYNAMIC_CLOSED_EDGES)))
+        if TRACKER.handle == handle:
+            bridge.reset_speed_limit()
+            if ACTIVE_DYNAMIC_CLOSED_EDGES:
+                asyncio.create_task(_reopen_edges(bridge, list(ACTIVE_DYNAMIC_CLOSED_EDGES)))
 
 
 async def navigate_to(bridge, target: dict, timeout: float = 3600.0) -> dict:

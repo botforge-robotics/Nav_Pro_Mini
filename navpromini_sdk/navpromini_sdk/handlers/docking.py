@@ -86,29 +86,35 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
         result = getattr(wrapped, 'result', None)
         ok = bool(getattr(result, 'success', False))
         message = getattr(result, 'error_msg', '') or ''
-        TRACKER.finish('docked' if ok else 'failed', message)
-        bridge.emit_event('dock.completed' if ok else 'dock.failed',
-                          {'message': message} if not ok else {})
-        if ok:
-            if hasattr(bridge, 'publish_led_command'):
-                bridge.publish_led_command('breathe,0,255,0,1500')
-            try:
-                from .navigation import relocalize_at_dock
-                await relocalize_at_dock(bridge)
-            except Exception as e:
-                bridge.get_logger().warn(f'Post-dock relocalize note: {e}')
+        is_current = (TRACKER.handle == handle)
+        if is_current:
+            TRACKER.finish('docked' if ok else 'failed', message)
+            bridge.emit_event('dock.completed' if ok else 'dock.failed',
+                              {'message': message} if not ok else {})
+            if ok:
+                if hasattr(bridge, 'publish_led_command'):
+                    bridge.publish_led_command('breathe,0,255,0,1500')
+                try:
+                    from .navigation import relocalize_at_dock
+                    await relocalize_at_dock(bridge)
+                except Exception as e:
+                    bridge.get_logger().warn(f'Post-dock relocalize note: {e}')
+        else:
+            bridge.get_logger().info('Superseded dock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        TRACKER.finish('failed', str(exc))
-        bridge.emit_event('dock.failed', {'message': str(exc)})
+        if TRACKER.handle == handle:
+            TRACKER.finish('failed', str(exc))
+            bridge.emit_event('dock.failed', {'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
     finally:
-        if hasattr(bridge, 'release_video_stream'):
-            bridge.release_video_stream()
-        if hasattr(bridge, 'publish_display_state'):
-            bridge.publish_display_state('ready')
-        if hasattr(bridge, 'publish_led_command'):
-            bridge.publish_led_command('breathe,0,255,0,1500' if TRACKER.state == 'docked' else 'solid,0,200,40')
+        if TRACKER.handle == handle:
+            if hasattr(bridge, 'release_video_stream'):
+                bridge.release_video_stream()
+            if hasattr(bridge, 'publish_display_state'):
+                bridge.publish_display_state('ready')
+            if hasattr(bridge, 'publish_led_command'):
+                bridge.publish_led_command('breathe,0,255,0,1500' if TRACKER.state == 'docked' else 'solid,0,200,40')
 
 
 async def dock_robot(bridge, navigate_to_staging: bool = True, timeout: float = 600.0) -> dict:
@@ -170,26 +176,32 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
         status = getattr(wrapped, 'status', None)
         ok = status == 4
         message = '' if ok else f'ended with status {status}'
-        TRACKER.finish('undocked' if ok else 'failed', message)
-        bridge.emit_event('dock.completed' if ok else 'dock.failed',
-                          {'operation': 'undock',
-                           **({'message': message} if not ok else {})})
-        if ok:
-            try:
-                from .navigation import relocalize_at_dock
-                await relocalize_at_dock(bridge)
-            except Exception as e:
-                bridge.get_logger().warn(f'Post-undock relocalize note: {e}')
+        is_current = (TRACKER.handle == handle)
+        if is_current:
+            TRACKER.finish('undocked' if ok else 'failed', message)
+            bridge.emit_event('dock.completed' if ok else 'dock.failed',
+                              {'operation': 'undock',
+                               **({'message': message} if not ok else {})})
+            if ok:
+                try:
+                    from .navigation import relocalize_at_dock
+                    await relocalize_at_dock(bridge)
+                except Exception as e:
+                    bridge.get_logger().warn(f'Post-undock relocalize note: {e}')
+        else:
+            bridge.get_logger().info('Superseded undock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        TRACKER.finish('failed', str(exc))
-        bridge.emit_event('dock.failed', {'operation': 'undock', 'message': str(exc)})
+        if TRACKER.handle == handle:
+            TRACKER.finish('failed', str(exc))
+            bridge.emit_event('dock.failed', {'operation': 'undock', 'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
     finally:
-        if hasattr(bridge, 'publish_display_state'):
-            bridge.publish_display_state('ready')
-        if hasattr(bridge, 'publish_led_command'):
-            bridge.publish_led_command('solid,0,200,40')
+        if TRACKER.handle == handle:
+            if hasattr(bridge, 'publish_display_state'):
+                bridge.publish_display_state('ready')
+            if hasattr(bridge, 'publish_led_command'):
+                bridge.publish_led_command('solid,0,200,40')
 
 
 async def undock_robot(bridge, timeout: float = 180.0) -> dict:

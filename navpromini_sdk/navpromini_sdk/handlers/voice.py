@@ -626,7 +626,29 @@ async def execute_robot_voice_tool(
 
     if tool_name == "dock_robot":
         try:
-            from .docking import send_dock_goal, await_dock_result
+            from .navigation import TRACKER as NAV_TRACKER
+            from .docking import send_dock_goal, await_dock_result, cancel_active_dock, TRACKER as DOCK_TRACKER
+
+            # 1. Preempt active navigation if running
+            if NAV_TRACKER.state == 'active':
+                logger.info("Preempting active navigation goal before docking")
+                if NAV_TRACKER.handle is not None:
+                    try:
+                        from .base import ros_future
+                        await ros_future(NAV_TRACKER.handle.cancel_goal_async(), timeout=2.0)
+                    except Exception:
+                        pass
+                NAV_TRACKER.finish('canceled', 'preempted_by_dock')
+                if hasattr(bridge, 'publish_empty_plan'):
+                    bridge.publish_empty_plan()
+                await asyncio.sleep(0.1)
+
+            # 2. Preempt active undocking or previous dock if running
+            if DOCK_TRACKER.state in ('docking', 'undocking'):
+                logger.info(f"Preempting active dock operation ({DOCK_TRACKER.state}) before starting new dock")
+                await cancel_active_dock(bridge, 'preempted_by_new_dock')
+                await asyncio.sleep(0.1)
+
             handle = await send_dock_goal(bridge, True)
             if opts and 'spawn' in opts:
                 opts['spawn'](await_dock_result(bridge, handle))
@@ -639,7 +661,29 @@ async def execute_robot_voice_tool(
 
     if tool_name == "undock_robot":
         try:
-            from .docking import send_undock_goal, await_undock_result
+            from .navigation import TRACKER as NAV_TRACKER
+            from .docking import send_undock_goal, await_undock_result, cancel_active_dock, TRACKER as DOCK_TRACKER
+
+            # 1. Preempt active navigation if running
+            if NAV_TRACKER.state == 'active':
+                logger.info("Preempting active navigation goal before undocking")
+                if NAV_TRACKER.handle is not None:
+                    try:
+                        from .base import ros_future
+                        await ros_future(NAV_TRACKER.handle.cancel_goal_async(), timeout=2.0)
+                    except Exception:
+                        pass
+                NAV_TRACKER.finish('canceled', 'preempted_by_undock')
+                if hasattr(bridge, 'publish_empty_plan'):
+                    bridge.publish_empty_plan()
+                await asyncio.sleep(0.1)
+
+            # 2. Preempt active dock if running
+            if DOCK_TRACKER.state in ('docking', 'undocking'):
+                logger.info("Preempting active dock operation before undocking")
+                await cancel_active_dock(bridge, 'preempted_by_undock')
+                await asyncio.sleep(0.1)
+
             handle = await send_undock_goal(bridge)
             if opts and 'spawn' in opts:
                 opts['spawn'](await_undock_result(bridge, handle))
@@ -653,6 +697,8 @@ async def execute_robot_voice_tool(
     if tool_name == "emergency_stop":
         try:
             from .navigation import cancel_active_goal
+            from .docking import cancel_active_dock
+            await cancel_active_dock(bridge, 'voice_emergency_stop')
             await cancel_active_goal(bridge, 'voice_emergency_stop')
             if hasattr(bridge, 'publish_cmd_vel'):
                 bridge.publish_cmd_vel(0.0, 0.0)
@@ -675,7 +721,27 @@ async def execute_robot_voice_tool(
             return await execute_robot_voice_tool(bridge, opts, "dock_robot", args)
 
         try:
-            from .navigation import resolve_target, send_route_goal, send_navigate_goal, await_navigate_result, TRACKER
+            from .navigation import resolve_target, send_route_goal, send_navigate_goal, await_navigate_result, TRACKER, is_near_dock_or_docked
+            from .docking import cancel_active_dock, TRACKER as DOCK_TRACKER
+
+            # 1. Preempt active dock if any
+            if DOCK_TRACKER.state in ('docking', 'undocking'):
+                logger.info(f"Preempting active dock operation ({DOCK_TRACKER.state}) before navigation to {clean_dest}")
+                await cancel_active_dock(bridge, reason='preempted_by_voice_nav')
+                await asyncio.sleep(0.1)
+
+            # 2. Preempt active navigation if any
+            if TRACKER.state == 'active':
+                logger.info(f"Preempting active navigation goal before starting navigation to {clean_dest}")
+                if TRACKER.handle is not None:
+                    try:
+                        from .base import ros_future
+                        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=2.0)
+                    except Exception:
+                        pass
+                TRACKER.finish('canceled', 'preempted_by_voice_nav')
+                await asyncio.sleep(0.1)
+
             store = opts.get('store')
             m_digit = re.search(r'\b(?:node\s*|station\s*)?(\d+)\b', clean_dest, re.IGNORECASE)
             target_data: dict[str, Any] = {}
@@ -686,15 +752,41 @@ async def execute_robot_voice_tool(
                 target_data = {'waypoint': clean_dest}
 
             target = resolve_target(store, target_data)
-            if target.get('routing_mode') == 'road_network':
-                handle = await send_route_goal(bridge, target, store=store)
-            else:
-                handle = await send_navigate_goal(bridge, target, store=store)
 
-            if opts and 'spawn' in opts:
-                opts['spawn'](await_navigate_result(bridge, handle, target))
+            # Check if currently physically docked on contacts
+            near_dock, dock_info = is_near_dock_or_docked(bridge)
+            is_docked = bool(dock_info.get('is_docked'))
+
+            async def _dispatch_navigation():
+                try:
+                    if target.get('routing_mode') == 'road_network':
+                        h = await send_route_goal(bridge, target, store=store)
+                    else:
+                        h = await send_navigate_goal(bridge, target, store=store)
+                    if opts and 'spawn' in opts:
+                        opts['spawn'](await_navigate_result(bridge, h, target))
+                    else:
+                        asyncio.create_task(await_navigate_result(bridge, h, target))
+                except Exception as exc:
+                    logger.error(f"Navigation dispatch error: {exc}")
+
+            if is_docked:
+                # If docked, auto-undock rolls off first (~6s). Spawn in background so Gemini Live immediately returns voice reply!
+                logger.info(f"Robot is on charger contacts; spawning background undock+navigate to {clean_dest}")
+                if opts and 'spawn' in opts:
+                    opts['spawn'](_dispatch_navigation())
+                else:
+                    asyncio.create_task(_dispatch_navigation())
             else:
-                asyncio.create_task(await_navigate_result(bridge, handle, target))
+                # Already off the dock: send goal directly (~200ms)
+                if target.get('routing_mode') == 'road_network':
+                    handle = await send_route_goal(bridge, target, store=store)
+                else:
+                    handle = await send_navigate_goal(bridge, target, store=store)
+                if opts and 'spawn' in opts:
+                    opts['spawn'](await_navigate_result(bridge, handle, target))
+                else:
+                    asyncio.create_task(await_navigate_result(bridge, handle, target))
 
             display_name = target.get('waypoint') or clean_dest
             reply = spoken or f"Certainly, on my way to {display_name}!"

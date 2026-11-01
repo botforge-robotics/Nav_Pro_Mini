@@ -99,6 +99,26 @@ COMMON_INDIC_WORDS = {
     'గో టు': 'go to',
     'గో': 'go',
     'టు': 'to',
+    'వేర్ ఈజ్': 'Where is',
+    'వేర్': 'Where',
+    'హౌ ఆర్ యు': 'How are you',
+    'థాంక్యూ': 'Thank you',
+    'థాంక్స్': 'Thanks',
+    'ప్లీజ్': 'Please',
+    'నావిగేట్': 'Navigate',
+    'టేక్ మీ టు': 'Take me to',
+    'అన్‌డాక్': 'Undock',
+    'అన్ డాక్': 'Undock',
+    'కమింగ్': 'Coming',
+    'రూమ్': 'Room',
+    'లొకేషన్': 'Location',
+    'స్టేషన్': 'Station',
+    'హోమ్': 'Home',
+    'గుడ్ నైట్': 'Good night',
+    'గుడ్ బై': 'Good bye',
+    'బై': 'Bye',
+    'గుడ్ ఈవినింగ్': 'Good evening',
+    'గుడ్ ఆఫ్టర్నూన్': 'Good afternoon',
     'गुड मॉर्निंग': 'Good morning',
     'गुड': 'Good',
     'हेलो': 'Hello',
@@ -210,6 +230,9 @@ class GeminiLiveSession:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._head_mic_queue: Optional[asyncio.Queue] = None
         self._pending_tool_action: Optional[str] = None
+        self._turn_robot_msg_id: Optional[str] = None
+        self._turn_robot_text: str = ""
+        self._turn_action_tag: Optional[str] = None
         self._has_speech_text_in_turn: bool = False
         self._spoke_in_turn: bool = False
         self._discard_post_tool_speech: bool = False
@@ -436,12 +459,12 @@ class GeminiLiveSession:
             "3. BRISK & FAST (EXACTLY ONE SPOKEN STATEMENT PER TURN):\n"
             "   - Speak exactly 1 short, natural spoken sentence per turn. Never repeat yourself or utter two similar confirmations in a single interaction.\n"
             "   - Everything you say will be spoken out loud immediately. Avoid lists or formatting.\n"
-            "4. MULTILINGUAL & LANGUAGE SWITCHING RULES:\n"
+            "4. LANGUAGE RULES (ENGLISH DEFAULT, SWITCH ONLY ON EXPLICIT REQUEST):\n"
             "   - DEFAULT CONVERSATION LANGUAGE IS ENGLISH: By default, always speak and converse in English with a warm, natural, friendly female tone.\n"
-            "   - ACCENT STABILITY: When a guest speaks English with an Indian accent or regional phonetics, DO NOT mistakenly switch to Telugu, Hindi, or transliteration. Continue speaking natural English.\n"
-            "   - LANGUAGE SWITCHING ON REQUEST: When the guest explicitly asks you to speak in a specific language (e.g. 'Speak in Telugu', 'తెలుగులో మాట్లాడు', 'Speak in Hindi', 'Can you talk in Telugu?'), OR when the guest speaks to you directly in Telugu, Hindi, or another language: You MUST graciously and enthusiastically switch to that requested language immediately! Converse fluently, warmly, and politely in that requested language.\n"
-            "   - STRICTLY FORBIDDEN: NEVER say 'I can only speak in English', 'I apologize, I can only speak English', or any refusal to speak another language! You are fully capable and delighted to speak Telugu, Hindi, and other languages whenever requested.\n"
-            "   - SWITCHING BACK: If the guest later speaks English or asks to speak in English ('Speak in English', 'ఇంగ్లీష్ లో మాట్లాడు'), immediately switch back to English.\n"
+            "   - ACCENT STABILITY: When a guest speaks English with an Indian accent or regional phonetics, NEVER switch to Telugu, Hindi, or transliteration. Continue speaking natural English.\n"
+            "   - SWITCH ONLY ON EXPLICIT REQUEST: Only switch to another language (such as Telugu or Hindi) when the user EXPLICITLY asks you to speak in that language (for example: 'Speak in Telugu', 'Talk in Telugu', 'Can you talk in Telugu?', 'తెలుగులో మాట్లాడు', 'Speak in Hindi', 'हिंदी में बोलो'). If the user speaks English, ALWAYS answer in English. Do NOT switch languages automatically.\n"
+            "   - STRICTLY FORBIDDEN: NEVER say 'I can only speak in English', 'I apologize, I can only speak English', or any refusal to speak another language! When explicitly requested to speak in Telugu or Hindi, converse fluently and politely in that requested language.\n"
+            "   - SWITCHING BACK: If the guest later asks to speak in English ('Speak in English', 'ఇంగ్లీష్ లో మాట్లాడు'), immediately switch back to English.\n"
             "5. PHYSICAL ACTION TOOLS (MANDATORY TO CALL ON MOTION COMMANDS):\n"
             "   - CRITICAL TOOL CALLING RULE: When the user asks you to move, undock, dock, stop, or navigate, you MUST invoke the appropriate tool IMMEDIATELY as your first action without speaking any preamble first!\n"
             "   - Speak exactly ONE concise confirmation sentence after the tool completes (e.g. 'Right away, returning to the charging dock now!'). NEVER speak twice or say two confirmations for the same action!\n"
@@ -817,6 +840,9 @@ class GeminiLiveSession:
                     self._has_speech_text_in_turn = False
                     self._spoke_in_turn = False
                     self._pending_tool_action = None
+                    self._turn_robot_msg_id = None
+                    self._turn_robot_text = ""
+                    self._turn_action_tag = None
                     if getattr(self, '_is_speaking_state', False):
                         self._is_speaking_state = False
                         if self._bridge and hasattr(self._bridge, 'emit_event'):
@@ -832,6 +858,9 @@ class GeminiLiveSession:
                         self._has_speech_text_in_turn = False
                         self._spoke_in_turn = False
                         self._pending_tool_action = None
+                        self._turn_robot_msg_id = None
+                        self._turn_robot_text = ""
+                        self._turn_action_tag = None
                         u_text = indic_to_latin(raw_u_text)
                         print(f"[GeminiLive] Human transcript: {u_text} (raw: {raw_u_text})", flush=True)
                         now_ts = time.time()
@@ -935,38 +964,44 @@ class GeminiLiveSession:
                         self._has_speech_text_in_turn = True
                         print(f"[GeminiLive] Aria transcript: {clean_r_text}", flush=True)
                         now_ts = time.time()
-                        robot_msg_id = ""
-                        action_tag = getattr(self, '_pending_tool_action', None)
+                        
+                        # Cumulative & incremental merge to prevent duplicate sentences in same bubble
+                        if not self._turn_robot_text:
+                            self._turn_robot_text = clean_r_text
+                        elif clean_r_text.startswith(self._turn_robot_text):
+                            self._turn_robot_text = clean_r_text
+                        elif clean_r_text in self._turn_robot_text:
+                            pass
+                        elif self._turn_robot_text.endswith(clean_r_text):
+                            pass
+                        else:
+                            self._turn_robot_text = f"{self._turn_robot_text} {clean_r_text}".strip()
+
+                        action_tag = getattr(self, '_turn_action_tag', None) or getattr(self, '_pending_tool_action', None)
                         with _VOICE_LOCK:
-                            if (_CONVERSATION_HISTORY and
-                                _CONVERSATION_HISTORY[-1].get("sender") == "robot" and
-                                (now_ts - _CONVERSATION_HISTORY[-1].get("timestamp", 0)) < 4.0):
-                                prev_txt = _CONVERSATION_HISTORY[-1]["text"]
-                                if prev_txt != clean_r_text and not prev_txt.endswith(clean_r_text):
-                                    full_robot_text = (prev_txt + " " + clean_r_text).strip()
-                                else:
-                                    full_robot_text = prev_txt
-                                _CONVERSATION_HISTORY[-1]["text"] = full_robot_text
-                                _CONVERSATION_HISTORY[-1]["timestamp"] = now_ts
-                                if action_tag and not _CONVERSATION_HISTORY[-1].get("action"):
-                                    _CONVERSATION_HISTORY[-1]["action"] = action_tag
-                                robot_msg_id = _CONVERSATION_HISTORY[-1]["id"]
+                            if self._turn_robot_msg_id is not None:
+                                for m in reversed(_CONVERSATION_HISTORY):
+                                    if m.get("id") == self._turn_robot_msg_id:
+                                        m["text"] = self._turn_robot_text
+                                        m["timestamp"] = now_ts
+                                        if action_tag and not m.get("action"):
+                                            m["action"] = action_tag
+                                        break
                             else:
-                                robot_msg_id = f"robot_live_{int(now_ts*1000)}"
-                                full_robot_text = clean_r_text
+                                self._turn_robot_msg_id = f"robot_live_{int(now_ts*1000)}"
                                 _CONVERSATION_HISTORY.append({
-                                    "id": robot_msg_id,
+                                    "id": self._turn_robot_msg_id,
                                     "sender": "robot",
-                                    "text": full_robot_text,
+                                    "text": self._turn_robot_text,
                                     "timestamp": now_ts,
                                     "action": action_tag or "gemini_live"
                                 })
-                        self._pending_tool_action = None
+
                         if self._bridge and hasattr(self._bridge, 'emit_event'):
                             self._bridge.emit_event('voice.transcript', {
-                                'id': robot_msg_id,
+                                'id': self._turn_robot_msg_id,
                                 'sender': 'robot',
-                                'text': full_robot_text,
+                                'text': self._turn_robot_text,
                                 'timestamp': now_ts,
                                 'action': action_tag
                             })
@@ -974,9 +1009,8 @@ class GeminiLiveSession:
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
                     # If a tool executed but Gemini produced zero spoken transcript, fallback to tool confirmation
-                    if getattr(self, '_pending_tool_action', None):
-                        action_tag = self._pending_tool_action
-                        self._pending_tool_action = None
+                    if self._turn_robot_msg_id is None and (self._turn_action_tag or getattr(self, '_pending_tool_action', None)):
+                        action_tag = self._turn_action_tag or self._pending_tool_action
                         tool_msg_id = f"tool_{int(time.time()*1000)}"
                         with _VOICE_LOCK:
                             _CONVERSATION_HISTORY.append({
@@ -999,6 +1033,9 @@ class GeminiLiveSession:
                     self._has_speech_text_in_turn = False
                     self._spoke_in_turn = False
                     self._pending_tool_action = None
+                    self._turn_robot_msg_id = None
+                    self._turn_robot_text = ""
+                    self._turn_action_tag = None
 
                     # Turn complete: flush and close player buffer so paplay finishes playing and exits cleanly
                     with self._player_lock:
@@ -1031,14 +1068,15 @@ class GeminiLiveSession:
                         spoken_reply, action_tag = await execute_robot_voice_tool(
                             self._bridge, self._opts, name, args
                         )
+                        self._turn_action_tag = action_tag
+                        self._pending_tool_action = action_tag
 
-                        # Check if Gemini already spoke before calling the tool in this turn:
-                        if self._has_speech_text_in_turn or self._spoke_in_turn:
-                            # Gemini already spoke preamble out loud and it's displayed in the bubble!
+                        # If a bubble was already created in this turn, attach the action tag to it!
+                        if self._turn_robot_msg_id:
                             updated_msg = None
                             with _VOICE_LOCK:
                                 for m in reversed(_CONVERSATION_HISTORY):
-                                    if m.get("sender") == "robot":
+                                    if m.get("id") == self._turn_robot_msg_id:
                                         m["action"] = action_tag
                                         updated_msg = dict(m)
                                         break
@@ -1046,15 +1084,8 @@ class GeminiLiveSession:
                                 print(f"[GeminiLive] Attached action '{action_tag}' to existing bubble '{updated_msg.get('text')}'", flush=True)
                                 if self._bridge and hasattr(self._bridge, 'emit_event'):
                                     self._bridge.emit_event('voice.transcript', updated_msg)
-                                # Suppress post-tool duplicate speech so robot speaks exactly ONCE!
-                                self._discard_post_tool_speech = True
-                                self._pending_tool_action = None
-                            else:
-                                self._pending_tool_action = action_tag
-                                self._discard_post_tool_speech = False
+                            self._discard_post_tool_speech = True
                         else:
-                            # Gemini did not speak yet. The post-tool confirmation will be the single speech.
-                            self._pending_tool_action = action_tag
                             self._discard_post_tool_speech = False
 
                         responses.append({
