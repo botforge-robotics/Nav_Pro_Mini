@@ -235,13 +235,55 @@ class HeadUnitWifiInfoHandler(BaseHandler):
         self.send({
             "current_ssid": info.get("ssid", ""),
             "target_ssid_24ghz": info.get("ssid_24ghz", "") or info.get("ssid", ""),
+            "saved_password": info.get("password", ""),
             "has_password": bool(info.get("password")),
             "robot_ip": get_robot_local_ip()
         })
 
 
+class HeadUnitWifiScanHandler(BaseHandler):
+    """GET /api/v1/head_unit/wifi_scan - scan available Wi-Fi networks in range."""
+
+    async def get(self) -> None:
+        networks = []
+        try:
+            cmd = ["sudo", "nmcli", "-t", "-f", "SSID,SIGNAL,FREQ,SECURITY", "dev", "wifi", "list"]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            stdout, _ = await proc.communicate()
+            text = stdout.decode("utf-8", errors="ignore")
+
+            seen: dict[str, dict[str, Any]] = {}
+            for line in text.splitlines():
+                parts = line.split(":")
+                if len(parts) >= 4 and parts[0]:
+                    ssid = parts[0]
+                    sig = int(parts[1]) if parts[1].isdigit() else 0
+                    freq_str = parts[2].split()[0] if parts[2].split() else "0"
+                    freq = int(freq_str) if freq_str.isdigit() else 0
+                    is_24ghz = (2400 <= freq <= 2500)
+                    sec = parts[3]
+                    if ssid not in seen or sig > seen[ssid]["signal"]:
+                        seen[ssid] = {
+                            "ssid": ssid,
+                            "signal": sig,
+                            "freq": freq,
+                            "is_24ghz": is_24ghz,
+                            "security": sec
+                        }
+            # Sort: 2.4GHz networks first, then by signal strength desc
+            networks = sorted(seen.values(), key=lambda x: (not x["is_24ghz"], -x["signal"]))
+        except Exception as e:
+            logger.warning(f"Error scanning Wi-Fi: {e}")
+
+        self.send({"networks": networks, "count": len(networks)})
+
+
 class HeadUnitScanHandler(BaseHandler):
-    """GET /api/v1/head_unit/scan - scan for nearby advertising Aria-Head BLE devices."""
+    """GET /api/v1/head_unit/scan - scan for nearby advertising Aria-Sense BLE devices."""
 
     async def get(self) -> None:
         ensure_head_unit_services()
@@ -262,7 +304,7 @@ class HeadUnitScanHandler(BaseHandler):
                 if m:
                     mac = m.group(1).upper()
                     name = m.group(2).strip()
-                    if mac not in seen_macs and ("Aria-Head" in name or "XIAO" in name or "Head" in name):
+                    if mac not in seen_macs and ("Aria-Sense" in name or "Aria-Head" in name or "Sense" in name or "Head" in name or "XIAO" in name):
                         seen_macs.add(mac)
                         devices.append({
                             "name": name,
@@ -270,27 +312,27 @@ class HeadUnitScanHandler(BaseHandler):
                             "rssi": -55  # nominal RSSI
                         })
         except Exception as e:
-            logger.warning(f"Error scanning for BLE head units: {e}")
+            logger.warning(f"Error scanning for BLE Aria Sense units: {e}")
 
         self.send({"devices": devices, "count": len(devices)})
 
 
 class HeadUnitPairHandler(BaseHandler):
-    """POST /api/v1/head_unit/pair - 1-tap provision Wi-Fi credentials to ESP32 over BLE."""
+    """POST /api/v1/head_unit/pair - provision Wi-Fi credentials to Aria Sense over BLE."""
 
     async def post(self) -> None:
         data = self.body()
         target_mac = data.get("mac", "").strip().upper()
         if not target_mac:
-            raise ApiError(400, "missing_mac", "MAC address of Head Unit is required")
+            raise ApiError(400, "missing_mac", "MAC address of Aria Sense is required")
 
         wifi_info = get_current_wifi_credentials()
-        ssid = data.get("ssid") or wifi_info.get("ssid_24ghz") or wifi_info.get("ssid")
-        password = data.get("password") or wifi_info.get("password", "")
+        ssid = (data.get("ssid") or wifi_info.get("ssid_24ghz") or wifi_info.get("ssid") or "").strip()
+        password = data.get("password") if data.get("password") is not None else wifi_info.get("password", "")
         robot_ip = get_robot_local_ip()
 
         if not ssid:
-            raise ApiError(400, "missing_ssid", "No active Wi-Fi connection detected on robot to sync.")
+            raise ApiError(400, "missing_ssid", "Please select or enter a Wi-Fi network SSID.")
 
         payload = json.dumps({
             "ssid": ssid,

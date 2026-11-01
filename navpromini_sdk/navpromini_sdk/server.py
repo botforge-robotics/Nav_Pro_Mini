@@ -192,6 +192,7 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/head_unit/pair', head_unit.HeadUnitPairHandler, opts),
         (rf'{API}/head_unit/status', head_unit.HeadUnitStatusHandler, opts),
         (rf'{API}/head_unit/wifi_info', head_unit.HeadUnitWifiInfoHandler, opts),
+        (rf'{API}/head_unit/wifi_scan', head_unit.HeadUnitWifiScanHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
         # media static files
