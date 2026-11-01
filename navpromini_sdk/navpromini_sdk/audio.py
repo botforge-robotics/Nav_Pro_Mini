@@ -469,6 +469,14 @@ def play_speech(text: str, wait: bool = False) -> None:
 
 
 
+def is_audio_speaking() -> bool:
+    """Return True if TTS speech or sound is actively being played."""
+    with _audio_lock:
+        if _current_speech_proc is not None and _current_speech_proc.poll() is None:
+            return True
+        return time.time() < _audio_busy_until
+
+
 def play_sound(sound_name: str, speech_text: Optional[str] = None, wait: bool = False) -> None:
     """Play event tone chime and optionally speak accompanying announcement.
 

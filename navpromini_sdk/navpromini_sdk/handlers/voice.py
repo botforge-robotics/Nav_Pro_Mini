@@ -1189,7 +1189,16 @@ class VoiceChatHandler(BaseHandler):
         if speak and reply_text:
             try:
                 from ..audio import play_speech
+                if self.bridge and hasattr(self.bridge, 'emit_event'):
+                    self.bridge.emit_event('voice.speaking', {'speaking': True})
                 play_speech(reply_text, wait=False)
+                dur = max(1.8, len(reply_text) / 11.0)
+                def _done_spk():
+                    time.sleep(dur)
+                    if self.bridge and hasattr(self.bridge, 'emit_event'):
+                        self.bridge.emit_event('voice.speaking', {'speaking': False})
+                import threading
+                threading.Thread(target=_done_spk, daemon=True).start()
             except Exception as exc:
                 self.bridge.get_logger().warn(f"Chat speech playback note: {exc}")
 
@@ -1206,11 +1215,12 @@ class VoiceDialogHandler(BaseHandler):
     def get(self) -> None:
         from .head_unit import is_aria_sense_active
         from ..gemini_live import get_live_session
+        from ..audio import is_audio_speaking
         aria_active = is_aria_sense_active()
         sess = get_live_session()
         st = sess.get_status() if sess else {}
-        speaking = st.get('speaking', False)
-        user_speaking = st.get('user_speaking', False)
+        speaking = st.get('speaking', False) or is_audio_speaking()
+        user_speaking = st.get('user_speaking', False) and not speaking
         with _VOICE_LOCK:
             msgs = list(_CONVERSATION_HISTORY[-50:])
         self.send({
@@ -1244,11 +1254,12 @@ class VoiceStatusHandler(BaseHandler):
     def get(self) -> None:
         from .head_unit import is_aria_sense_active
         from ..gemini_live import get_live_session
+        from ..audio import is_audio_speaking
         aria_active = is_aria_sense_active()
         sess = get_live_session()
         st = sess.get_status() if sess else {}
-        speaking = st.get('speaking', False)
-        user_speaking = st.get('user_speaking', False)
+        speaking = st.get('speaking', False) or is_audio_speaking()
+        user_speaking = st.get('user_speaking', False) and not speaking
         self.send({
             'muted': _IS_MUTED or st.get('muted', False),
             'listening': _IS_LISTENING or (st.get('active', False) and not st.get('muted', False)),
