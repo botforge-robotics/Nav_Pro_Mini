@@ -65,7 +65,7 @@ class GeminiLiveSession:
         self._head_mic_queue: Optional[asyncio.Queue] = None
 
     def inject_pcm_audio(self, pcm_data: bytes) -> None:
-        """Inject 16kHz PCM audio chunk from the wireless XIAO ESP32-S3 Head Unit."""
+        """Inject 16kHz PCM audio chunk from the wireless Aria Sense module."""
         if self._loop and self._head_mic_queue and self.active and not self.muted:
             try:
                 self._loop.call_soon_threadsafe(

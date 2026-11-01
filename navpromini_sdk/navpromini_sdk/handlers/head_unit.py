@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""NavPro Mini - Aria Head Unit (XIAO ESP32-S3 Sense) Management Subsystem.
+"""NavPro Mini - Aria Sense Management Subsystem.
 
 Provides:
-- Real-time BLE / Wi-Fi discovery of nearby Aria Head Units (top mic + camera)
+- Real-time BLE / Wi-Fi discovery of nearby Aria Sense Units (top mic + camera)
 - 1-Tap automatic Wi-Fi credential provisioning from the robot screen UI
-- In-memory WebSocket audio receiver (:8092) that feeds directly into Gemini Live
+- In-memory WebSocket audio receiver (:8095) that feeds directly into Gemini Live
 - UDP dynamic IP discovery beacon broadcaster (:8093)
-- Live head unit status & camera stream proxy
+- Live Aria Sense status & camera stream proxy
 """
 
 from __future__ import annotations
@@ -289,28 +289,51 @@ class HeadUnitScanHandler(BaseHandler):
         ensure_head_unit_services()
         devices = []
         try:
-            # Quick 2.5-second BLE scan using bluetoothctl
-            proc = await asyncio.create_subprocess_exec(
-                "bluetoothctl", "--timeout", "3", "scan", "on",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL
-            )
-            stdout, _ = await proc.communicate()
-            text = stdout.decode("utf-8", errors="ignore")
-
-            seen_macs = set()
-            for line in text.splitlines():
-                m = re.search(r'Device\s+([0-9A-Fa-f:]{17})\s+(.*)$', line)
-                if m:
-                    mac = m.group(1).upper()
-                    name = m.group(2).strip()
-                    if mac not in seen_macs and ("Aria-Sense" in name or "Aria-Head" in name or "Sense" in name or "Head" in name or "XIAO" in name):
-                        seen_macs.add(mac)
+            try:
+                from bleak import BleakScanner
+                scanned = await BleakScanner.discover(timeout=2.5)
+                for d in scanned:
+                    name = d.name or ""
+                    mac = d.address.upper()
+                    if "Aria-Sense" in name or "Aria-Head" in name or "Sense" in name or "Head" in name or "XIAO" in name:
+                        clean_name = name
+                        if "Aria-Head" in clean_name:
+                            clean_name = clean_name.replace("Aria-Head", "Aria-Sense")
+                        elif "XIAO" in clean_name or "Seeed" in clean_name:
+                            clean_name = f"Aria-Sense-{mac.replace(':', '')[-4:]}"
                         devices.append({
-                            "name": name,
+                            "name": clean_name or "Aria-Sense",
                             "mac": mac,
-                            "rssi": -55  # nominal RSSI
+                            "rssi": getattr(d, "rssi", -55)
                         })
+            except Exception as be:
+                logger.debug(f"BleakScanner scan fallback: {be}")
+                proc = await asyncio.create_subprocess_exec(
+                    "bluetoothctl", "--timeout", "3", "scan", "on",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
+                stdout, _ = await proc.communicate()
+                text = stdout.decode("utf-8", errors="ignore")
+
+                seen_macs = set()
+                for line in text.splitlines():
+                    m = re.search(r'Device\s+([0-9A-Fa-f:]{17})\s+(.*)$', line)
+                    if m:
+                        mac = m.group(1).upper()
+                        name = m.group(2).strip()
+                        if mac not in seen_macs and ("Aria-Sense" in name or "Aria-Head" in name or "Sense" in name or "Head" in name or "XIAO" in name):
+                            seen_macs.add(mac)
+                            clean_name = name
+                            if "Aria-Head" in clean_name:
+                                clean_name = clean_name.replace("Aria-Head", "Aria-Sense")
+                            elif "XIAO" in clean_name or "Seeed" in clean_name:
+                                clean_name = f"Aria-Sense-{mac.replace(':', '')[-4:]}"
+                            devices.append({
+                                "name": clean_name,
+                                "mac": mac,
+                                "rssi": -55
+                            })
         except Exception as e:
             logger.warning(f"Error scanning for BLE Aria Sense units: {e}")
 
@@ -384,5 +407,5 @@ asyncio.run(send())
             "target_mac": target_mac,
             "target_ssid": ssid,
             "robot_ip": robot_ip,
-            "message": f"Sent Wi-Fi credentials ({ssid}) to Head Unit. Waiting for it to connect..."
+            "message": f"Sent Wi-Fi credentials ({ssid}) to Aria Sense. Waiting for it to connect..."
         })
