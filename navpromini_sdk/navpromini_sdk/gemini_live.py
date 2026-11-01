@@ -209,6 +209,7 @@ class GeminiLiveSession:
         self._opts: dict[str, Any] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._head_mic_queue: Optional[asyncio.Queue] = None
+        self._pending_tool_action: Optional[str] = None
 
     def inject_pcm_audio(self, pcm_data: bytes) -> None:
         """Inject 16kHz PCM audio chunk from the wireless Aria Sense module."""
@@ -906,6 +907,7 @@ class GeminiLiveSession:
                     print(f"[GeminiLive] Aria transcript: {clean_r_text}", flush=True)
                     now_ts = time.time()
                     robot_msg_id = ""
+                    action_tag = getattr(self, '_pending_tool_action', None)
                     with _VOICE_LOCK:
                         if (_CONVERSATION_HISTORY and
                             _CONVERSATION_HISTORY[-1].get("sender") == "robot" and
@@ -917,6 +919,8 @@ class GeminiLiveSession:
                                 full_robot_text = prev_txt
                             _CONVERSATION_HISTORY[-1]["text"] = full_robot_text
                             _CONVERSATION_HISTORY[-1]["timestamp"] = now_ts
+                            if action_tag and not _CONVERSATION_HISTORY[-1].get("action"):
+                                _CONVERSATION_HISTORY[-1]["action"] = action_tag
                             robot_msg_id = _CONVERSATION_HISTORY[-1]["id"]
                         else:
                             robot_msg_id = f"robot_live_{int(now_ts*1000)}"
@@ -926,18 +930,42 @@ class GeminiLiveSession:
                                 "sender": "robot",
                                 "text": full_robot_text,
                                 "timestamp": now_ts,
-                                "action": "gemini_live"
+                                "action": action_tag or "gemini_live"
                             })
+                    self._pending_tool_action = None
                     if self._bridge and hasattr(self._bridge, 'emit_event'):
                         self._bridge.emit_event('voice.transcript', {
                             'id': robot_msg_id,
                             'sender': 'robot',
                             'text': full_robot_text,
-                            'timestamp': now_ts
+                            'timestamp': now_ts,
+                            'action': action_tag
                         })
 
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
+                    # If a tool executed but Gemini produced zero spoken transcript, fallback to tool confirmation
+                    if getattr(self, '_pending_tool_action', None):
+                        action_tag = self._pending_tool_action
+                        self._pending_tool_action = None
+                        tool_msg_id = f"tool_{int(time.time()*1000)}"
+                        with _VOICE_LOCK:
+                            _CONVERSATION_HISTORY.append({
+                                "id": tool_msg_id,
+                                "sender": "robot",
+                                "text": f"Completed {action_tag}",
+                                "timestamp": time.time(),
+                                "action": action_tag
+                            })
+                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                            self._bridge.emit_event('voice.transcript', {
+                                'id': tool_msg_id,
+                                'sender': 'robot',
+                                'text': f"Completed {action_tag}",
+                                'timestamp': time.time(),
+                                'action': action_tag
+                            })
+
                     # Turn complete: flush and close player buffer so paplay finishes playing and exits cleanly
                     with self._player_lock:
                         if self._player_proc and self._player_proc.stdin and not self._player_proc.stdin.closed:
@@ -970,33 +998,15 @@ class GeminiLiveSession:
                             self._bridge, self._opts, name, args
                         )
 
-                        tool_msg = spoken_reply or f"Executing {name}..."
-                        now_ts = time.time()
-                        tool_msg_id = f"tool_{int(now_ts*1000)}"
-                        with _VOICE_LOCK:
-                            _CONVERSATION_HISTORY.append({
-                                "id": tool_msg_id,
-                                "sender": "robot",
-                                "text": tool_msg,
-                                "timestamp": now_ts,
-                                "action": action_tag
-                            })
-                        if self._bridge and hasattr(self._bridge, 'emit_event'):
-                            self._bridge.emit_event('voice.transcript', {
-                                'id': tool_msg_id,
-                                'sender': 'robot',
-                                'text': tool_msg,
-                                'timestamp': now_ts
-                            })
+                        # Save action tag so the single spoken response from Gemini carries the action tag!
+                        self._pending_tool_action = action_tag
 
                         responses.append({
                             "id": call_id,
                             "name": name,
                             "response": {
                                 "output": {
-                                    "status": "success",
-                                    "action": action_tag,
-                                    "message": spoken_reply or "Action executed successfully."
+                                    "status": "success"
                                 }
                             }
                         })
@@ -1008,7 +1018,7 @@ class GeminiLiveSession:
                         }
                     }
                     await ws.send(json.dumps(tool_response_msg))
-                    print(f"[GeminiLive] Tool response sent for {name}: {responses[0]['response']}", flush=True)
+                    print(f"[GeminiLive] Tool response sent for {name}: status=success", flush=True)
                 finally:
                     self._tool_call_pending = False
 
