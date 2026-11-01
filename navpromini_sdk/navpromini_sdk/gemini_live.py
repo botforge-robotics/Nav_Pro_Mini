@@ -67,10 +67,18 @@ class GeminiLiveSession:
     def inject_pcm_audio(self, pcm_data: bytes) -> None:
         """Inject 16kHz PCM audio chunk from the wireless Aria Sense module."""
         if self._loop and self._head_mic_queue and not self.muted:
+            def _push():
+                if self._head_mic_queue.full():
+                    try:
+                        self._head_mic_queue.get_nowait()
+                    except Exception:
+                        pass
+                try:
+                    self._head_mic_queue.put_nowait(pcm_data)
+                except Exception:
+                    pass
             try:
-                self._loop.call_soon_threadsafe(
-                    lambda: self._head_mic_queue.put_nowait(pcm_data) if not self._head_mic_queue.full() else None
-                )
+                self._loop.call_soon_threadsafe(_push)
             except Exception:
                 pass
 
@@ -81,13 +89,17 @@ class GeminiLiveSession:
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
+            from .handlers.head_unit import is_aria_sense_active
+            aria_active = is_aria_sense_active()
             return {
                 "active": self.active,
                 "muted": self.muted,
                 "connecting": self.connecting,
                 "speaking": self.is_speaking,
                 "last_error": self.last_error,
-                "engine": "gemini_live"
+                "engine": "gemini_live",
+                "aria_sense_active": aria_active,
+                "audio_source": "aria_sense" if aria_active else "chassis_mic"
             }
 
     def start(self, api_key: str, bridge: Any, opts: dict[str, Any]) -> tuple[bool, str]:

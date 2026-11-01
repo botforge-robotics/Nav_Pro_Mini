@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -27,6 +28,8 @@ from typing import Any, Optional
 import wave
 
 from .base import ApiError, BaseHandler
+
+logger = logging.getLogger("navpromini_sdk.voice")
 
 _VOICE_LOCK = threading.Lock()
 _CONVERSATION_HISTORY: list[dict[str, Any]] = [
@@ -193,16 +196,30 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
             logger.info("🎙️ [Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source")
             pcm_data = record_aria_sense_audio(duration_sec)
             if pcm_data and len(pcm_data) >= 16000 * 2 * 0.5:
+                # Calculate live level and peak normalize for crystal-clear STT accuracy
+                try:
+                    import numpy as np
+                    samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32)
+                    peak = np.max(np.abs(samples)) if len(samples) > 0 else 0.0
+                    rms = np.sqrt(np.mean(samples ** 2)) if len(samples) > 0 else 0.0
+                    _AUDIO_LEVEL = float(min(1.0, max(0.0, rms / 8000.0)))
+                    if peak > 80.0:
+                        samples = (samples / peak) * 23000.0
+                    int16_samples = np.clip(samples, -32767, 32767).astype(np.int16)
+                    out_bytes = int16_samples.tobytes()
+                except Exception:
+                    out_bytes = pcm_data
+
                 with wave.open(clean_wav, 'wb') as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
                     wf.setframerate(16000)
-                    wf.writeframes(pcm_data)
+                    wf.writeframes(out_bytes)
                 try:
                     os.unlink(raw_wav)
                 except OSError:
                     pass
-                logger.info(f"Recorded {len(pcm_data)} bytes from Aria Sense Top Mic for voice STT")
+                logger.info(f"🎙️ [Aria Voice] Recorded {len(pcm_data)} bytes from Aria Sense Top Mic for voice STT")
                 return clean_wav
     except Exception as e:
         logger.warning(f"Aria Sense voice recording fallback: {e}")
@@ -585,9 +602,12 @@ def _build_robot_context_str(bridge: Any, opts: dict[str, Any]) -> str:
         except Exception:
             pass
 
+    from .head_unit import is_aria_sense_active
+    mic_status = "Aria Sense Top Microphone is PRIMARY ACTIVE (clear 16kHz audio input)" if is_aria_sense_active() else "Chassis microphone is active"
+
     return (
         f"[CURRENT STATUS OF ARIA: My Battery: {pct:.0f}%, My Docking State: {dock_str}, Active Map: '{current_map}', "
-        f"My Position: {pose_str}. {places_str}{stations_str}"
+        f"My Position: {pose_str}. Audio input: {mic_status}. {places_str}{stations_str}"
         "Use this status directly when answering questions about your power, location, available destinations, or battery!]"
     )
 
@@ -1184,12 +1204,16 @@ class VoiceDialogHandler(BaseHandler):
     """Get or clear conversational dialog history."""
 
     def get(self) -> None:
+        from .head_unit import is_aria_sense_active
+        aria_active = is_aria_sense_active()
         with _VOICE_LOCK:
             msgs = list(_CONVERSATION_HISTORY[-50:])
         self.send({
             'messages': msgs,
             'muted': _IS_MUTED,
-            'listening': _IS_LISTENING
+            'listening': _IS_LISTENING,
+            'audio_source': "aria_sense" if aria_active else "chassis_mic",
+            'aria_sense_active': aria_active
         })
 
     def delete(self) -> None:
@@ -1211,10 +1235,14 @@ class VoiceStatusHandler(BaseHandler):
     """Get live audio levels, listening state, and mute status."""
 
     def get(self) -> None:
+        from .head_unit import is_aria_sense_active
+        aria_active = is_aria_sense_active()
         self.send({
             'muted': _IS_MUTED,
             'listening': _IS_LISTENING,
             'audio_level': _AUDIO_LEVEL,
+            'audio_source': "aria_sense" if aria_active else "chassis_mic",
+            'aria_sense_active': aria_active,
             'last_transcript': _LAST_TRANSCRIPT,
             'last_reply': _LAST_REPLY
         })
@@ -1308,10 +1336,14 @@ class VoiceLiveStatusHandler(BaseHandler):
     def get(self) -> None:
         try:
             from ..gemini_live import get_live_session
+            from .head_unit import is_aria_sense_active
             sess = get_live_session()
             st = sess.get_status()
             gemini_key = _VOICE_CONFIG.get("gemini_api_key", "")
+            aria_active = is_aria_sense_active()
             st["has_gemini_key"] = bool(gemini_key)
+            st["aria_sense_active"] = aria_active
+            st["audio_source"] = "aria_sense" if aria_active else "chassis_mic"
             self.send(st)
         except Exception as exc:
             self.send({"active": False, "muted": True, "error": str(exc), "has_gemini_key": False})
