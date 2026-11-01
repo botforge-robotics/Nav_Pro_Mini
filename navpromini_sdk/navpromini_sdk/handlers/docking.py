@@ -174,6 +174,12 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
         bridge.emit_event('dock.completed' if ok else 'dock.failed',
                           {'operation': 'undock',
                            **({'message': message} if not ok else {})})
+        if ok:
+            try:
+                from .navigation import relocalize_at_dock
+                await relocalize_at_dock(bridge)
+            except Exception as e:
+                bridge.get_logger().warn(f'Post-undock relocalize note: {e}')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
         TRACKER.finish('failed', str(exc))

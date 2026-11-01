@@ -778,37 +778,40 @@ class DockManagerNode(Node):
             else:
                 self._docked = False
 
-            # Always navigate to the staging standoff pose in front of the dock from any location
-            # (including inside dock area) to ensure clean centerline alignment before visual servoing:
-            if dock_pose is not None:
+            deadline = time.monotonic() + self._max_run
+            await self._set_camera(True)
+
+            # Check if tag is already visible in rear camera (e.g. manually placed or right after undock)
+            # If so, proceed directly to servo without staging nav or in-place sweep!
+            tag_already_visible = False
+            for _ in range(12):
+                if self._in_view():
+                    tag_already_visible = True
+                    break
+                await self._sleep(0.1)
+
+            if tag_already_visible:
+                self.get_logger().info('dock: tag already in camera view — skipping staging nav, starting visual servoing directly')
+            elif dock_pose is not None:
                 self._set_status('staging')
                 if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
-                    self._stop()
-                    if goal_handle.is_cancel_requested:
-                        goal_handle.canceled()
-                        self._set_status('undocked')
-                        return DockRobot.Result(success=False, error_msg='cancelled')
-                    self.get_logger().error('failed to reach staging pose')
-                    self._set_status('docking_failed')
-                    goal_handle.abort()
-                    return DockRobot.Result(
-                        success=False, error_msg='failed to reach staging pose')
+                    if not self._in_view():
+                        self._stop()
+                        if goal_handle.is_cancel_requested:
+                            goal_handle.canceled()
+                            self._set_status('undocked')
+                            return DockRobot.Result(success=False, error_msg='cancelled')
+                        self.get_logger().error('failed to reach staging pose and tag not visible')
+                        self._set_status('docking_failed')
+                        goal_handle.abort()
+                        return DockRobot.Result(
+                            success=False, error_msg='failed to reach staging pose')
             else:
                 self.get_logger().warn(
                     'no dock pose configured — attempting visual servoing directly')
 
-            deadline = time.monotonic() + self._max_run
-            await self._set_camera(True)
-
-            # Check if tag is already visible in rear camera (e.g. manually placed or after undock)
-            # If so, proceed directly to servo without any in-place spin!
-            for _ in range(15):
-                if self._in_view():
-                    break
-                await self._sleep(0.1)
-
             if self._in_view():
-                self.get_logger().info('dock: tag already in camera view — skipping search sweep, starting visual servoing')
+                self.get_logger().info('dock: tag in camera view — skipping search sweep, starting visual servoing')
                 self._set_status('servo')
             else:
                 self.get_logger().info('dock: tag not yet in view — entering search sweep')

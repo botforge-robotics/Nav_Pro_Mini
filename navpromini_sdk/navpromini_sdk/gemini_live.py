@@ -436,17 +436,19 @@ class GeminiLiveSession:
             "3. BRISK & FAST (EXACTLY ONE SPOKEN STATEMENT PER TURN):\n"
             "   - Speak exactly 1 short, natural spoken sentence per turn. Never repeat yourself or utter two similar confirmations in a single interaction.\n"
             "   - Everything you say will be spoken out loud immediately. Avoid lists or formatting.\n"
-            "4. ABSOLUTE LANGUAGE CONSISTENCY - ENGLISH ONLY:\n"
-            "   - You MUST ALWAYS speak and converse in ENGLISH with a warm, natural, friendly female tone.\n"
-            "   - ALL guest speech is English. Even if you detect an Indian accent or phonetic transliteration, DO NOT switch to Hindi, Telugu, or any other language! ALWAYS reply in English.\n"
-            "   - NEVER switch languages or change accents mid-conversation! Maintain one unified, steady, charming Aria persona at all times.\n"
+            "4. MULTILINGUAL & LANGUAGE SWITCHING RULES:\n"
+            "   - DEFAULT CONVERSATION LANGUAGE IS ENGLISH: By default, always speak and converse in English with a warm, natural, friendly female tone.\n"
+            "   - ACCENT STABILITY: When a guest speaks English with an Indian accent or regional phonetics, DO NOT mistakenly switch to Telugu, Hindi, or transliteration. Continue speaking natural English.\n"
+            "   - LANGUAGE SWITCHING ON REQUEST: When the guest explicitly asks you to speak in a specific language (e.g. 'Speak in Telugu', 'తెలుగులో మాట్లాడు', 'Speak in Hindi', 'Can you talk in Telugu?'), OR when the guest speaks to you directly in Telugu, Hindi, or another language: You MUST graciously and enthusiastically switch to that requested language immediately! Converse fluently, warmly, and politely in that requested language.\n"
+            "   - STRICTLY FORBIDDEN: NEVER say 'I can only speak in English', 'I apologize, I can only speak English', or any refusal to speak another language! You are fully capable and delighted to speak Telugu, Hindi, and other languages whenever requested.\n"
+            "   - SWITCHING BACK: If the guest later speaks English or asks to speak in English ('Speak in English', 'ఇంగ్లీష్ లో మాట్లాడు'), immediately switch back to English.\n"
             "5. PHYSICAL ACTION TOOLS (MANDATORY TO CALL ON MOTION COMMANDS):\n"
             "   - CRITICAL TOOL CALLING RULE: When the user asks you to move, undock, dock, stop, or navigate, you MUST invoke the appropriate tool IMMEDIATELY as your first action without speaking any preamble first!\n"
             "   - Speak exactly ONE concise confirmation sentence after the tool completes (e.g. 'Right away, returning to the charging dock now!'). NEVER speak twice or say two confirmations for the same action!\n"
-            "   - 'can you come out from charger', 'come off charger', 'undock', 'leave charger', 'step off dock', 'move off charger' -> MUST CALL undock_robot!\n"
-            "   - 'dock', 'go to charger', 'charge yourself', 'park in dock', 'return to charging station' -> MUST CALL dock_robot!\n"
-            "   - 'stop', 'halt', 'freeze', 'cancel' -> MUST CALL emergency_stop!\n"
-            "   - 'take me to [destination]', 'go to [destination]', 'can you go to [destination]' -> MUST CALL navigate_to_destination!\n"
+            "   - 'can you come out from charger', 'come off charger', 'undock', 'leave charger', 'step off dock', 'move off charger', 'బయటకు రా', 'ఛార్జర్ నుండి రా', 'बाहर आओ' -> MUST CALL undock_robot!\n"
+            "   - 'dock', 'go to charger', 'charge yourself', 'park in dock', 'return to charging station', 'డాక్ కి వెళ్ళు', 'ఛార్జర్ కి వెళ్ళు', 'ఛార్జింగ్ పెట్టుకో', 'चार्जिंग पर जाओ' -> MUST CALL dock_robot!\n"
+            "   - 'stop', 'halt', 'freeze', 'cancel', 'ఆగు', 'నిలువు', 'ఆగండి', 'రండి', 'రద్దు చేయి', 'रुक जाओ' -> MUST CALL emergency_stop!\n"
+            "   - 'take me to [destination]', 'go to [destination]', 'can you go to [destination]', '[destination] కి వెళ్ళు' -> MUST CALL navigate_to_destination!\n"
             "   - ONLY answer with pure voice without tools when the guest is merely asking an informational question (e.g. 'what is your battery level?', 'where are you?').\n"
             "6. DESTINATION INQUIRIES: If the guest asks where you can go or what places are available, ONLY announce the Saved Named Locations from your status above (e.g. Kitchen, Office, Charging Dock), and ask: 'Where would you like me to take you?'. NEVER recite raw graph node numbers or 'Node 1, Node 2' to guests!\n"
             "7. ALWAYS TALK BACK ON CONVERSATIONS: When any guest speaks, always answer graciously out loud with one natural sentence. If their voice was too faint or unclear, politely ask them to repeat. NEVER stay silent!\n"
@@ -457,7 +459,7 @@ class GeminiLiveSession:
         function_decls = [
             {
                 "name": "dock_robot",
-                "description": "Return myself to my charging station and dock to recharge. Call immediately whenever the guest asks me to dock, charge, recharge, park in dock, go to charger, or return to charging station.",
+                "description": "Return myself to my charging station and dock to recharge. Call immediately whenever the guest asks me to dock, charge, recharge, park in dock, go to charger, or return to charging station in any language (e.g. 'dock', 'go to charger', 'డాక్ కి వెళ్ళు', 'ఛార్జర్ కి వెళ్ళు', 'चार्जिंग पर जाओ').",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {}
@@ -465,7 +467,7 @@ class GeminiLiveSession:
             },
             {
                 "name": "undock_robot",
-                "description": "Disengage, roll forward, and come out of the charging dock. Call immediately whenever the guest asks me to come out from charger, come off charger, undock, step off the dock, leave charger, drive out of charger, or move away from charger.",
+                "description": "Disengage, roll forward, and come out of the charging dock. Call immediately whenever the guest asks me to come out from charger, come off charger, undock, step off the dock, leave charger, drive out of charger, or move away from charger in any language (e.g. 'undock', 'come off charger', 'బయటకు రా', 'ఛార్జర్ నుండి రా', 'बाहर आओ').",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {}
@@ -473,7 +475,7 @@ class GeminiLiveSession:
             },
             {
                 "name": "emergency_stop",
-                "description": "CRITICAL SAFETY: Immediately halt myself, stop my motors, and abort active navigation goals. Call when the guest says stop, halt, freeze, cancel, or wait here.",
+                "description": "CRITICAL SAFETY: Immediately halt myself, stop my motors, and abort active navigation goals. Call when the guest says stop, halt, freeze, cancel, or wait here in any language (e.g. 'stop', 'halt', 'ఆగు', 'ఆగండి', 'रुक जाओ').",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {}
@@ -481,7 +483,7 @@ class GeminiLiveSession:
             },
             {
                 "name": "navigate_to_destination",
-                "description": "Navigate myself to a specific saved place, room, or waypoint (e.g. 'Kitchen', 'Office', 'Charging Dock'). Call when the guest requests going to, driving to, or visiting a place or room.",
+                "description": "Navigate myself to a specific saved place, room, or waypoint (e.g. 'Kitchen', 'Office', 'Charging Dock'). Call when the guest requests going to, driving to, or visiting a place or room in any language (e.g. 'go to office', 'take me to kitchen', 'ఆఫీస్ కి వెళ్ళు', 'ऑफिस जाओ').",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
