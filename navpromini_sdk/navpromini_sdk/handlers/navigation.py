@@ -236,10 +236,9 @@ def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict
     dock_tag = bridge.get('dock_tag')
     tag_z = float(dock_tag.get('z', 99.0)) if dock_tag else None
 
-    # Spatial confirmation: robot is physically inside dock slot (< 0.48m from dock origin
-    # or tag distance < 0.48m) where attempting in-place rotation or dense path following
-    # without undocking roll-off would strike dock funnel or trigger collision_monitor.
-    in_dock_slot = is_docked or (dist_to_dock is not None and dist_to_dock <= 0.48) or (tag_z is not None and tag_z <= 0.48)
+    # Spatial confirmation: robot is physically inside dock slot (< 0.22m from charger origin
+    # or confirmed docked on charger contacts).
+    in_dock_slot = is_docked or (dist_to_dock is not None and dist_to_dock <= 0.22)
 
     dock_info = {
         'x': dx,
@@ -624,16 +623,16 @@ async def send_route_goal(bridge, target: dict, store=None):
         except Exception as exc:
             bridge.get_logger().warn(f'Error reopening dynamic edges before routing: {exc}')
 
-    # 1. Undock if docked or inside dock slot
+    # 1. Undock ONLY if physically docked on charger contacts
     near_dock, dock_info = is_near_dock_or_docked(bridge)
-    if dock_info.get('is_docked') or dock_info.get('in_dock_slot'):
+    if dock_info.get('is_docked'):
         # If physically on charger contacts, seed exact dock pose BEFORE rolling off!
-        if dock_info.get('is_docked') and dock_info.get('x') is not None:
+        if dock_info.get('x') is not None:
             bridge.get_logger().info('Robot is docked on contacts; seeding initial pose at dock before undocking...')
             bridge.publish_initial_pose(dock_info['x'], dock_info['y'], dock_info.get('theta', 0.0))
             await asyncio.sleep(0.4)
 
-        bridge.get_logger().info('Robot is docked / inside dock slot; automatically undocking before road route...')
+        bridge.get_logger().info('Robot is docked on contacts; automatically undocking before road route...')
         try:
             from .docking import undock_robot
             undock_res = await undock_robot(bridge, timeout=60.0)
@@ -833,16 +832,16 @@ async def send_navigate_goal(bridge, target: dict, store=None):
         return await send_route_goal(bridge, target, store=store)
 
     x, y, theta = target['x'], target['y'], target.get('theta', 0.0)
-    # Check if robot is docked or inside dock slot
+    # Check if robot is docked on charger contacts
     near_dock, dock_info = is_near_dock_or_docked(bridge)
-    if dock_info.get('is_docked') or dock_info.get('in_dock_slot'):
+    if dock_info.get('is_docked'):
         # If physically on charger contacts, seed exact dock pose BEFORE rolling off!
-        if dock_info.get('is_docked') and dock_info.get('x') is not None:
+        if dock_info.get('x') is not None:
             bridge.get_logger().info('Robot is docked on contacts; seeding initial pose at dock before undocking...')
             bridge.publish_initial_pose(dock_info['x'], dock_info['y'], dock_info.get('theta', 0.0))
             await asyncio.sleep(0.4)
 
-        bridge.get_logger().info('Robot is currently docked / inside dock slot; automatically undocking before sending navigation goal...')
+        bridge.get_logger().info('Robot is currently docked on contacts; automatically undocking before sending navigation goal...')
         try:
             from .docking import undock_robot
             undock_res = await undock_robot(bridge, timeout=60.0)
