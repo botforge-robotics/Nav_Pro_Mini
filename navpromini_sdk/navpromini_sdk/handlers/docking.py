@@ -290,12 +290,12 @@ class DockStatusHandler(BaseHandler):
         battery_fresh = (battery_data is not None) and (bat_age < 5.0)
         is_charging = bool(battery.get('charging')) and battery_fresh
         effective_state = dock_status or 'unknown'
-        if (is_charging or effective_state in ('charging', 'full')) and TRACKER.state == 'docking':
+        if is_charging and TRACKER.state == 'docking':
             TRACKER.finish('docked', 'Charging connection established')
             if hasattr(self.bridge, 'publish_display_state'):
                 self.bridge.publish_display_state('ready')
             if hasattr(self.bridge, 'publish_led_command'):
-                self.bridge.publish_led_command('breathe,0,255,0,1500' if is_charging else 'solid,0,200,40')
+                self.bridge.publish_led_command('breathe,0,255,0,1500')
         if not is_charging and effective_state in ('charging', 'full'):
             effective_state = 'undocked'
         elif is_charging and effective_state in ('undocked', 'unknown'):

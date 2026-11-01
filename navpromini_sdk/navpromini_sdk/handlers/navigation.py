@@ -205,11 +205,10 @@ def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict
     battery = bridge.get('battery')
     is_charging = bool(battery and battery.get('charging'))
     dock_status = str(bridge.get('dock_status') or '').lower()
-    is_docked_status = dock_status in ('docked', 'charging', 'full')
     info = bridge.get('battery_info') or {}
     charger_conn = bool(info.get('charger_connected'))
 
-    is_docked = is_charging or is_docked_status or charger_conn
+    is_docked = is_charging or charger_conn
 
     # 2. Get dock pose coordinates
     dock_cfg = load_saved_dock_config()
@@ -275,14 +274,14 @@ async def relocalize_at_dock(bridge, dock_info: dict | None = None) -> bool:
     is_docked = bool(dock_info.get('is_docked'))
     dist = dock_info.get('dist_to_dock')
 
-    if is_docked or (dist is not None and dist < 0.35):
+    if is_docked or (dist is not None and dist < 0.20):
         # On charger / in contacts: seed exact dock pose
         x = dock_info['x']
         y = dock_info['y']
         theta = dock_info.get('theta', 0.0)
         target_name = 'dock'
     else:
-        # In standoff zone: seed standoff pose
+        # In standoff zone (after undocking or before docking): seed standoff pose
         x = dock_info.get('standoff_x') or dock_info['x']
         y = dock_info.get('standoff_y') or dock_info['y']
         theta = dock_info.get('standoff_theta') or dock_info.get('theta', 0.0)

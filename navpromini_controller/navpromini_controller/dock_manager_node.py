@@ -214,7 +214,8 @@ class DockManagerNode(Node):
     def _on_batt(self, msg: BatteryState) -> None:
         self._power = msg.power_supply_status
         self._batt_current = getattr(msg, 'current', 0.0)
-        if self._charging() and self._busy:
+        # ONLY stop wheels on charger contact when actively docking (reversing into charger)
+        if self._charging() and self._busy and self._status in ('servo', 'blind_creep', 'searching'):
             # Immediate wheel stop the millisecond electrodes touch charger
             self._stop()
 
@@ -226,19 +227,20 @@ class DockManagerNode(Node):
                     'Battery charging/dock contact detected — inferring robot is parked at dock.')
                 if self._dock_pose is not None:
                     self._dock_pose_pub.publish(self._dock_pose)
-            self._set_status(
-                'full' if msg.power_supply_status in (BatteryState.POWER_SUPPLY_STATUS_FULL,
-                                                      BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING)
-                else 'charging')
-        elif self._docked and not self._busy:
-            # Only consider robot removed from dock if it is actively discharging (current < -0.25A)
-            # AND odometry/AMCL/tag shows it is physically outside the dock slot.
-            is_discharging = (msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_DISCHARGING or self._batt_current < -0.25)
+            if self._status != 'undocking':
+                self._set_status(
+                    'full' if msg.power_supply_status in (BatteryState.POWER_SUPPLY_STATUS_FULL,
+                                                          BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING)
+                    else 'charging')
+        elif self._status != 'undocking':
+            # Not charging
             outside_slot = not self._is_spatially_in_dock_slot()
-            if is_discharging and outside_slot:
-                self._docked = False
-                self._set_status('undocked')
-                self.get_logger().info('Battery discharging and outside dock slot — robot removed from dock.')
+            if outside_slot:
+                if self._docked:
+                    self._docked = False
+                    self.get_logger().info('Robot outside dock slot and not charging — cleared docked flag.')
+                if self._status not in ('docking', 'staging', 'servo', 'blind_creep', 'searching', 'navigating'):
+                    self._set_status('undocked')
         self._docked_state_known = True
 
     def _on_odom(self, msg: Odometry) -> None:
@@ -248,22 +250,25 @@ class DockManagerNode(Node):
         self._amcl_pose = msg
 
     def _charging(self) -> bool:
-        if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
-            return True
-        if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL:
-            # Full battery parked on dock floats near 0A without discharging
-            if self._batt_current > -0.2:
-                return True
-        if self._power == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING:
-            # When pack reaches 100%, BMS stops active charging and reports NOT_CHARGING.
-            # If current is near zero (> -0.15A) and robot is inside dock slot or was docked,
-            # it is still parked on the charger contacts.
-            if self._batt_current > -0.15 and (self._docked or self._is_spatially_in_dock_slot()):
-                return True
-        # Hardware current ground truth: positive current flowing into the pack (>50mA)
-        # proves physical electrical contact with the charging dock.
+        # Never consider charging while actively executing undock roll-off
+        if self._status == 'undocking':
+            return False
+
+        # 1. Hardware current ground truth: positive current flowing into the pack (>50mA)
+        # proves physical electrical contact with the energized charging dock.
         if self._batt_current > 0.05:
             return True
+
+        # 2. Active BMS charging status:
+        if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING and self._batt_current > -0.05:
+            return True
+
+        # 3. Battery full float on charger:
+        # BMS reports FULL or NOT_CHARGING. Robot MUST be physically inside the dock slot!
+        if self._power in (BatteryState.POWER_SUPPLY_STATUS_FULL, BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING):
+            if self._batt_current > -0.15 and self._is_spatially_in_dock_slot():
+                return True
+
         return False
 
     def _in_view(self) -> bool:
@@ -713,7 +718,7 @@ class DockManagerNode(Node):
                 except Exception:
                     pass
                 return False
-            if self._charging():
+            if self._charging() and self._is_spatially_in_dock_slot():
                 self.get_logger().info('staging navigation: robot already on charger — skipping staging')
                 try:
                     await goal_handle.cancel_goal_async()
@@ -1031,6 +1036,7 @@ class DockManagerNode(Node):
             if self._is_inside_dock_slot():
                 # Only execute physical undock roll-off when physically inside dock slot:
                 self._set_status('undocking')
+                self._docked = False
                 self.get_logger().info(
                     f'undock: robot is inside dock slot — driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s to clear dock')
                 ok = False
