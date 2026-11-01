@@ -39,6 +39,7 @@ from .handlers import (
     state,
     system,
     voice,
+    head_unit,
     waypoints,
 )
 from .costmap_zones import CostmapZoneManager
@@ -186,6 +187,11 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/voice/live/status', voice.VoiceLiveStatusHandler, opts),
         (rf'{API}/voice/live/start', voice.VoiceLiveStartHandler, opts),
         (rf'{API}/voice/live/stop', voice.VoiceLiveStopHandler, opts),
+        # wireless head unit (top mic & camera)
+        (rf'{API}/head_unit/scan', head_unit.HeadUnitScanHandler, opts),
+        (rf'{API}/head_unit/pair', head_unit.HeadUnitPairHandler, opts),
+        (rf'{API}/head_unit/status', head_unit.HeadUnitStatusHandler, opts),
+        (rf'{API}/head_unit/wifi_info', head_unit.HeadUnitWifiInfoHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
         # media static files

@@ -61,6 +61,18 @@ class GeminiLiveSession:
         self._player_lock = threading.Lock()
         self._bridge: Any = None
         self._opts: dict[str, Any] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._head_mic_queue: Optional[asyncio.Queue] = None
+
+    def inject_pcm_audio(self, pcm_data: bytes) -> None:
+        """Inject 16kHz PCM audio chunk from the wireless XIAO ESP32-S3 Head Unit."""
+        if self._loop and self._head_mic_queue and self.active and not self.muted:
+            try:
+                self._loop.call_soon_threadsafe(
+                    lambda: self._head_mic_queue.put_nowait(pcm_data) if not self._head_mic_queue.full() else None
+                )
+            except Exception:
+                pass
 
     @property
     def is_speaking(self) -> bool:
@@ -180,6 +192,8 @@ class GeminiLiveSession:
     def _run_event_loop(self, api_key: str) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._head_mic_queue = asyncio.Queue(maxsize=30)
         backoff = 1.0
         while not self._stop_event.is_set():
             try:
@@ -425,7 +439,11 @@ class GeminiLiveSession:
 
         try:
             while not self._stop_event.is_set():
-                data = await loop.run_in_executor(None, _read_exact, chunk_size)
+                # Prefer crystal-clear top wireless Head Unit mic if streaming, fallback to chassis mic
+                if self._head_mic_queue and not self._head_mic_queue.empty():
+                    data = await self._head_mic_queue.get()
+                else:
+                    data = await loop.run_in_executor(None, _read_exact, chunk_size)
                 if not data or len(data) < chunk_size:
                     if self._stop_event.is_set():
                         break
