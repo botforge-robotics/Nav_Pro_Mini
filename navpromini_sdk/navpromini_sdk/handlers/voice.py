@@ -667,16 +667,23 @@ async def execute_robot_voice_tool(
     if tool_name in ("navigate_to_destination", "navigate_to_road_node"):
         dest = args.get("destination") or args.get("node_id") or ""
         dest_str = str(dest).strip()
+        # Clean destination string: strip common articles/prepositions like "to the", "the", etc.
+        clean_dest = re.sub(r'^(?:to\s+(?:the\s+)?|the\s+)', '', dest_str, flags=re.IGNORECASE).strip()
+
+        # If user asked for charger/dock, seamlessly route to dock_robot!
+        if clean_dest.lower() in ("charger", "charging dock", "dock", "charging station"):
+            return await execute_robot_voice_tool(bridge, opts, "dock_robot", args)
+
         try:
             from .navigation import resolve_target, send_route_goal, send_navigate_goal, await_navigate_result, TRACKER
             store = opts.get('store')
-            m_digit = re.search(r'\b(?:node\s*|station\s*)?(\d+)\b', dest_str, re.IGNORECASE)
+            m_digit = re.search(r'\b(?:node\s*|station\s*)?(\d+)\b', clean_dest, re.IGNORECASE)
             target_data: dict[str, Any] = {}
-            if m_digit and (dest_str.isdigit() or 'node' in dest_str.lower() or 'station' in dest_str.lower()):
+            if m_digit and (clean_dest.isdigit() or 'node' in clean_dest.lower() or 'station' in clean_dest.lower()):
                 node_id = int(m_digit.group(1))
                 target_data = {'goal_id': node_id, 'routing_mode': 'road_network'}
             else:
-                target_data = {'waypoint': dest_str}
+                target_data = {'waypoint': clean_dest}
 
             target = resolve_target(store, target_data)
             if target.get('routing_mode') == 'road_network':
@@ -689,10 +696,11 @@ async def execute_robot_voice_tool(
             else:
                 asyncio.create_task(await_navigate_result(bridge, handle, target))
 
-            reply = spoken or f"Certainly, on my way to {dest_str}!"
-            return (reply, f"navigate_{dest_str}")
+            display_name = target.get('waypoint') or clean_dest
+            reply = spoken or f"Certainly, on my way to {display_name}!"
+            return (reply, f"navigate_{display_name}")
         except Exception as exc:
-            return (f"Pardon me, I could not navigate to {dest_str}: {exc}", "navigate_error")
+            return (f"Pardon me, I could not navigate to {clean_dest}: {exc}", "navigate_error")
 
     if tool_name == "get_robot_telemetry":
         if spoken:

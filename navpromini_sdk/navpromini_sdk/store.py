@@ -163,9 +163,19 @@ class Store:
 
     def get_waypoint(self, name: str, map_name: Optional[str] = None) -> Optional[dict]:
         m = map_name or self.current_map()
+        name_clean = str(name).strip()
         with self._lock:
+            # 1. Exact match
             row = self._conn.execute(
-                'SELECT data FROM waypoints WHERE map = ? AND name = ?', (m, name)).fetchone()
+                'SELECT data FROM waypoints WHERE map = ? AND name = ?', (m, name_clean)).fetchone()
+            # 2. Case-insensitive match
+            if not row:
+                row = self._conn.execute(
+                    'SELECT data FROM waypoints WHERE map = ? AND LOWER(name) = LOWER(?)', (m, name_clean)).fetchone()
+            # 3. Fuzzy substring match (e.g. "office" matching "Office Room")
+            if not row and len(name_clean) >= 3:
+                row = self._conn.execute(
+                    'SELECT data FROM waypoints WHERE map = ? AND LOWER(name) LIKE LOWER(?)', (m, f"%{name_clean}%")).fetchone()
         return json.loads(row[0]) if row else None
 
     def put_waypoint(self, wp: dict, map_name: Optional[str] = None) -> dict:
