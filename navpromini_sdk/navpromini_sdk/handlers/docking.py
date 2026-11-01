@@ -140,6 +140,17 @@ async def send_undock_goal(bridge):
     TRACKER.begin(None, 'undocking')
     bridge.emit_event('dock.started', {'operation': 'undock'})
 
+    # If physically sitting on the charger contacts, seed exact dock pose BEFORE rolling off!
+    battery = bridge.get('battery')
+    is_charging = bool(battery and battery.get('charging'))
+    dock_status = str(bridge.get('dock_status') or '').lower()
+    if is_charging or dock_status in ('docked', 'charging', 'full'):
+        dock = bridge.get('dock_pose')
+        if dock and 'x' in dock and 'y' in dock:
+            bridge.get_logger().info('send_undock_goal: robot docked on contacts; seeding dock pose before undocking...')
+            bridge.publish_initial_pose(dock['x'], dock['y'], dock.get('theta', 0.0), dock.get('frame', 'map'))
+            await asyncio.sleep(0.3)
+
     goal = NavigateToPose.Goal()
     goal.pose = PoseStamped()   # empty frame_id + zero quaternion = undock only
 

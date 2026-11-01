@@ -248,7 +248,7 @@ def is_near_dock_or_docked(bridge, max_dist_m: float = 1.35) -> tuple[bool, dict
         'standoff_x': (dx + 0.70 * math.cos(dtheta)) if dx is not None else None,
         'standoff_y': (dy + 0.70 * math.sin(dtheta)) if dy is not None else None,
         'standoff_theta': dtheta if dx is not None else None,
-        'is_docked': is_docked or in_dock_slot,
+        'is_docked': is_docked,
         'in_dock_slot': in_dock_slot,
         'dist_to_dock': dist_to_dock if dist_to_dock is not None else (tag_z if tag_z is not None else 999.0),
     }
@@ -627,22 +627,23 @@ async def send_route_goal(bridge, target: dict, store=None):
     # 1. Undock if docked or inside dock slot
     near_dock, dock_info = is_near_dock_or_docked(bridge)
     if dock_info.get('is_docked') or dock_info.get('in_dock_slot'):
+        # If physically on charger contacts, seed exact dock pose BEFORE rolling off!
+        if dock_info.get('is_docked') and dock_info.get('x') is not None:
+            bridge.get_logger().info('Robot is docked on contacts; seeding initial pose at dock before undocking...')
+            bridge.publish_initial_pose(dock_info['x'], dock_info['y'], dock_info.get('theta', 0.0))
+            await asyncio.sleep(0.4)
+
         bridge.get_logger().info('Robot is docked / inside dock slot; automatically undocking before road route...')
         try:
             from .docking import undock_robot
             undock_res = await undock_robot(bridge, timeout=60.0)
             if not undock_res.get('ok'):
                 bridge.get_logger().warn(f"Auto-undock note: {undock_res.get('message')}")
+            else:
+                bridge.get_logger().info("Auto-undock completed successfully.")
         except Exception as exc:
             bridge.get_logger().warn(f"Auto-undock before road route encountered error: {exc}")
-
-    # 2. Localization check
-    if near_dock:
-        pose_map, _ = bridge.get_with_age('pose_map')
-        is_unlocalized = (pose_map is None) or (float(pose_map.get('cov_x', 0.0)) > 0.40 or float(pose_map.get('cov_y', 0.0)) > 0.40)
-        if is_unlocalized or dock_info.get('is_docked'):
-            bridge.get_logger().info('Robot near dock: seeding dock localization pose without spinning...')
-            await relocalize_at_dock(bridge, dock_info)
+        # Note: Do NOT re-seed pose after undocking; AMCL odometry smoothly tracks the roll-off!
 
     # 3. Configure reroute on collision parameter
     policy = target.get('reroute_policy', 'wait_then_reroute')
@@ -835,21 +836,23 @@ async def send_navigate_goal(bridge, target: dict, store=None):
     # Check if robot is docked or inside dock slot
     near_dock, dock_info = is_near_dock_or_docked(bridge)
     if dock_info.get('is_docked') or dock_info.get('in_dock_slot'):
+        # If physically on charger contacts, seed exact dock pose BEFORE rolling off!
+        if dock_info.get('is_docked') and dock_info.get('x') is not None:
+            bridge.get_logger().info('Robot is docked on contacts; seeding initial pose at dock before undocking...')
+            bridge.publish_initial_pose(dock_info['x'], dock_info['y'], dock_info.get('theta', 0.0))
+            await asyncio.sleep(0.4)
+
         bridge.get_logger().info('Robot is currently docked / inside dock slot; automatically undocking before sending navigation goal...')
         try:
             from .docking import undock_robot
             undock_res = await undock_robot(bridge, timeout=60.0)
             if not undock_res.get('ok'):
                 bridge.get_logger().warn(f"Auto-undock note: {undock_res.get('message')}")
+            else:
+                bridge.get_logger().info("Auto-undock completed successfully.")
         except Exception as exc:
             bridge.get_logger().warn(f"Auto-undock before nav goal encountered error: {exc}")
-
-    if near_dock:
-        pose_map, _ = bridge.get_with_age('pose_map')
-        is_unlocalized = (pose_map is None) or (float(pose_map.get('cov_x', 0.0)) > 0.40 or float(pose_map.get('cov_y', 0.0)) > 0.40)
-        if is_unlocalized or dock_info.get('is_docked'):
-            bridge.get_logger().info('Robot near dock/standoff: relocalizing directly at dock pose without spinning...')
-            await relocalize_at_dock(bridge, dock_info)
+        # Note: Do NOT re-seed pose after undocking; AMCL odometry smoothly tracks the roll-off!
 
     goal = NavigateToPose.Goal()
     pose = PoseStamped()
@@ -1010,8 +1013,8 @@ async def run_relocalize_spin(
 ) -> dict:
     """Disperse AMCL particles and autonomously rotate in place across multiple scan tries until converged."""
     near_dock, dock_info = is_near_dock_or_docked(bridge)
-    if near_dock:
-        bridge.get_logger().info('run_relocalize_spin: robot is near dock, seeding exact dock pose without global spin...')
+    if dock_info.get('is_docked'):
+        bridge.get_logger().info('run_relocalize_spin: robot is physically docked on charger, seeding exact dock pose without global spin...')
         await relocalize_at_dock(bridge, dock_info)
         return {'converged': True, 'method': 'dock_pose', 'tries': 1}
 
