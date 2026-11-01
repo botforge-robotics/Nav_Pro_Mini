@@ -178,12 +178,17 @@ async def _head_mic_ws_handler(websocket: Any):
         logger.info(f"Head Unit {client_ip} disconnected")
 
 
+async def _start_head_mic_ws():
+    async with websockets.serve(_head_mic_ws_handler, "0.0.0.0", HEAD_UNIT_WS_PORT):
+        logger.info(f"Head Unit Audio WebSocket server listening on port {HEAD_UNIT_WS_PORT}")
+        await asyncio.get_running_loop().create_future()
+
+
 def _run_head_mic_server():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    server = websockets.serve(_head_mic_ws_handler, "0.0.0.0", HEAD_UNIT_WS_PORT)
-    loop.run_until_complete(server)
-    loop.run_forever()
+    try:
+        asyncio.run(_start_head_mic_ws())
+    except Exception as e:
+        logger.error(f"Head Unit WebSocket server error: {e}")
 
 
 # Start background services once
