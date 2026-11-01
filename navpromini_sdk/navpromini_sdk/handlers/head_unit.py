@@ -71,7 +71,7 @@ def get_current_wifi_credentials() -> dict[str, str]:
         wifi_con_name = ""
         for line in out.splitlines():
             parts = line.split(":")
-            if len(parts) >= 2 and parts[1] == "wifi":
+            if len(parts) >= 2 and ("wifi" in parts[1] or "wireless" in parts[1]):
                 wifi_con_name = parts[0]
                 break
 
