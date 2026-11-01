@@ -20,6 +20,7 @@ import socket
 import subprocess
 import threading
 import time
+import queue
 from typing import Any, Optional
 
 import websockets
@@ -41,6 +42,37 @@ _HEAD_UNIT_STATE = {
 }
 _HEAD_UNIT_LOCK = threading.Lock()
 _AUDIO_LISTENERS: list[Any] = []
+_HEAD_MIC_RECORDING_SUBSCRIBERS: list[queue.Queue] = []
+
+def is_aria_sense_active() -> bool:
+    """Check if Aria Sense top microphone is currently streaming 16kHz PCM audio."""
+    with _HEAD_UNIT_LOCK:
+        now = time.time()
+        return bool(_HEAD_UNIT_STATE.get("streaming_audio", False) and (now - _HEAD_UNIT_STATE.get("last_seen", 0) <= 3.5))
+
+def record_aria_sense_audio(duration_sec: float) -> Optional[bytes]:
+    """Capture duration_sec of clean 16kHz PCM audio directly from Aria Sense top mic."""
+    if not is_aria_sense_active():
+        return None
+    target_bytes = int(duration_sec * 16000 * 2)
+    accumulated = bytearray()
+    start_time = time.time()
+    q: queue.Queue = queue.Queue(maxsize=150)
+    _HEAD_MIC_RECORDING_SUBSCRIBERS.append(q)
+    try:
+        while len(accumulated) < target_bytes and (time.time() - start_time < duration_sec + 1.5):
+            try:
+                chunk = q.get(timeout=0.2)
+                accumulated.extend(chunk)
+            except queue.Empty:
+                pass
+    finally:
+        if q in _HEAD_MIC_RECORDING_SUBSCRIBERS:
+            _HEAD_MIC_RECORDING_SUBSCRIBERS.remove(q)
+
+    if len(accumulated) >= 16000 * 2 * 0.5:
+        return bytes(accumulated[:target_bytes])
+    return None
 
 HEAD_UNIT_WS_PORT = 8095
 UDP_BEACON_PORT = 8093
@@ -161,11 +193,18 @@ async def _head_mic_ws_handler(websocket: Any):
                         rms = (sum(s * s for s in samples) / n_samples) ** 0.5
                         _HEAD_UNIT_STATE["audio_rms"] = float(rms)
 
-                # Push to Gemini Live session if active
+                # Push to single-turn recording subscribers
+                for q in list(_HEAD_MIC_RECORDING_SUBSCRIBERS):
+                    try:
+                        q.put_nowait(message)
+                    except Exception:
+                        pass
+
+                # Push to Gemini Live full-duplex session as primary default audio stream
                 try:
                     from ..gemini_live import get_live_session
                     live_sess = get_live_session()
-                    if live_sess and live_sess.active:
+                    if live_sess:
                         live_sess.inject_pcm_audio(message)
                 except Exception:
                     pass

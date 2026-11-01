@@ -66,7 +66,7 @@ class GeminiLiveSession:
 
     def inject_pcm_audio(self, pcm_data: bytes) -> None:
         """Inject 16kHz PCM audio chunk from the wireless Aria Sense module."""
-        if self._loop and self._head_mic_queue and self.active and not self.muted:
+        if self._loop and self._head_mic_queue and not self.muted:
             try:
                 self._loop.call_soon_threadsafe(
                     lambda: self._head_mic_queue.put_nowait(pcm_data) if not self._head_mic_queue.full() else None
@@ -193,7 +193,7 @@ class GeminiLiveSession:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
-        self._head_mic_queue = asyncio.Queue(maxsize=30)
+        self._head_mic_queue = asyncio.Queue(maxsize=150)
         backoff = 1.0
         while not self._stop_event.is_set():
             try:
@@ -367,60 +367,64 @@ class GeminiLiveSession:
             logger.warning(f"Could not remove echo cancellation: {e}")
 
     async def _mic_sender_loop(self, ws: Any) -> None:
-        """Stream 16kHz PCM audio continuously from microphone to Gemini Live (Full-Duplex)."""
-        env = get_pulse_env()
+        """Stream 16kHz PCM audio continuously from microphone to Gemini Live (Full-Duplex).
 
-        # CRITICAL: Remove echo cancellation — it attenuates mic audio below Gemini's VAD threshold
+        Prioritizes Aria Sense Top Microphone as PRIMARY DEFAULT source.
+        Only falls back to bottom chassis microphone if Aria Sense is disconnected.
+        """
+        env = get_pulse_env()
         self._remove_echo_cancellation(env)
 
-        # Find the raw USB hardware mic source name (NOT echo-cancel virtual device)
-        hw_source = None
-        try:
-            src_res = subprocess.run(['pactl', 'list', 'sources', 'short'], capture_output=True, text=True, env=env)
-            for line in src_res.stdout.splitlines():
-                parts = line.split('\t')
-                if len(parts) >= 2 and 'usb' in parts[1].lower() and 'echo-cancel' not in parts[1] and 'monitor' not in parts[1]:
-                    hw_source = parts[1]
-                    break
-        except Exception:
-            pass
-
-        cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=20', '--process-time-msec=20']
-        if hw_source:
-            cmd.extend(['--device', hw_source])
-            logger.info(f"Using raw hardware mic: {hw_source}")
-        else:
-            logger.info("Using default source for mic capture")
-
-        # Set microphone volume to 80% (optimal dynamic range and 20 dB SNR above ambient fan floor)
-        try:
-            subprocess.run(['amixer', '-c', '0', 'sset', 'Mic', '80%'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if hw_source:
-                subprocess.run(['pactl', 'set-source-volume', hw_source, '80%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(['pactl', 'set-source-volume', '@DEFAULT_SOURCE@', '80%'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-
         p_mic: Optional[subprocess.Popen] = None
-        try:
-            p_mic = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=env,
-                bufsize=0
-            )
-            print("[GeminiLive] Started microphone capture using parec (PulseAudio Full-Duplex)", flush=True)
-        except Exception as e:
-            logger.error(f"Failed to start mic capture for Gemini Live mic stream: {e}")
-            return
-
-        chunk_size = 1600  # 50 ms of 16kHz 16-bit mono PCM (800 samples * 2 bytes)
         loop = asyncio.get_event_loop()
         _diag_count = 0
         _diag_rms_sum = 0.0
+        active_source = None  # "aria_sense" or "chassis_mic"
 
-        def _read_exact(n: int) -> bytes:
+        def _ensure_chassis_mic():
+            nonlocal p_mic
+            if p_mic is not None and p_mic.poll() is None:
+                return
+            hw_source = None
+            try:
+                src_res = subprocess.run(['pactl', 'list', 'sources', 'short'], capture_output=True, text=True, env=env)
+                for line in src_res.stdout.splitlines():
+                    parts = line.split('\t')
+                    if len(parts) >= 2 and 'usb' in parts[1].lower() and 'echo-cancel' not in parts[1] and 'monitor' not in parts[1]:
+                        hw_source = parts[1]
+                        break
+            except Exception:
+                pass
+
+            cmd = ['parec', '--raw', '--rate=16000', '--channels=1', '--format=s16le', '--latency-msec=20', '--process-time-msec=20']
+            if hw_source:
+                cmd.extend(['--device', hw_source])
+            try:
+                p_mic = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    env=env,
+                    bufsize=0
+                )
+                logger.info(f"Fallback chassis mic started ({hw_source or 'default'})")
+            except Exception as e:
+                logger.error(f"Failed to spawn chassis mic parec: {e}")
+
+        def _stop_chassis_mic():
+            nonlocal p_mic
+            if p_mic is not None:
+                try:
+                    p_mic.terminate()
+                    p_mic.wait(timeout=0.3)
+                except Exception:
+                    try: p_mic.kill()
+                    except Exception: pass
+                p_mic = None
+
+        def _read_chassis_chunk(n: int) -> bytes:
+            if not p_mic or not p_mic.stdout:
+                return b''
             buf = bytearray()
             while len(buf) < n:
                 if self._stop_event.is_set():
@@ -431,31 +435,44 @@ class GeminiLiveSession:
                 buf.extend(part)
             return bytes(buf)
 
-        # Discard the initial 400ms DC transient pop on USB microphones
-        try:
-            await loop.run_in_executor(None, _read_exact, 12800)
-        except Exception:
-            pass
+        from .handlers.head_unit import is_aria_sense_active
 
         try:
             while not self._stop_event.is_set():
-                # Prefer crystal-clear top wireless Head Unit mic if streaming, fallback to chassis mic
-                if self._head_mic_queue and not self._head_mic_queue.empty():
-                    data = await self._head_mic_queue.get()
+                data: bytes = b''
+                aria_active = is_aria_sense_active()
+
+                if aria_active:
+                    if active_source != "aria_sense":
+                        active_source = "aria_sense"
+                        _stop_chassis_mic()
+                        logger.info("🎙️ [Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source")
+                        print("[Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source (16kHz)", flush=True)
+
+                    try:
+                        data = await asyncio.wait_for(self._head_mic_queue.get(), timeout=0.08)
+                    except asyncio.TimeoutError:
+                        data = b''
                 else:
-                    data = await loop.run_in_executor(None, _read_exact, chunk_size)
-                if not data or len(data) < chunk_size:
+                    if active_source != "chassis_mic":
+                        active_source = "chassis_mic"
+                        logger.info("ℹ️ [Aria Voice] Aria Sense not active, falling back to chassis mic")
+                        print("[Aria Voice] Aria Sense not active, falling back to chassis mic", flush=True)
+                        _ensure_chassis_mic()
+
+                    _ensure_chassis_mic()
+                    data = await loop.run_in_executor(None, _read_chassis_chunk, 1024)
+
+                if not data or len(data) < 320:  # Must be at least 10ms of 16kHz audio (160 samples * 2 bytes)
                     if self._stop_event.is_set():
                         break
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.005)
                     continue
 
                 if self.muted:
-                    # When explicitly muted, do not send user speech to Gemini
                     continue
 
-                # Full-Duplex continuous audio stream to Gemini Live:
-                # Raw hardware mic — no echo cancellation, no gating, no blocking.
+                # Measure RMS for diagnostic logs
                 import struct
                 n_samples = len(data) // 2
                 if n_samples > 0:
@@ -463,11 +480,11 @@ class GeminiLiveSession:
                     rms = (sum(s * s for s in samples) / n_samples) ** 0.5
                     _diag_count += 1
                     _diag_rms_sum += rms
-                    # Log RMS every ~2 seconds (40 chunks of 50ms)
                     if _diag_count % 40 == 0:
                         avg_rms = _diag_rms_sum / 40
                         peak = max(abs(s) for s in samples)
-                        print(f"[GeminiLive] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
+                        src_name = "Aria-Sense" if active_source == "aria_sense" else "Chassis-Mic"
+                        print(f"[GeminiLive] [{src_name}] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
                         _diag_rms_sum = 0.0
 
                 b64_audio = base64.b64encode(data).decode('ascii')
@@ -482,18 +499,13 @@ class GeminiLiveSession:
                     }
                 }
                 await ws.send(json.dumps(realtime_msg))
+
         except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
             pass
         except Exception as e:
             logger.warning(f"Gemini live mic loop exception: {e}")
         finally:
-            if p_mic:
-                try:
-                    p_mic.terminate()
-                    p_mic.wait(timeout=0.4)
-                except Exception:
-                    try: p_mic.kill()
-                    except Exception: pass
+            _stop_chassis_mic()
 
     async def _receiver_loop(self, ws: Any) -> None:
         """Receive audio playback chunks, barge-in interruptions, and tool calls from Gemini Live."""

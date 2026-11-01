@@ -186,6 +186,27 @@ def capture_and_filter_audio(duration_sec: float = 4.0) -> Optional[str]:
     except OSError:
         pass
 
+    # 1. Primary Default: Use top-mounted Aria Sense microphone if connected & streaming
+    try:
+        from .head_unit import is_aria_sense_active, record_aria_sense_audio
+        if is_aria_sense_active():
+            logger.info("🎙️ [Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source")
+            pcm_data = record_aria_sense_audio(duration_sec)
+            if pcm_data and len(pcm_data) >= 16000 * 2 * 0.5:
+                with wave.open(clean_wav, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(pcm_data)
+                try:
+                    os.unlink(raw_wav)
+                except OSError:
+                    pass
+                logger.info(f"Recorded {len(pcm_data)} bytes from Aria Sense Top Mic for voice STT")
+                return clean_wav
+    except Exception as e:
+        logger.warning(f"Aria Sense voice recording fallback: {e}")
+
     env = _get_pulse_env()
     cmd: list[str] = []
 
