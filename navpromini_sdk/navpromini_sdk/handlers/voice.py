@@ -1205,13 +1205,20 @@ class VoiceDialogHandler(BaseHandler):
 
     def get(self) -> None:
         from .head_unit import is_aria_sense_active
+        from ..gemini_live import get_live_session
         aria_active = is_aria_sense_active()
+        sess = get_live_session()
+        st = sess.get_status() if sess else {}
+        speaking = st.get('speaking', False)
+        user_speaking = st.get('user_speaking', False)
         with _VOICE_LOCK:
             msgs = list(_CONVERSATION_HISTORY[-50:])
         self.send({
             'messages': msgs,
-            'muted': _IS_MUTED,
-            'listening': _IS_LISTENING,
+            'muted': _IS_MUTED or st.get('muted', False),
+            'listening': _IS_LISTENING or (st.get('active', False) and not st.get('muted', False)),
+            'speaking': speaking,
+            'user_speaking': user_speaking,
             'audio_source': "aria_sense" if aria_active else "chassis_mic",
             'aria_sense_active': aria_active
         })
@@ -1236,10 +1243,17 @@ class VoiceStatusHandler(BaseHandler):
 
     def get(self) -> None:
         from .head_unit import is_aria_sense_active
+        from ..gemini_live import get_live_session
         aria_active = is_aria_sense_active()
+        sess = get_live_session()
+        st = sess.get_status() if sess else {}
+        speaking = st.get('speaking', False)
+        user_speaking = st.get('user_speaking', False)
         self.send({
-            'muted': _IS_MUTED,
-            'listening': _IS_LISTENING,
+            'muted': _IS_MUTED or st.get('muted', False),
+            'listening': _IS_LISTENING or (st.get('active', False) and not st.get('muted', False)),
+            'speaking': speaking,
+            'user_speaking': user_speaking,
             'audio_level': _AUDIO_LEVEL,
             'audio_source': "aria_sense" if aria_active else "chassis_mic",
             'aria_sense_active': aria_active,

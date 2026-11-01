@@ -86,17 +86,22 @@ class GeminiLiveSession:
     @property
     def is_speaking(self) -> bool:
         with self._player_lock:
-            return self._player_proc is not None and self._player_proc.poll() is None
+            proc_alive = self._player_proc is not None and self._player_proc.poll() is None
+            recent_audio = (time.time() - getattr(self, '_last_speech_time', 0)) < 0.6
+            return bool(proc_alive and recent_audio and getattr(self, '_is_speaking_state', False))
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
             from .handlers.head_unit import is_aria_sense_active
             aria_active = is_aria_sense_active()
+            speaking = self.is_speaking
+            user_speaking = getattr(self, '_prev_user_speaking', False) and not speaking
             return {
                 "active": self.active,
                 "muted": self.muted,
                 "connecting": self.connecting,
-                "speaking": self.is_speaking,
+                "speaking": speaking,
+                "user_speaking": user_speaking,
                 "last_error": self.last_error,
                 "engine": "gemini_live",
                 "aria_sense_active": aria_active,
@@ -511,6 +516,17 @@ class GeminiLiveSession:
                     print(f"[GeminiLive] [{src_name}] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
                     _diag_rms_sum = 0.0
 
+                # Real-time user speaking detection (RMS > 280) for UI synchronization
+                is_user_spk = bool(rms > 280.0 and not self.is_speaking)
+                if is_user_spk != getattr(self, '_prev_user_speaking', False):
+                    self._prev_user_speaking = is_user_spk
+                    if self._bridge and hasattr(self._bridge, 'emit_event'):
+                        norm_level = float(min(1.0, max(0.0, (rms - 80.0) / 3500.0)))
+                        self._bridge.emit_event('voice.user_speaking', {
+                            'speaking': is_user_spk,
+                            'level': norm_level
+                        })
+
                 b64_audio = base64.b64encode(clean_pcm).decode('ascii')
                 realtime_msg = {
                     "realtimeInput": {
@@ -553,6 +569,10 @@ class GeminiLiveSession:
                 if server_content.get("interrupted"):
                     print("[GeminiLive] User barge-in detected: interrupting playback!", flush=True)
                     self._kill_player()
+                    if getattr(self, '_is_speaking_state', False):
+                        self._is_speaking_state = False
+                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                            self._bridge.emit_event('voice.speaking', {'speaking': False})
 
                 # Process Model Turn Audio & Text FIRST before turnComplete flags
                 model_turn = server_content.get("modelTurn")
@@ -574,6 +594,11 @@ class GeminiLiveSession:
                                 try:
                                     player.stdin.write(pcm_bytes)
                                     player.stdin.flush()
+                                    self._last_speech_time = time.time()
+                                    if not getattr(self, '_is_speaking_state', False):
+                                        self._is_speaking_state = True
+                                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                                            self._bridge.emit_event('voice.speaking', {'speaking': True})
                                     _play_chunk_cnt = getattr(self, '_play_chunk_cnt', 0) + 1
                                     self._play_chunk_cnt = _play_chunk_cnt
                                     if _play_chunk_cnt == 1 or _play_chunk_cnt % 25 == 0:
@@ -581,6 +606,10 @@ class GeminiLiveSession:
                                 except Exception as e:
                                     print(f"[GeminiLive] Audio write error: {e}", flush=True)
                                     self._kill_player()
+                                    if getattr(self, '_is_speaking_state', False):
+                                        self._is_speaking_state = False
+                                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                                            self._bridge.emit_event('voice.speaking', {'speaking': False})
 
                         # Text transcript chunk
                         if "text" in part and part["text"].strip():
@@ -603,6 +632,10 @@ class GeminiLiveSession:
 
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
+                    if getattr(self, '_is_speaking_state', False):
+                        self._is_speaking_state = False
+                        if self._bridge and hasattr(self._bridge, 'emit_event'):
+                            self._bridge.emit_event('voice.speaking', {'speaking': False})
                     # Turn complete: flush player buffer so audio finishes playing smoothly
                     with self._player_lock:
                         if self._player_proc and self._player_proc.stdin and not self._player_proc.stdin.closed:
