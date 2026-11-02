@@ -940,7 +940,10 @@ class GotoHandler(BaseHandler):
                            'resend with {"replace": true}.',
                            {'current': TRACKER.snapshot()})
         if TRACKER.state == 'active' and TRACKER.handle is not None:
-            await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+            try:
+                await ros_future(TRACKER.handle.cancel_goal_async(), timeout=2.0)
+            except Exception:
+                pass
 
         handle = await send_navigate_goal(self.bridge, target, store=self.opts['store'])
 
@@ -966,7 +969,10 @@ class RouteHandler(BaseHandler):
                            'resend with {"replace": true}.',
                            {'current': TRACKER.snapshot()})
         if TRACKER.state == 'active' and TRACKER.handle is not None:
-            await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+            try:
+                await ros_future(TRACKER.handle.cancel_goal_async(), timeout=2.0)
+            except Exception:
+                pass
 
         handle = await send_route_goal(self.bridge, target, store=self.opts['store'])
         self.opts['spawn'](await_navigate_result(self.bridge, handle, target))
