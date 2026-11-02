@@ -677,8 +677,15 @@ class DockManagerNode(Node):
 
     async def _navigate_to_staging(self, dock_pose: PoseStamped,
                                     parent_goal_handle=None) -> bool:
-        if not self._nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('navigate_to_pose action server not available')
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if self._nav_client.server_is_ready():
+                break
+            if parent_goal_handle is not None and parent_goal_handle.is_cancel_requested:
+                return False
+            await self._tick()
+        else:
+            self.get_logger().error('navigate_to_pose action server not available after 30s')
             return False
         staging = self._staging_pose_for(dock_pose)
         self.get_logger().info(
@@ -1079,8 +1086,17 @@ class DockManagerNode(Node):
             # On boot, Nav2 lifecycle startup takes ~60-90s after AMCL publishes
             # the initial pose — goals sent before that are rejected with ACTION_SERVER_INACTIVE.
             nav_activate_deadline = time.monotonic() + 90.0
-            if not self._nav_client.wait_for_server(timeout_sec=5.0):
-                self.get_logger().error('navigate_to_pose action server not available')
+            while time.monotonic() < nav_activate_deadline:
+                if self._nav_client.server_is_ready():
+                    break
+                if goal_handle.is_cancel_requested:
+                    self._stop()
+                    goal_handle.canceled()
+                    self._set_status('undocked')
+                    return NavigateToPose.Result()
+                await self._tick()
+            else:
+                self.get_logger().error('navigate_to_pose action server not available after 90s')
                 goal_handle.abort()
                 self._set_status('error')
                 return NavigateToPose.Result()
