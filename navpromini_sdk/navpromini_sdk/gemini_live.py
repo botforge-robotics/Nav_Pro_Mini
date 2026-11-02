@@ -236,6 +236,7 @@ class GeminiLiveSession:
         self._has_speech_text_in_turn: bool = False
         self._spoke_in_turn: bool = False
         self._discard_post_tool_speech: bool = False
+        self._user_speaking_detected: bool = False
 
     def inject_pcm_audio(self, pcm_data: bytes) -> None:
         """Inject 16kHz PCM audio chunk from the wireless Aria Sense module."""
@@ -279,7 +280,7 @@ class GeminiLiveSession:
             from .handlers.head_unit import is_aria_sense_active
             aria_active = is_aria_sense_active()
             speaking = self.is_speaking
-            user_speaking = getattr(self, '_prev_user_speaking', False) and not speaking
+            user_speaking = getattr(self, '_user_speaking_detected', False) and not speaking
             return {
                 "active": self.active,
                 "muted": self.muted,
@@ -699,13 +700,13 @@ class GeminiLiveSession:
                         active_source = "aria_sense"
                         _stop_chassis_mic()
                         logger.info("🎙️ [Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source")
-                        print("[Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source (16kHz)", flush=True)
+                        print("[Aria Voice] Using Aria Sense Top Microphone as PRIMARY DEFAULT source (16kHz direct)", flush=True)
 
                     try:
                         data = await asyncio.wait_for(self._head_mic_queue.get(), timeout=0.08)
-                        # Zero-latency backlog drain: batch up to 8 extra accumulated chunks (~280ms max)
+                        # Immediately drain any accumulated backlog chunks to eliminate Wi-Fi jitter delays
                         extra_chunks = []
-                        while not self._head_mic_queue.empty() and len(extra_chunks) < 8:
+                        while not self._head_mic_queue.empty() and len(extra_chunks) < 10:
                             try:
                                 extra_chunks.append(self._head_mic_queue.get_nowait())
                             except Exception:
@@ -724,24 +725,7 @@ class GeminiLiveSession:
                     _ensure_chassis_mic()
                     data = await loop.run_in_executor(None, _read_chassis_chunk, 1024)
 
-                # Echo suppression & server turn pause:
-                # 1. Do not send mic packets to Gemini while server is generating a turn or a tool is executing (prevents 1011 server crash)
-                # 2. Suppress mic packets while robot is actively speaking to prevent acoustic self-interruption
-                now_time = time.time()
-                if (getattr(self, '_server_turn_active', False) or 
-                    getattr(self, '_tool_call_pending', False) or 
-                    self.is_speaking or 
-                    (now_time - getattr(self, '_playback_end_time', 0.0)) < 0.25):
-                    if self._head_mic_queue:
-                        while not self._head_mic_queue.empty():
-                            try:
-                                self._head_mic_queue.get_nowait()
-                            except Exception:
-                                break
-                    await asyncio.sleep(0.02)
-                    continue
-
-                if not data or len(data) < 320:  # Must be at least 10ms of 16kHz audio (160 samples * 2 bytes)
+                if not data:
                     if self._stop_event.is_set():
                         break
                     await asyncio.sleep(0.005)
@@ -750,99 +734,31 @@ class GeminiLiveSession:
                 if self.muted:
                     continue
 
-                # Remove hardware DC offset so Gemini VAD detects speech boundaries with zero delay
-                import numpy as np
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                mean_offset = float(np.mean(samples)) if len(samples) > 0 else 0.0
-                samples = samples - mean_offset
-                rms = float(np.sqrt(np.mean(samples ** 2))) if len(samples) > 0 else 0.0
-                peak = int(np.max(np.abs(samples))) if len(samples) > 0 else 0
+                if getattr(self, '_tool_call_pending', False):
+                    # While tool call is being executed, briefly pause realtimeInput
+                    # so Gemini Live protocol doesn't reject frames while awaiting functionResponses
+                    await asyncio.sleep(0.01)
+                    continue
+
+                # DIRECT RAW STREAM: Zero local filtering, zero RMS gating, zero thresholding.
+                # Audio is streamed straight to Gemini Live neural VAD for instant real-time response.
+                b64_audio = base64.b64encode(data).decode('ascii')
+                realtime_msg = {
+                    "realtimeInput": {
+                        "mediaChunks": [
+                            {
+                                "mimeType": "audio/pcm;rate=16000",
+                                "data": b64_audio
+                            }
+                        ]
+                    }
+                }
+                await ws.send(json.dumps(realtime_msg))
 
                 _diag_count += 1
-                _diag_rms_sum += rms
-                if _diag_count % 30 == 0:
-                    avg_rms = _diag_rms_sum / 30
+                if _diag_count % 60 == 0:
                     src_name = "Aria-Sense" if active_source == "aria_sense" else "Chassis-Mic"
-                    print(f"[GeminiLive] [{src_name}] Mic RMS={avg_rms:.0f} Peak={peak} (chunk #{_diag_count})", flush=True)
-                    _diag_rms_sum = 0.0
-
-                # Ambient-adaptive voice sensitivity tracking (adapts to room acoustic floor)
-                amb_floor = getattr(self, '_ambient_floor', 90.0)
-                if not self.is_speaking and not getattr(self, '_prev_user_speaking', False):
-                    if rms < amb_floor * 1.4:
-                        amb_floor = 0.95 * amb_floor + 0.05 * rms
-                    elif rms < amb_floor:
-                        amb_floor = 0.85 * amb_floor + 0.15 * rms
-                self._ambient_floor = max(50.0, min(amb_floor, 250.0))
-
-                # Dynamic speech detection threshold:
-                # Normal speech is 350-2500+ RMS. Resting mic noise on Aria Sense is 80-140 RMS.
-                # Threshold at 190+ ensures ambient noise/room echo never keeps user turn open!
-                speech_threshold = max(190.0, min(self._ambient_floor + 70.0, self._ambient_floor * 1.60))
-                now_time = time.time()
-                raw_spk = bool(rms > speech_threshold and not self.is_speaking)
-                if raw_spk:
-                    # Ultra-snappy 180ms hangover: bridges natural syllable pauses without keeping Gemini VAD waiting!
-                    self._user_spk_hangover = now_time + 0.18
-
-                is_user_spk = bool(now_time < getattr(self, '_user_spk_hangover', 0.0) and not self.is_speaking)
-                raw_pcm = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
-
-                if not hasattr(self, '_pre_roll_chunks'):
-                    from collections import deque
-                    self._pre_roll_chunks = deque(maxlen=6)  # ~120ms pre-roll to preserve first consonants
-
-                chunks_to_send: list[bytes] = []
-
-                if is_user_spk != getattr(self, '_prev_user_speaking', False):
-                    self._prev_user_speaking = is_user_spk
-                    if is_user_spk:
-                        self._discard_post_tool_speech = False
-                        self._has_speech_text_in_turn = False
-                        self._spoke_in_turn = False
-                        self._pending_tool_action = None
-                        # Flush pre-roll buffer so initial phonemes are transmitted seamlessly
-                        while self._pre_roll_chunks:
-                            chunks_to_send.append(self._pre_roll_chunks.popleft())
-
-                    if self._bridge and hasattr(self._bridge, 'emit_event'):
-                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 2200.0)))
-                        self._bridge.emit_event('voice.user_speaking', {
-                            'speaking': is_user_spk,
-                            'level': norm_level
-                        })
-
-                if is_user_spk:
-                    chunks_to_send.append(raw_pcm)
-                    _spk_cnt = getattr(self, '_user_spk_cnt', 0) + 1
-                    self._user_spk_cnt = _spk_cnt
-                    if _spk_cnt % 5 == 0 and self._bridge and hasattr(self._bridge, 'emit_event'):
-                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 2200.0)))
-                        self._bridge.emit_event('voice.user_speaking', {
-                            'speaking': True,
-                            'level': norm_level
-                        })
-                else:
-                    self._user_spk_cnt = 0
-                    self._pre_roll_chunks.append(raw_pcm)
-                    # Continuous 16kHz real-time digital silence (b'\x00'):
-                    # Keeps Gemini's audio clock ticking in 100% sync, while giving Gemini's neural VAD
-                    # a clean, zero-energy drop to declare turn-complete in <300ms!
-                    chunks_to_send.append(b'\x00' * len(raw_pcm))
-
-                for chunk in chunks_to_send:
-                    b64_audio = base64.b64encode(chunk).decode('ascii')
-                    realtime_msg = {
-                        "realtimeInput": {
-                            "mediaChunks": [
-                                {
-                                    "mimeType": "audio/pcm;rate=16000",
-                                    "data": b64_audio
-                                }
-                            ]
-                        }
-                    }
-                    await ws.send(json.dumps(realtime_msg))
+                    print(f"[GeminiLive] [{src_name}] Direct raw audio stream: chunk #{_diag_count} ({len(data)} B)", flush=True)
 
         except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
             pass
@@ -871,8 +787,9 @@ class GeminiLiveSession:
             server_content = msg.get("serverContent")
             if server_content:
                 if server_content.get("interrupted"):
-                    print("[GeminiLive] User barge-in detected: interrupting playback!", flush=True)
+                    print("[GeminiLive] User barge-in detected by Gemini: interrupting playback!", flush=True)
                     self._kill_player()
+                    self._user_speaking_detected = True
                     self._server_turn_active = False
                     self._discard_post_tool_speech = False
                     self._has_speech_text_in_turn = False
@@ -891,6 +808,7 @@ class GeminiLiveSession:
                 if user_trans and isinstance(user_trans, dict):
                     raw_u_text = user_trans.get("text", "").strip()
                     if raw_u_text:
+                        self._user_speaking_detected = True
                         self._discard_post_tool_speech = False
                         self._has_speech_text_in_turn = False
                         self._spoke_in_turn = False
@@ -943,6 +861,7 @@ class GeminiLiveSession:
                 # Process Model Turn Audio & Text FIRST before turnComplete flags
                 model_turn = server_content.get("modelTurn")
                 if model_turn:
+                    self._user_speaking_detected = False
                     self._server_turn_active = True
                     parts = model_turn.get("parts", [])
                     for part in parts:
@@ -1045,6 +964,7 @@ class GeminiLiveSession:
 
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
+                    self._user_speaking_detected = False
                     self._server_turn_active = False
                     # If a tool executed but Gemini produced zero spoken transcript, fallback to tool confirmation
                     if self._turn_robot_msg_id is None and (self._turn_action_tag or getattr(self, '_pending_tool_action', None)):
