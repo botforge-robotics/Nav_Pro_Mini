@@ -752,7 +752,6 @@ class GeminiLiveSession:
                 samples = samples - mean_offset
                 rms = float(np.sqrt(np.mean(samples ** 2))) if len(samples) > 0 else 0.0
                 peak = int(np.max(np.abs(samples))) if len(samples) > 0 else 0
-                clean_pcm = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
                 _diag_count += 1
                 _diag_rms_sum += rms
@@ -792,6 +791,24 @@ class GeminiLiveSession:
                             'speaking': is_user_spk,
                             'level': norm_level
                         })
+
+                # Gating: when user is actively speaking, stream full unattenuated voice audio.
+                # When user is silent (post-hangover), attenuate mic audio to digital noise floor (< 5 RMS).
+                # This drops ambient mic hiss completely, signaling Gemini's neural VAD to immediately
+                # declare end-of-speech within ~400ms instead of waiting 3-4s in the presence of noise!
+                if is_user_spk:
+                    clean_pcm = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+                    _spk_cnt = getattr(self, '_user_spk_cnt', 0) + 1
+                    self._user_spk_cnt = _spk_cnt
+                    if _spk_cnt % 5 == 0 and self._bridge and hasattr(self._bridge, 'emit_event'):
+                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 2200.0)))
+                        self._bridge.emit_event('voice.user_speaking', {
+                            'speaking': True,
+                            'level': norm_level
+                        })
+                else:
+                    self._user_spk_cnt = 0
+                    clean_pcm = (samples * 0.02).astype(np.int16).tobytes()
 
                 b64_audio = base64.b64encode(clean_pcm).decode('ascii')
                 realtime_msg = {
@@ -853,7 +870,6 @@ class GeminiLiveSession:
                 if user_trans and isinstance(user_trans, dict):
                     raw_u_text = user_trans.get("text", "").strip()
                     if raw_u_text:
-                        self._server_turn_active = True
                         self._discard_post_tool_speech = False
                         self._has_speech_text_in_turn = False
                         self._spoke_in_turn = False
@@ -1008,6 +1024,7 @@ class GeminiLiveSession:
 
                 if server_content.get("turnComplete"):
                     print("[GeminiLive] Model turn complete", flush=True)
+                    self._server_turn_active = False
                     # If a tool executed but Gemini produced zero spoken transcript, fallback to tool confirmation
                     if self._turn_robot_msg_id is None and (self._turn_action_tag or getattr(self, '_pending_tool_action', None)):
                         action_tag = self._turn_action_tag or self._pending_tool_action
