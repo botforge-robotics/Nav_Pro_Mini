@@ -725,6 +725,33 @@ class GeminiLiveSession:
                     _ensure_chassis_mic()
                     data = await loop.run_in_executor(None, _read_chassis_chunk, 1024)
 
+                now_time = time.time()
+                is_robot_speaking = self.is_speaking or (now_time - getattr(self, '_playback_end_time', 0.0)) < 0.20
+
+                # Echo Suppression: While robot is speaking, drain mic buffer so robot never hears itself talking!
+                if is_robot_speaking:
+                    if self._head_mic_queue:
+                        while not self._head_mic_queue.empty():
+                            try:
+                                self._head_mic_queue.get_nowait()
+                            except Exception:
+                                break
+                    # Send digital silence heartbeat to keep Gemini's audio clock synchronized in real time
+                    silent_len = len(data) if data else 640
+                    b64_audio = base64.b64encode(b'\x00' * silent_len).decode('ascii')
+                    realtime_msg = {
+                        "realtimeInput": {
+                            "mediaChunks": [
+                                {
+                                    "mimeType": "audio/pcm;rate=16000",
+                                    "data": b64_audio
+                                }
+                            ]
+                        }
+                    }
+                    await ws.send(json.dumps(realtime_msg))
+                    continue
+
                 if not data:
                     if self._stop_event.is_set():
                         break
@@ -740,7 +767,24 @@ class GeminiLiveSession:
                     await asyncio.sleep(0.01)
                     continue
 
-                # DIRECT RAW STREAM: Zero local filtering, zero RMS gating, zero thresholding.
+                # UI Waveform Audio Level: Emit dynamic level for vibrant green waveform animation
+                _ui_meter_cnt = getattr(self, '_ui_meter_cnt', 0) + 1
+                self._ui_meter_cnt = _ui_meter_cnt
+                if _ui_meter_cnt % 3 == 0 and self._bridge and hasattr(self._bridge, 'emit_event'):
+                    n_samples = len(data) // 2
+                    if n_samples > 0:
+                        import struct
+                        samples = struct.unpack(f'<{n_samples}h', data[:n_samples * 2])
+                        rms = (sum(s * s for s in samples) / n_samples) ** 0.5
+                        is_user_spk = rms > 120.0
+                        norm_level = float(min(1.0, max(0.0, (rms - 80.0) / 1200.0))) if is_user_spk else 0.0
+                        self._user_speaking_detected = is_user_spk
+                        self._bridge.emit_event('voice.user_speaking', {
+                            'speaking': is_user_spk,
+                            'level': norm_level
+                        })
+
+                # DIRECT RAW STREAM: Zero local audio filtering, zero gating, zero thresholding.
                 # Audio is streamed straight to Gemini Live neural VAD for instant real-time response.
                 b64_audio = base64.b64encode(data).decode('ascii')
                 realtime_msg = {
