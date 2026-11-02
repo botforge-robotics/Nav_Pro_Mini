@@ -526,6 +526,16 @@ def handle_event_audio(event_name: str, data: Optional[dict] = None) -> None:
         return
     _LAST_EVENT_SOUND_TIMES[event_name] = now
 
+    # If Gemini Live voice assistant is actively running, do not play notification beeps
+    # that collide with Gemini Live's spoken responses and cause PulseAudio buffering latency!
+    try:
+        from .gemini_live import get_live_session
+        live_sess = get_live_session()
+        if live_sess and live_sess.active and not live_sess.muted:
+            return
+    except Exception:
+        pass
+
     payload = data or {}
     op = payload.get('operation')
 
