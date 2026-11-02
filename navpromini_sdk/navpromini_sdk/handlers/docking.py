@@ -86,7 +86,7 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
         result = getattr(wrapped, 'result', None)
         ok = bool(getattr(result, 'success', False))
         message = getattr(result, 'error_msg', '') or ''
-        is_current = (TRACKER.handle == handle)
+        is_current = (TRACKER.handle is handle)
         if is_current:
             TRACKER.finish('docked' if ok else 'failed', message)
             bridge.emit_event('dock.completed' if ok else 'dock.failed',
@@ -103,12 +103,12 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
             bridge.get_logger().info('Superseded dock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        if TRACKER.handle == handle:
+        if TRACKER.handle is handle:
             TRACKER.finish('failed', str(exc))
             bridge.emit_event('dock.failed', {'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
     finally:
-        if TRACKER.handle == handle:
+        if TRACKER.handle is handle:
             if hasattr(bridge, 'release_video_stream'):
                 bridge.release_video_stream()
             if hasattr(bridge, 'publish_display_state'):
@@ -176,7 +176,7 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
         status = getattr(wrapped, 'status', None)
         ok = status == 4
         message = '' if ok else f'ended with status {status}'
-        is_current = (TRACKER.handle == handle)
+        is_current = (TRACKER.handle is handle)
         if is_current:
             TRACKER.finish('undocked' if ok else 'failed', message)
             bridge.emit_event('dock.completed' if ok else 'dock.failed',
@@ -192,12 +192,12 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
             bridge.get_logger().info('Superseded undock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        if TRACKER.handle == handle:
+        if TRACKER.handle is handle:
             TRACKER.finish('failed', str(exc))
             bridge.emit_event('dock.failed', {'operation': 'undock', 'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
     finally:
-        if TRACKER.handle == handle:
+        if TRACKER.handle is handle:
             if hasattr(bridge, 'publish_display_state'):
                 bridge.publish_display_state('ready')
             if hasattr(bridge, 'publish_led_command'):

@@ -875,7 +875,7 @@ async def await_navigate_result(bridge, handle, target: dict, timeout: float = 3
     try:
         wrapped = await ros_future(handle.get_result_async(), timeout=timeout)
         status = getattr(wrapped, 'status', None)
-        is_current = (TRACKER.handle == handle)
+        is_current = (TRACKER.handle is handle)
         if status == 4:
             if is_current:
                 TRACKER.finish('succeeded')
@@ -897,13 +897,13 @@ async def await_navigate_result(bridge, handle, target: dict, timeout: float = 3
             bridge.publish_empty_plan()
         return {'ok': False, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        if TRACKER.handle == handle:
+        if TRACKER.handle is handle:
             TRACKER.finish('failed', str(exc))
             bridge.emit_event('navigation.failed', {'target': target, 'message': str(exc)})
             bridge.publish_empty_plan()
         return {'ok': False, 'message': str(exc)}
     finally:
-        if TRACKER.handle == handle:
+        if TRACKER.handle is handle:
             bridge.reset_speed_limit()
             if ACTIVE_DYNAMIC_CLOSED_EDGES:
                 asyncio.create_task(_reopen_edges(bridge, list(ACTIVE_DYNAMIC_CLOSED_EDGES)))
