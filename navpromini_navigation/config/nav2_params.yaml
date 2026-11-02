@@ -93,40 +93,40 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      angular_dist_threshold: 0.50
-      angular_disengage_threshold: 0.20
-      forward_sampling_distance: 0.22
-      rotate_to_heading_angular_vel: 0.22
-      max_angular_accel: 0.45
+      angular_dist_threshold: 0.35
+      angular_disengage_threshold: 0.15
+      forward_sampling_distance: 0.20
+      rotate_to_heading_angular_vel: 0.32
+      max_angular_accel: 0.60
       simulate_ahead_time: 0.8
-      max_cost_threshold: 185.0
+      max_cost_threshold: 220.0
       rotate_to_heading_once: false
       rotate_to_goal_heading: true
       closed_loop: true
       use_path_orientations: false
 
-      desired_linear_vel: 0.105
-      lookahead_dist: 0.24
-      min_lookahead_dist: 0.16
-      max_lookahead_dist: 0.32
-      lookahead_time: 1.2
+      desired_linear_vel: 0.11
+      lookahead_dist: 0.22
+      min_lookahead_dist: 0.15
+      max_lookahead_dist: 0.28
+      lookahead_time: 1.0
       use_velocity_scaled_lookahead_dist: true
-      use_rotate_to_heading: false
-      rotate_to_heading_angular_vel: 0.22
-      rotate_to_heading_min_angle: 0.65
-      max_angular_accel: 0.45
+      use_rotate_to_heading: true
+      rotate_to_heading_angular_vel: 0.32
+      rotate_to_heading_min_angle: 0.35
+      max_angular_accel: 0.60
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.35
-      min_approach_linear_velocity: 0.075
+      min_approach_linear_velocity: 0.08
       use_collision_detection: true
-      max_allowed_time_to_collision_up_to_carrot: 2.2
+      max_allowed_time_to_collision_up_to_carrot: 1.0
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.65
-      regulated_linear_scaling_min_speed: 0.030
+      regulated_linear_scaling_min_radius: 0.25
+      regulated_linear_scaling_min_speed: 0.05
       use_cost_regulated_linear_velocity_scaling: true
-      cost_scaling_dist: 0.50
-      cost_scaling_gain: 3.5
-      inflation_cost_scaling_factor: 2.2
+      cost_scaling_dist: 0.28
+      cost_scaling_gain: 1.5
+      inflation_cost_scaling_factor: 2.8
       transform_tolerance: 2.5
       allow_reversing: false
 
@@ -223,8 +223,8 @@ local_costmap:
           obstacle_min_range: 0.05
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.2
-        inflation_radius: 0.70
+        cost_scaling_factor: 2.8
+        inflation_radius: 0.55
       always_send_full_costmap: True
 
 global_costmap:
@@ -269,8 +269,8 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.2
-        inflation_radius: 0.70
+        cost_scaling_factor: 2.8
+        inflation_radius: 0.55
       always_send_full_costmap: True
 
 map_saver:
