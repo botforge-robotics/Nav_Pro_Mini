@@ -13,12 +13,13 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    GroupAction,
     IncludeLaunchDescription,
     OpaqueFunction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 from nav2_common.launch import RewrittenYaml
 
 
@@ -192,14 +193,17 @@ def launch_setup(context, *args, **kwargs):
         'docking.launch.py',
     ])
 
-    nav2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(launch_nav2),
-        launch_arguments=[
-            ('use_sim_time', use_sim_time),
-            ('params_file', nav2_params_to_use),
-            ('autostart', autostart),
-        ],
-    )
+    nav2 = GroupAction([
+        SetParameter('bond_timeout', 40.0),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(launch_nav2),
+            launch_arguments=[
+                ('use_sim_time', use_sim_time),
+                ('params_file', nav2_params_to_use),
+                ('autostart', autostart),
+            ],
+        ),
+    ])
 
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(launch_localization),
