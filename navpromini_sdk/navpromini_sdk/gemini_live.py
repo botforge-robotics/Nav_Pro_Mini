@@ -402,8 +402,12 @@ class GeminiLiveSession:
             self._is_speaking_state = False
             self._server_turn_active = False
             self._kill_player()
+            self._user_speaking_detected = False
+            self._speech_active_cnt = 0
+            self._speech_quiet_cnt = 0
             if self._bridge and hasattr(self._bridge, 'emit_event'):
                 self._bridge.emit_event('voice.speaking', {'speaking': False})
+                self._bridge.emit_event('voice.user_speaking', {'speaking': False, 'level': 0.0})
 
     def _run_event_loop(self, api_key: str) -> None:
         loop = asyncio.new_event_loop()
@@ -413,6 +417,9 @@ class GeminiLiveSession:
         self._server_turn_active = False
         self._tool_call_pending = False
         self._playback_end_time = 0.0
+        self._speech_active_cnt = 0
+        self._speech_quiet_cnt = 0
+        self._playback_just_ended_flushed = True
         backoff = 1.0
         while not self._stop_event.is_set():
             try:
@@ -726,10 +733,17 @@ class GeminiLiveSession:
                     data = await loop.run_in_executor(None, _read_chassis_chunk, 1024)
 
                 now_time = time.time()
-                is_robot_speaking = self.is_speaking or (now_time - getattr(self, '_playback_end_time', 0.0)) < 0.20
+                playback_end = getattr(self, '_playback_end_time', 0.0)
+                time_since_playback = now_time - playback_end
+                # Acoustic Echo Suppression: While robot is speaking or during room echo decay (650ms)
+                is_robot_speaking = self.is_speaking or (time_since_playback < 0.65)
 
                 # Echo Suppression: While robot is speaking, drain mic buffer so robot never hears itself talking!
                 if is_robot_speaking:
+                    self._playback_just_ended_flushed = False
+                    self._speech_active_cnt = 0
+                    self._speech_quiet_cnt = 0
+                    self._user_speaking_detected = False
                     if self._head_mic_queue:
                         while not self._head_mic_queue.empty():
                             try:
@@ -752,6 +766,18 @@ class GeminiLiveSession:
                     await ws.send(json.dumps(realtime_msg))
                     continue
 
+                # One-time flush of mic queue right after echo suppression window ends
+                # to discard any stale buffer recorded during speaker decay
+                if not getattr(self, '_playback_just_ended_flushed', True):
+                    self._playback_just_ended_flushed = True
+                    if self._head_mic_queue:
+                        while not self._head_mic_queue.empty():
+                            try:
+                                self._head_mic_queue.get_nowait()
+                            except Exception:
+                                break
+                    data = b''
+
                 if not data:
                     if self._stop_event.is_set():
                         break
@@ -767,10 +793,10 @@ class GeminiLiveSession:
                     await asyncio.sleep(0.01)
                     continue
 
-                # UI Waveform Audio Level: Emit dynamic level for vibrant green waveform animation
+                # UI Waveform Audio Level & Speech Gate: Debounced detection for stable UI state
                 _ui_meter_cnt = getattr(self, '_ui_meter_cnt', 0) + 1
                 self._ui_meter_cnt = _ui_meter_cnt
-                if _ui_meter_cnt % 3 == 0 and self._bridge and hasattr(self._bridge, 'emit_event'):
+                if _ui_meter_cnt % 2 == 0 and self._bridge and hasattr(self._bridge, 'emit_event'):
                     n_samples = len(data) // 2
                     if n_samples > 0:
                         import struct
@@ -778,18 +804,48 @@ class GeminiLiveSession:
                         rms = (sum(s * s for s in samples) / n_samples) ** 0.5
                         
                         # Ambient room floor tracking (adapts to background room noise ~110-180 RMS)
+                        # Only adapt when well clear of robot playback (>1.2s) so reverb isn't learned
                         amb_floor = getattr(self, '_ambient_floor', 140.0)
-                        if rms < amb_floor * 1.5:
-                            amb_floor = 0.95 * amb_floor + 0.05 * rms
-                        self._ambient_floor = max(80.0, min(amb_floor, 350.0))
+                        if time_since_playback > 1.2 and rms < amb_floor * 1.3:
+                            amb_floor = 0.97 * amb_floor + 0.03 * rms
+                        self._ambient_floor = max(90.0, min(amb_floor, 350.0))
                         
-                        # Real human speech is distinctly above ambient floor (min 260 RMS)
-                        speech_threshold = max(260.0, self._ambient_floor + 110.0)
-                        is_user_spk = bool(rms > speech_threshold)
-                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 1500.0))) if is_user_spk else 0.0
-                        self._user_speaking_detected = is_user_spk
+                        # Speech threshold: Real user voice is distinctly above ambient noise & fine noise
+                        speech_threshold = max(350.0, self._ambient_floor + 150.0)
+                        
+                        # Post-playback lockout: Ignore sound for first 0.85s after playback ends
+                        is_above = (rms > speech_threshold) and (time_since_playback > 0.85)
+
+                        speech_active_cnt = getattr(self, '_speech_active_cnt', 0)
+                        speech_quiet_cnt = getattr(self, '_speech_quiet_cnt', 0)
+
+                        if is_above:
+                            speech_active_cnt += 1
+                            speech_quiet_cnt = 0
+                        else:
+                            speech_quiet_cnt += 1
+                            if speech_quiet_cnt >= 2:
+                                speech_active_cnt = 0
+
+                        self._speech_active_cnt = speech_active_cnt
+                        self._speech_quiet_cnt = speech_quiet_cnt
+
+                        # Debounced user speaking state:
+                        # Requires 2 consecutive checks (>80ms) above threshold to trigger (rejects noise spikes).
+                        # Requires 4 consecutive quiet checks (~200ms) to drop back to idle.
+                        current_user_spk = getattr(self, '_user_speaking_detected', False)
+                        if not current_user_spk:
+                            if speech_active_cnt >= 2:
+                                current_user_spk = True
+                        else:
+                            if speech_quiet_cnt >= 4:
+                                current_user_spk = False
+
+                        self._user_speaking_detected = current_user_spk
+                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 1500.0))) if current_user_spk else 0.0
+
                         self._bridge.emit_event('voice.user_speaking', {
-                            'speaking': is_user_spk,
+                            'speaking': current_user_spk,
                             'level': norm_level
                         })
 
