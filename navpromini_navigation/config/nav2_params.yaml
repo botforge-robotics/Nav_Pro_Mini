@@ -102,7 +102,7 @@ controller_server:
       use_rotate_to_heading: true
       rotate_to_heading_angular_vel: 0.55
       rotate_to_heading_min_angle: 0.20
-      max_angular_accel: 1.20
+      max_angular_accel: 3.20
       use_approach_linear_velocity_scaling: true
       approach_velocity_scaling_dist: 0.35
       min_approach_linear_velocity: 0.05
@@ -375,8 +375,8 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     max_velocity: [0.15, 0.0, 0.65]
     min_velocity: [-0.05, 0.0, -0.65]
-    max_accel: [0.12, 0.0, 1.20]
-    max_decel: [-0.18, 0.0, -1.50]
+    max_accel: [0.15, 0.0, 2.00]
+    max_decel: [-0.20, 0.0, -2.50]
     odom_topic: "odom"
     odom_duration: 0.15
     # deadband_velocity suppresses micro-commands inside the motor dead zone,
