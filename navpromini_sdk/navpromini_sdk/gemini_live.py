@@ -776,8 +776,17 @@ class GeminiLiveSession:
                         import struct
                         samples = struct.unpack(f'<{n_samples}h', data[:n_samples * 2])
                         rms = (sum(s * s for s in samples) / n_samples) ** 0.5
-                        is_user_spk = rms > 120.0
-                        norm_level = float(min(1.0, max(0.0, (rms - 80.0) / 1200.0))) if is_user_spk else 0.0
+                        
+                        # Ambient room floor tracking (adapts to background room noise ~110-180 RMS)
+                        amb_floor = getattr(self, '_ambient_floor', 140.0)
+                        if rms < amb_floor * 1.5:
+                            amb_floor = 0.95 * amb_floor + 0.05 * rms
+                        self._ambient_floor = max(80.0, min(amb_floor, 350.0))
+                        
+                        # Real human speech is distinctly above ambient floor (min 260 RMS)
+                        speech_threshold = max(260.0, self._ambient_floor + 110.0)
+                        is_user_spk = bool(rms > speech_threshold)
+                        norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 1500.0))) if is_user_spk else 0.0
                         self._user_speaking_detected = is_user_spk
                         self._bridge.emit_event('voice.user_speaking', {
                             'speaking': is_user_spk,
