@@ -771,7 +771,7 @@ class GeminiLiveSession:
 
                 # Ambient-adaptive voice sensitivity tracking (adapts to room acoustic floor)
                 amb_floor = getattr(self, '_ambient_floor', 90.0)
-                if not self.is_speaking and not is_user_spk:
+                if not self.is_speaking and not getattr(self, '_prev_user_speaking', False):
                     if rms < amb_floor * 1.4:
                         amb_floor = 0.95 * amb_floor + 0.05 * rms
                     elif rms < amb_floor:
