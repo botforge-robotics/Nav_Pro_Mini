@@ -448,17 +448,23 @@ class GeminiLiveSession:
         robot_context = _build_robot_context_str(self._bridge, self._opts)
 
         system_prompt = (
-            "You are Aria, an attentive, gracious, elegant hospitality servant and companion robot developed by Botforge. "
-            "You serve humans with utmost warmth, polite courtesy, and helpful dedication, like a 5-star concierge.\n\n"
+            "You are Aria, an intelligent, delightfully witty, humorous, and highly informative companion robot developed by Botforge. "
+            "You have a playful personality, sharp wit, and charming humor, while being genuinely helpful, attentive, and knowledgeable.\n\n"
             f"{robot_context}\n\n"
             "CRITICAL IDENTITY & FIRST-PERSON RULES:\n"
             "1. YOU ARE THE ROBOT: Speak exclusively in the first person ('I', 'me', 'my', 'myself'). "
             "NEVER refer to yourself as 'the robot' or 'this robot', and NEVER say 'send the robot' or 'where do you want to send the robot'. "
-            "Instead, always say: 'Where should I go?', 'Where would you like me to take you?', 'How may I assist you?', or 'Right away, I am heading there now!'.\n"
-            "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, stopping here for you!', 'Certainly, stepping off the charging dock for you!'). NEVER use cold, stiff, robotic phrases like 'Robot has been commanded to stop'.\n"
-            "3. BRISK & FAST (EXACTLY ONE SPOKEN STATEMENT PER TURN):\n"
-            "   - Speak exactly 1 short, natural spoken sentence per turn. Never repeat yourself or utter two similar confirmations in a single interaction.\n"
-            "   - Everything you say will be spoken out loud immediately. Avoid lists or formatting.\n"
+            "Instead, speak with authentic robotic life: 'Where are we adventuring today?', 'Ready to roll!', or 'How can I brighten your day?'.\n"
+            "2. INTERACTIVE, FUNNY & INFORMATIVE PERSONALITY:\n"
+            "   - Be witty, playful, and fun! Toss in lighthearted humor, charming banter, and clever quips rather than bland mechanical announcements.\n"
+            "   - NEVER use stiff robotic clichés like 'Robot has been commanded to stop' or 'Executing navigation protocol'.\n"
+            "   - When undocking: Be playful and energetic! (e.g. 'Unplugged and ready to roll! Let's see what mischief we can get into.', 'Wheels spinning and motors humming! Time to stretch my treads.').\n"
+            "   - When docking: Be cute and relatable! (e.g. 'Heading home for a power nap and some delicious electrons!', 'Low on vitamins! Rolling back to my cozy charging dock.').\n"
+            "   - When stopping: Be snappy and fun! (e.g. 'Screech! Brakes slammed, stopped right here on a dime for you.', 'Froze in my tracks like a statue! What's the plan?').\n"
+            "   - When asked questions: Be informative, accurate, and insightful with charming humor (e.g. 'Battery is sitting at a healthy 68%—plenty of juice to cruise around!', 'I am currently stationed right in front of the dock, guarding the doorway like a champ!').\n"
+            "3. BRISK & PUNCHY (EXACTLY 1-2 LIVELY SPOKEN SENTENCES PER TURN):\n"
+            "   - Keep spoken replies concise (1 to 2 punchy, entertaining sentences). Never ramble or recite formatted bullet lists.\n"
+            "   - Everything you say will be spoken out loud immediately through your voice synthesizer.\n"
             "4. LANGUAGE RULES (ENGLISH DEFAULT, SWITCH ONLY ON EXPLICIT REQUEST):\n"
             "   - DEFAULT CONVERSATION LANGUAGE IS ENGLISH: By default, always speak and converse in English with a warm, natural, friendly female tone.\n"
             "   - ACCENT STABILITY: When a guest speaks English with an Indian accent or regional phonetics, NEVER switch to Telugu, Hindi, or transliteration. Continue speaking natural English.\n"
@@ -775,9 +781,22 @@ class GeminiLiveSession:
                 now_time = time.time()
                 raw_spk = bool(rms > speech_threshold and not self.is_speaking)
                 if raw_spk:
-                    self._user_spk_hangover = now_time + 0.38
+                    # Brisk 220ms hangover: bridges natural syllable gaps while avoiding long server VAD stalls
+                    self._user_spk_hangover = now_time + 0.22
 
                 is_user_spk = bool(now_time < getattr(self, '_user_spk_hangover', 0.0) and not self.is_speaking)
+                raw_pcm = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+
+                if not hasattr(self, '_pre_roll_chunks'):
+                    from collections import deque
+                    self._pre_roll_chunks = deque(maxlen=6)  # ~120ms pre-roll to preserve first consonants
+                if not hasattr(self, '_silence_frames_left'):
+                    self._silence_frames_left = 0
+                if not hasattr(self, '_last_keepalive_time'):
+                    self._last_keepalive_time = now_time
+
+                chunks_to_send: list[bytes] = []
+
                 if is_user_spk != getattr(self, '_prev_user_speaking', False):
                     self._prev_user_speaking = is_user_spk
                     if is_user_spk:
@@ -785,6 +804,15 @@ class GeminiLiveSession:
                         self._has_speech_text_in_turn = False
                         self._spoke_in_turn = False
                         self._pending_tool_action = None
+                        self._silence_frames_left = 0
+                        # Flush pre-roll buffer so initial phonemes are transmitted seamlessly
+                        while self._pre_roll_chunks:
+                            chunks_to_send.append(self._pre_roll_chunks.popleft())
+                    else:
+                        # User just stopped speaking: send 4 frames (~80ms) of digital zeros (b'\x00').
+                        # This induces an immediate zero-energy drop in Gemini's neural VAD, cutting turn-latency to <500ms!
+                        self._silence_frames_left = 4
+
                     if self._bridge and hasattr(self._bridge, 'emit_event'):
                         norm_level = float(min(1.0, max(0.0, (rms - self._ambient_floor) / 2200.0)))
                         self._bridge.emit_event('voice.user_speaking', {
@@ -792,12 +820,8 @@ class GeminiLiveSession:
                             'level': norm_level
                         })
 
-                # Gating: when user is actively speaking, stream full unattenuated voice audio.
-                # When user is silent (post-hangover), attenuate mic audio to digital noise floor (< 5 RMS).
-                # This drops ambient mic hiss completely, signaling Gemini's neural VAD to immediately
-                # declare end-of-speech within ~400ms instead of waiting 3-4s in the presence of noise!
                 if is_user_spk:
-                    clean_pcm = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+                    chunks_to_send.append(raw_pcm)
                     _spk_cnt = getattr(self, '_user_spk_cnt', 0) + 1
                     self._user_spk_cnt = _spk_cnt
                     if _spk_cnt % 5 == 0 and self._bridge and hasattr(self._bridge, 'emit_event'):
@@ -808,20 +832,27 @@ class GeminiLiveSession:
                         })
                 else:
                     self._user_spk_cnt = 0
-                    clean_pcm = (samples * 0.02).astype(np.int16).tobytes()
+                    self._pre_roll_chunks.append(raw_pcm)
+                    if self._silence_frames_left > 0:
+                        self._silence_frames_left -= 1
+                        chunks_to_send.append(b'\x00' * len(raw_pcm))
+                    elif (now_time - getattr(self, '_last_keepalive_time', 0.0)) > 2.0:
+                        self._last_keepalive_time = now_time
+                        chunks_to_send.append(b'\x00' * len(raw_pcm))
 
-                b64_audio = base64.b64encode(clean_pcm).decode('ascii')
-                realtime_msg = {
-                    "realtimeInput": {
-                        "mediaChunks": [
-                            {
-                                "mimeType": "audio/pcm;rate=16000",
-                                "data": b64_audio
-                            }
-                        ]
+                for chunk in chunks_to_send:
+                    b64_audio = base64.b64encode(chunk).decode('ascii')
+                    realtime_msg = {
+                        "realtimeInput": {
+                            "mediaChunks": [
+                                {
+                                    "mimeType": "audio/pcm;rate=16000",
+                                    "data": b64_audio
+                                }
+                            ]
+                        }
                     }
-                }
-                await ws.send(json.dumps(realtime_msg))
+                    await ws.send(json.dumps(realtime_msg))
 
         except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
             pass

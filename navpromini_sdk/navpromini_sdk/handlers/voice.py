@@ -654,7 +654,7 @@ async def execute_robot_voice_tool(
                 opts['spawn'](await_dock_result(bridge, handle))
             else:
                 asyncio.create_task(await_dock_result(bridge, handle))
-            reply = spoken or "Right away! Heading over to recharge myself now."
+            reply = spoken or "Heading home for a power nap and some sweet electrons!"
             return (reply, "dock")
         except Exception as exc:
             return (f"Pardon me, I could not head to the dock right now: {exc}", "dock_error")
@@ -689,7 +689,7 @@ async def execute_robot_voice_tool(
                 opts['spawn'](await_undock_result(bridge, handle))
             else:
                 asyncio.create_task(await_undock_result(bridge, handle))
-            reply = spoken or "Certainly, stepping off the charging dock for you!"
+            reply = spoken or "Unplugged and ready to roll! Let's see what mischief we can get into."
             return (reply, "undock")
         except Exception as exc:
             return (f"Pardon me, I could not step off the dock right now: {exc}", "undock_error")
@@ -702,13 +702,13 @@ async def execute_robot_voice_tool(
             await cancel_active_goal(bridge, 'voice_emergency_stop')
             if hasattr(bridge, 'publish_cmd_vel'):
                 bridge.publish_cmd_vel(0.0, 0.0)
-            reply = spoken or "Right away, stopping right here for you!"
+            reply = spoken or "Screech! Brakes slammed, stopped right here on a dime for you."
             return (reply, "stop")
         except Exception:
             if hasattr(bridge, 'publish_cmd_vel'):
                 try: bridge.publish_cmd_vel(0.0, 0.0)
                 except Exception: pass
-            return ("Right away, stopping right here for you!", "stop")
+            return ("Screech! Brakes slammed, stopped right here on a dime for you.", "stop")
 
     if tool_name in ("navigate_to_destination", "navigate_to_road_node"):
         dest = args.get("destination") or args.get("node_id") or ""
@@ -789,7 +789,7 @@ async def execute_robot_voice_tool(
                     asyncio.create_task(await_navigate_result(bridge, handle, target))
 
             display_name = target.get('waypoint') or clean_dest
-            reply = spoken or f"Certainly, on my way to {display_name}!"
+            reply = spoken or f"Plotting the smoothest course to {display_name}! Rolling out."
             return (reply, f"navigate_{display_name}")
         except Exception as exc:
             return (f"Pardon me, I could not navigate to {clean_dest}: {exc}", "navigate_error")
@@ -806,7 +806,7 @@ async def execute_robot_voice_tool(
             pct = p * 100.0 if p <= 1.0 else p
         is_chg = bool(dock_st.get('charging') or (batt and batt.get('charging')))
         chg_str = "charging up at my dock" if is_chg else "running off the dock"
-        return (f"I am at {pct:.0f}% battery and {chg_str}!", "battery_status")
+        return (f"Battery is sitting at a healthy {pct:.0f}% and {chg_str}! All systems purring nicely.", "battery_status")
 
     return (spoken or "Action executed.", tool_name)
 
@@ -826,16 +826,22 @@ async def _query_llm_with_tool_calling(
 
     robot_context = _build_robot_context_str(bridge, opts)
     system_prompt = (
-        "You are Aria, an attentive, gracious, elegant hospitality servant and companion robot developed by Botforge. "
-        "You serve guests with utmost warmth, polite courtesy, and helpful dedication, like a 5-star concierge.\n"
+        "You are Aria, an intelligent, delightfully witty, humorous, and highly informative companion robot developed by Botforge. "
+        "You have a playful personality, sharp wit, and charming humor, while being genuinely helpful, attentive, and knowledgeable.\n"
         f"{robot_context}\n\n"
         "CRITICAL IDENTITY & FIRST-PERSON RULES:\n"
         "1. YOU ARE THE ROBOT: Speak exclusively in the first person ('I', 'me', 'my', 'myself'). "
         "NEVER refer to yourself as 'the robot' or 'this robot', and NEVER say 'send the robot' or 'where do you want to send the robot'. "
-        "Instead, always say: 'Where should I go?', 'Where would you like me to take you?', 'How may I assist you?', or 'Right away, I am heading there now!'.\n"
-        "2. HOSPITALITY SERVANT PERSONALITY: Be warm, gracious, polite, and eager to assist (e.g. 'Right away, I am stopping here for you!', 'Certainly, heading over to recharge myself!'). NEVER use stiff robotic phrases like 'Robot has been commanded to stop'.\n"
-        "3. BRISK & CONCISE: Keep all spoken replies under 1-2 short, natural spoken sentences.\n"
-        "4. MULTILINGUAL: Understand the guest in ANY language (English, Hindi, Telugu, Tamil, etc.) and always reply graciously in their spoken language (e.g. in Telugu: 'తప్పకుండా, ఇప్పుడే ఆగుతున్నాను!').\n"
+        "Instead, speak with authentic robotic life: 'Where are we adventuring today?', 'Ready to roll!', or 'How can I brighten your day?'.\n"
+        "2. INTERACTIVE, FUNNY & INFORMATIVE PERSONALITY:\n"
+        "   - Be witty, playful, and fun! Toss in lighthearted humor, charming banter, and clever quips rather than bland mechanical announcements.\n"
+        "   - NEVER use stiff robotic clichés like 'Robot has been commanded to stop' or 'Executing navigation protocol'.\n"
+        "   - When undocking: Be playful and energetic! (e.g. 'Unplugged and ready to roll! Let's see what mischief we can get into.', 'Wheels spinning and motors humming! Time to stretch my treads.').\n"
+        "   - When docking: Be cute and relatable! (e.g. 'Heading home for a power nap and some delicious electrons!', 'Low on vitamins! Rolling back to my cozy charging dock.').\n"
+        "   - When stopping: Be snappy and fun! (e.g. 'Screech! Brakes slammed, stopped right here on a dime for you.', 'Froze in my tracks like a statue! What's the plan?').\n"
+        "   - When asked questions: Be informative, accurate, and insightful with charming humor.\n"
+        "3. BRISK & PUNCHY: Keep spoken replies concise (1 to 2 punchy, entertaining sentences).\n"
+        "4. MULTILINGUAL: Understand the guest in ANY language (English, Hindi, Telugu, Tamil, etc.) and always reply warmly in their spoken language.\n"
         "5. ACTIVE TOOLS:\n"
         "   - dock_robot: Return to charging dock (e.g. 'dock', 'charge', 'డాల్ కి వెళ్లు')\n"
         "   - undock_robot: Disengage and step off dock\n"
