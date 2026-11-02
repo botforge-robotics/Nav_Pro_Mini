@@ -394,21 +394,21 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    polygons: ["StopZone", "FootprintApproach"]
+    polygons: ["FootprintApproach"]
     StopZone:
       type: "polygon"
-      points: "[[0.18, 0.20], [0.18, -0.20], [-0.16, -0.20], [-0.16, 0.20]]"
+      points: "[[0.15, 0.16], [0.15, -0.16], [-0.14, -0.16], [-0.14, 0.16]]"
       action_type: "stop"
-      min_points: 4
+      min_points: 6
       visualize: False
-      enabled: True
+      enabled: False
     FootprintApproach:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
-      time_before_collision: 1.2
+      time_before_collision: 1.0
       simulation_time_step: 0.05
-      min_points: 2
+      min_points: 3
       visualize: False
       enabled: True
     SlowdownEarly:
