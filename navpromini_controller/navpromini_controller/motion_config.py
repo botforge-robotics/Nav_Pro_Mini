@@ -100,8 +100,8 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
         'step': 0.001,
         'unit': 'm/s²',
         'label': 'Linear Acceleration',
-        'desc': 'Auto-computed: max_linear_speed / 4.0 (prevents wheel slip on smooth tile)',
-        'auto_formula': 'v_max / 4',
+        'desc': 'Auto-computed: max_linear_speed / 7.0 (gentle ramp, zero overshoot on turns)',
+        'auto_formula': 'v_max / 7',
     },
     'linear_decel': {
         'min': -0.40,
@@ -109,8 +109,8 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
         'step': 0.001,
         'unit': 'm/s²',
         'label': 'Linear Deceleration',
-        'desc': 'Auto-computed: -max_linear_speed / 2.0 (safe progressive stopping rate)',
-        'auto_formula': '-v_max / 2',
+        'desc': 'Auto-computed: -max_linear_speed / 3.0 (controlled progressive stopping rate)',
+        'auto_formula': '-v_max / 3',
     },
     'angular_accel': {
         'min': 0.10,
@@ -118,8 +118,8 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
         'step': 0.01,
         'unit': 'rad/s²',
         'label': 'Angular Acceleration',
-        'desc': 'Auto-computed: max_angular_speed * 1.67 (smooth rotational ramp)',
-        'auto_formula': 'w_max * 1.67',
+        'desc': 'Auto-computed: max_angular_speed * 1.10 (smooth rotational ramp)',
+        'auto_formula': 'w_max * 1.1',
     },
     'undock_speed': {
         'min': 0.05,
