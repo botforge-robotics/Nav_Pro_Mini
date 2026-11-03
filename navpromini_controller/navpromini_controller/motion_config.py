@@ -25,9 +25,9 @@ DEFAULT_MOTION_SETTINGS: Dict[str, float] = {
     'min_linear_speed': 0.05,     # m/s (Creep speed near goal tolerance)
     'max_angular_speed': 0.30,    # rad/s (~17.2 deg/s, calm heading alignment)
     'min_angular_speed': 0.10,    # rad/s (~5.7 deg/s)
-    'linear_accel': 0.088,        # m/s^2 (Auto-computed: max_linear_speed / 4.0, zero wheel slip)
-    'linear_decel': -0.175,       # m/s^2 (Auto-computed: -max_linear_speed / 2.0, smooth stopping)
-    'angular_accel': 0.50,        # rad/s^2 (Auto-computed: max_angular_speed * 1.67)
+    'linear_accel': 0.050,        # m/s^2 (Auto-computed: max_linear_speed / 7.0, gentle anti-overshoot ramp)
+    'linear_decel': -0.117,       # m/s^2 (Auto-computed: -max_linear_speed / 3.0, smooth stopping)
+    'angular_accel': 0.33,        # rad/s^2 (Auto-computed: max_angular_speed * 1.10)
     'undock_speed': 0.13,         # m/s (Doubled undock roll-off speed)
     'dock_speed': 0.13,           # m/s (Doubled dock visual servo approach speed)
 }
@@ -39,16 +39,17 @@ def compute_derived_accelerations(
     """Auto-configure linear and angular acceleration/deceleration from max speeds.
 
     Formulas:
-      - linear_accel = max_linear_speed / 4.0
-        Ramps gently to max speed in ~4.0s without wheel slip or odometry drift.
-      - linear_decel = -max_linear_speed / 2.0  (= -2.0 * linear_accel)
-        Safe obstacle and goal stopping brake rate without pitching or sliding.
-      - angular_accel = max_angular_speed * 1.67
-        Smooth rotational acceleration entering/exiting heading turns.
+      - linear_accel = max_linear_speed / 7.0
+        Gentle acceleration ramp (0.029 m/s² at 0.2 m/s, 0.050 m/s² at 0.35 m/s).
+        Prevents surging forward on small turns and overshooting road network lines.
+      - linear_decel = -max_linear_speed / 3.0
+        Smooth, firm stopping brake rate without pitching or wheel skid.
+      - angular_accel = max_angular_speed * 1.10
+        Smooth rotational acceleration matching heading turn rate.
     """
     v_max = float(max_linear_speed)
-    acc_lin = round(v_max / 4.0 + 1e-9, 3)
-    dec_lin = -round(v_max / 2.0 + 1e-9, 3)
+    acc_lin = round(v_max / 7.0 + 1e-9, 3)
+    dec_lin = -round(v_max / 3.0 + 1e-9, 3)
 
     out = {
         'linear_accel': acc_lin,
@@ -56,7 +57,7 @@ def compute_derived_accelerations(
     }
     if max_angular_speed is not None:
         w_max = float(max_angular_speed)
-        out['angular_accel'] = round(w_max * 1.67, 2)
+        out['angular_accel'] = round(w_max * 1.10, 2)
     return out
 
 # Safety clamps: absolute min/max limits that cannot be violated
@@ -321,9 +322,9 @@ def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict
     min_lin = float(cfg.get('min_linear_speed', 0.05))
     max_ang = float(cfg.get('max_angular_speed', 0.30))
     min_ang = float(cfg.get('min_angular_speed', 0.10))
-    acc_lin = float(cfg.get('linear_accel', 0.088))
-    dec_lin = float(cfg.get('linear_decel', -0.175))
-    acc_ang = float(cfg.get('angular_accel', 0.50))
+    acc_lin = float(cfg.get('linear_accel', 0.050))
+    dec_lin = float(cfg.get('linear_decel', -0.117))
+    acc_ang = float(cfg.get('angular_accel', 0.33))
     dec_ang = -1.0 * abs(acc_ang) * 1.4
 
     return {
@@ -331,6 +332,13 @@ def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict
         'controller_server.ros__parameters.FollowPath.min_approach_linear_velocity': min_lin,
         'controller_server.ros__parameters.FollowPath.rotate_to_heading_angular_vel': max_ang,
         'controller_server.ros__parameters.FollowPath.max_angular_accel': acc_ang,
+        'controller_server.ros__parameters.FollowPath.rotate_to_heading_min_angle': 0.15,
+        'controller_server.ros__parameters.FollowPath.lookahead_dist': 0.20,
+        'controller_server.ros__parameters.FollowPath.min_lookahead_dist': 0.15,
+        'controller_server.ros__parameters.FollowPath.max_lookahead_dist': 0.45,
+        'controller_server.ros__parameters.FollowPath.lookahead_time': 1.0,
+        'controller_server.ros__parameters.FollowPath.regulated_linear_scaling_min_radius': 0.90,
+        'controller_server.ros__parameters.FollowPath.regulated_linear_scaling_min_speed': 0.04,
         'controller_server.ros__parameters.FollowPathDWB.max_vel_x': max_lin,
         'controller_server.ros__parameters.FollowPathDWB.max_speed_xy': max_lin,
         'controller_server.ros__parameters.FollowPathDWB.max_vel_theta': max_ang,
@@ -338,6 +346,8 @@ def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict
         'controller_server.ros__parameters.FollowPathDWB.acc_lim_x': acc_lin,
         'controller_server.ros__parameters.FollowPathDWB.acc_lim_theta': acc_ang,
         'controller_server.ros__parameters.FollowPathDWB.decel_lim_x': dec_lin,
+        'route_server.ros__parameters.radius_to_achieve_node': 0.25,
+        'route_server.ros__parameters.boundary_radius_to_achieve_node': 0.20,
         'velocity_smoother.ros__parameters.max_velocity': [max_lin, 0.0, max_ang],
         'velocity_smoother.ros__parameters.min_velocity': [-0.08, 0.0, -max_ang],
         'velocity_smoother.ros__parameters.max_accel': [acc_lin, 0.0, acc_ang],

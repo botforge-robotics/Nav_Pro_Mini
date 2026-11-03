@@ -147,10 +147,30 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
                 p_double('FollowPath.min_approach_linear_velocity', min_lin),
                 p_double('FollowPath.rotate_to_heading_angular_vel', max_ang),
                 p_double('FollowPath.max_angular_accel', acc_ang),
+                p_double('FollowPath.rotate_to_heading_min_angle', 0.15),
+                p_double('FollowPath.lookahead_dist', 0.20),
+                p_double('FollowPath.min_lookahead_dist', 0.15),
+                p_double('FollowPath.max_lookahead_dist', 0.45),
+                p_double('FollowPath.lookahead_time', 1.0),
+                p_double('FollowPath.regulated_linear_scaling_min_radius', 0.90),
+                p_double('FollowPath.regulated_linear_scaling_min_speed', 0.04),
             ]
             cs_client.call_async(req)
     except Exception as e:
         node.get_logger().debug(f'Could not set controller_server params: {e}')
+
+    # 3. route_server
+    try:
+        rs_client = node.create_client(SetParameters, '/route_server/set_parameters')
+        if rs_client.service_is_ready() or rs_client.wait_for_service(timeout_sec=0.5):
+            req = SetParameters.Request()
+            req.parameters = [
+                p_double('radius_to_achieve_node', 0.25),
+                p_double('boundary_radius_to_achieve_node', 0.20),
+            ]
+            rs_client.call_async(req)
+    except Exception as e:
+        node.get_logger().debug(f'Could not set route_server params: {e}')
 
     # 3. behavior_server
     try:
