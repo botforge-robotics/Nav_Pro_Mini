@@ -155,6 +155,7 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/dock/debug_image', docking.DockDebugImageHandler, opts),
         (rf'{API}/dock/stream.mjpg', docking.DockDebugStreamHandler, opts),
         # motion
+        (rf'{API}/motion/settings/set_as_default', motion.MotionSettingsSetDefaultHandler, opts),
         (rf'{API}/motion/settings/restore_defaults', motion.MotionSettingsRestoreHandler, opts),
         (rf'{API}/motion/settings', motion.MotionSettingsHandler, opts),
         (rf'{API}/motion/velocity', motion.VelocityHandler, opts),

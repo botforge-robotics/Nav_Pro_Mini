@@ -186,12 +186,12 @@ class MotionSettingsHandler(BaseHandler):
     def get(self) -> None:
         try:
             from navpromini_controller.motion_config import (
-                DEFAULT_MOTION_SETTINGS,
                 SAFETY_LIMITS,
+                get_default_motion_settings,
                 get_motion_settings,
             )
             settings = get_motion_settings()
-            defaults = DEFAULT_MOTION_SETTINGS
+            defaults = get_default_motion_settings()
             limits = SAFETY_LIMITS
         except Exception as e:
             self.fail(500, 'motion_config_error', f'Could not read motion configuration: {e}')
@@ -225,22 +225,41 @@ class MotionSettingsHandler(BaseHandler):
 
 
 class MotionSettingsRestoreHandler(BaseHandler):
-    """Restore all motion settings to their calibrated baseline defaults in the robot SQLite database."""
+    """Restore all motion settings to their default speeds in the robot database."""
 
     def post(self) -> None:
         try:
             from navpromini_controller.motion_config import (
-                DEFAULT_MOTION_SETTINGS,
+                get_default_motion_settings,
                 restore_default_motion_settings,
             )
             restored = restore_default_motion_settings()
+            defaults = get_default_motion_settings()
             apply_live_motion_parameters(self.bridge, restored)
             self.send({
                 'success': True,
                 'settings': restored,
-                'defaults': DEFAULT_MOTION_SETTINGS,
-                'message': 'Motion settings restored to defaults in robot database.',
+                'defaults': defaults,
+                'message': 'Motion settings restored to defaults.',
             })
         except Exception as e:
             self.fail(500, 'restore_failed', f'Failed to restore default motion settings: {e}')
+
+
+class MotionSettingsSetDefaultHandler(BaseHandler):
+    """Save present motion settings as the new default speeds in the robot database."""
+
+    def post(self) -> None:
+        try:
+            from navpromini_controller.motion_config import (
+                set_current_as_default_motion_settings,
+            )
+            defaults = set_current_as_default_motion_settings()
+            self.send({
+                'success': True,
+                'defaults': defaults,
+                'message': 'Present motion settings saved as default speeds.',
+            })
+        except Exception as e:
+            self.fail(500, 'set_default_failed', f'Failed to save present settings as defaults: {e}')
 

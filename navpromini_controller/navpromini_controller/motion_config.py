@@ -247,9 +247,70 @@ def save_motion_settings(new_settings: Dict[str, Any]) -> Dict[str, float]:
     return current
 
 
+def get_default_motion_settings() -> Dict[str, float]:
+    """Retrieve default motion settings (reads custom defaults from DB if stored, else baseline)."""
+    defaults = dict(DEFAULT_MOTION_SETTINGS)
+    db_path = get_db_path()
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            with conn:
+                conn.execute(
+                    'CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+                )
+                row = conn.execute(
+                    'SELECT value FROM kv WHERE key = ?', ('motion_defaults',)
+                ).fetchone()
+                if row and row[0]:
+                    loaded = json.loads(row[0])
+                    if isinstance(loaded, dict):
+                        for k, v in loaded.items():
+                            if k in DEFAULT_MOTION_SETTINGS:
+                                defaults[k] = clamp_setting(k, v)
+            conn.close()
+        except Exception as exc:
+            print(f"[motion_config] Warning reading defaults from DB ({db_path}): {exc}")
+
+    # Synchronize formula-derived parameters
+    max_lin = defaults.get('max_linear_speed', DEFAULT_MOTION_SETTINGS['max_linear_speed'])
+    max_ang = defaults.get('max_angular_speed', DEFAULT_MOTION_SETTINGS['max_angular_speed'])
+    derived = compute_derived_accelerations(max_lin, max_ang)
+    defaults['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
+    defaults['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
+    defaults['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
+    return defaults
+
+
+def set_current_as_default_motion_settings() -> Dict[str, float]:
+    """Persist the present active motion settings as the new default motion settings in SQLite."""
+    current = get_motion_settings()
+    db_path = get_db_path()
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        with conn:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA synchronous=FULL')
+            conn.execute(
+                'CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+            )
+            raw = json.dumps(current, indent=2)
+            conn.execute(
+                'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
+                ('motion_defaults', raw),
+            )
+        conn.close()
+    except Exception as exc:
+        print(f"[motion_config] Warning saving defaults to DB ({db_path}): {exc}")
+        raise
+
+    return current
+
+
 def restore_default_motion_settings() -> Dict[str, float]:
-    """Revert the robot SQLite database to the finalized default motion settings."""
-    return save_motion_settings(DEFAULT_MOTION_SETTINGS)
+    """Revert the robot SQLite database to the default motion settings."""
+    defaults = get_default_motion_settings()
+    return save_motion_settings(defaults)
 
 
 def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
