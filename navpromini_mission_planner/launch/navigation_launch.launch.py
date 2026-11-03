@@ -9,6 +9,8 @@ App launch ref: navpromini_mission_planner/navigation_launch
 """
 
 import os
+import tempfile
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -168,29 +170,70 @@ def launch_setup(context, *args, **kwargs):
 
     # Preload road network in RouteServer if available for this map
     roadnet_geojson = os.path.join(maps_share_dir, f'{base_map_name}_roadnet.geojson')
-    nav2_rewrites = {}
-    if os.path.isfile(roadnet_geojson):
-        nav2_rewrites['route_server.ros__parameters.graph_filepath'] = roadnet_geojson
-        print(f"[navigation_launch] Preloading RouteServer graph: {roadnet_geojson}")
 
     # Preload dynamic motion settings from robot SQLite database (single source of truth)
+    motion_settings = None
     try:
-        from navpromini_controller.motion_config import get_motion_settings, get_nav2_param_rewrites
+        from navpromini_controller.motion_config import get_motion_settings
         motion_settings = get_motion_settings()
-        dyn_rewrites = get_nav2_param_rewrites(motion_settings)
-        nav2_rewrites.update(dyn_rewrites)
         print(f"[navigation_launch] Loaded dynamic motion settings from robot DB: {motion_settings}")
     except Exception as e:
         print(f"[navigation_launch] Note: using default motion settings ({e})")
 
-    if nav2_rewrites:
-        nav2_params_to_use = RewrittenYaml(
-            source_file=nav2_params,
-            param_rewrites=nav2_rewrites,
-            convert_types=True,
-        )
-    else:
-        nav2_params_to_use = nav2_params.perform(context)
+    base_nav2_file = nav2_params.perform(context)
+    try:
+        with open(base_nav2_file, 'r') as f:
+            yaml_data = yaml.safe_load(f)
+
+        if os.path.isfile(roadnet_geojson):
+            yaml_data.setdefault('route_server', {}).setdefault('ros__parameters', {})['graph_filepath'] = roadnet_geojson
+            print(f"[navigation_launch] Preloading RouteServer graph: {roadnet_geojson}")
+
+        if motion_settings:
+            max_lin = float(motion_settings.get('max_linear_speed', 0.35))
+            min_lin = float(motion_settings.get('min_linear_speed', 0.05))
+            max_ang = float(motion_settings.get('max_angular_speed', 0.30))
+            min_ang = float(motion_settings.get('min_angular_speed', 0.10))
+            acc_lin = float(motion_settings.get('linear_accel', 0.09))
+            dec_lin = float(motion_settings.get('linear_decel', -0.18))
+            acc_ang = float(motion_settings.get('angular_accel', 0.50))
+            dec_ang = -1.0 * abs(acc_ang) * 1.4
+
+            cs_params = yaml_data.setdefault('controller_server', {}).setdefault('ros__parameters', {})
+            fp = cs_params.setdefault('FollowPath', {})
+            fp['desired_linear_vel'] = max_lin
+            fp['min_approach_linear_velocity'] = min_lin
+            fp['rotate_to_heading_angular_vel'] = max_ang
+            fp['max_angular_accel'] = acc_ang
+
+            dwb = cs_params.setdefault('FollowPathDWB', {})
+            dwb['max_vel_x'] = max_lin
+            dwb['max_speed_xy'] = max_lin
+            dwb['max_vel_theta'] = max_ang
+            dwb['max_speed_theta'] = max_ang
+            dwb['acc_lim_x'] = acc_lin
+            dwb['acc_lim_theta'] = acc_ang
+            dwb['decel_lim_x'] = dec_lin
+
+            vs_params = yaml_data.setdefault('velocity_smoother', {}).setdefault('ros__parameters', {})
+            vs_params['max_velocity'] = [max_lin, 0.0, max_ang]
+            vs_params['min_velocity'] = [-0.08, 0.0, -max_ang]
+            vs_params['max_accel'] = [acc_lin, 0.0, acc_ang]
+            vs_params['max_decel'] = [dec_lin, 0.0, dec_ang]
+
+            bs_params = yaml_data.setdefault('behavior_server', {}).setdefault('ros__parameters', {})
+            bs_params['max_rotational_vel'] = max_ang
+            bs_params['min_rotational_vel'] = min_ang
+            bs_params['rotational_acc_lim'] = acc_ang
+
+        tmp = tempfile.NamedTemporaryFile(mode='w', prefix='nav2_dyn_', suffix='.yaml', delete=False)
+        yaml.dump(yaml_data, tmp)
+        tmp.close()
+        nav2_params_to_use = tmp.name
+        print(f"[navigation_launch] Configured dynamic Nav2 YAML: {nav2_params_to_use}")
+    except Exception as exc:
+        print(f"[navigation_launch] Error generating dynamic Nav2 YAML: {exc}; using base params file")
+        nav2_params_to_use = base_nav2_file
 
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
     launch_nav2 = PathJoinSubstitution(
