@@ -155,6 +155,7 @@ class DockManagerNode(Node):
         self._tag: Optional[list] = None
         self._tag_stamp = 0.0
         self._power: Optional[int] = None
+        self._batt_current: float = 0.0
         self._odom: Optional[Odometry] = None
         self._amcl_pose: Optional[PoseWithCovarianceStamped] = None
 
@@ -280,19 +281,22 @@ class DockManagerNode(Node):
         if self._status == 'undocking':
             return False
 
+        batt_current = getattr(self, '_batt_current', 0.0)
+        power = getattr(self, '_power', None)
+
         # 1. Hardware current ground truth: positive current flowing into the pack (>50mA)
         # proves physical electrical contact with the energized charging dock.
-        if self._batt_current > 0.05:
+        if batt_current > 0.05:
             return True
 
         # 2. Active BMS charging status:
-        if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING and self._batt_current > -0.05:
+        if power == BatteryState.POWER_SUPPLY_STATUS_CHARGING and batt_current > -0.05:
             return True
 
         # 3. Battery full float on charger:
         # BMS reports FULL or NOT_CHARGING. Robot MUST be physically inside the dock slot!
-        if self._power in (BatteryState.POWER_SUPPLY_STATUS_FULL, BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING):
-            if self._batt_current > -0.15 and self._is_spatially_in_dock_slot():
+        if power in (BatteryState.POWER_SUPPLY_STATUS_FULL, BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING):
+            if batt_current > -0.15 and self._is_spatially_in_dock_slot():
                 return True
 
         return False
@@ -1045,6 +1049,11 @@ class DockManagerNode(Node):
                     continue
 
                 await self._tick()
+        except Exception as exc:
+            self.get_logger().error(f'Error executing dock: {exc}', exc_info=True)
+            self._set_status('dock_failed')
+            goal_handle.abort()
+            return DockRobot.Result(success=False, error_msg=str(exc))
         finally:
             self._stop()
             await self._set_camera(False)
@@ -1196,6 +1205,11 @@ class DockManagerNode(Node):
                 goal_handle.abort()
                 return nav_result.result
 
+        except Exception as exc:
+            self.get_logger().error(f'Error executing undock: {exc}', exc_info=True)
+            self._set_status('undock_failed')
+            goal_handle.abort()
+            return NavigateToPose.Result()
         finally:
             self._stop()
             self._busy = False
