@@ -173,6 +173,16 @@ def launch_setup(context, *args, **kwargs):
         nav2_rewrites['route_server.ros__parameters.graph_filepath'] = roadnet_geojson
         print(f"[navigation_launch] Preloading RouteServer graph: {roadnet_geojson}")
 
+    # Preload dynamic motion settings from robot SQLite database (single source of truth)
+    try:
+        from navpromini_controller.motion_config import get_motion_settings, get_nav2_param_rewrites
+        motion_settings = get_motion_settings()
+        dyn_rewrites = get_nav2_param_rewrites(motion_settings)
+        nav2_rewrites.update(dyn_rewrites)
+        print(f"[navigation_launch] Loaded dynamic motion settings from robot DB: {motion_settings}")
+    except Exception as e:
+        print(f"[navigation_launch] Note: using default motion settings ({e})")
+
     if nav2_rewrites:
         nav2_params_to_use = RewrittenYaml(
             source_file=nav2_params,

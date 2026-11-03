@@ -86,3 +86,161 @@ class RotateHandler(BaseHandler):
         goal.time_allowance.sec = int(abs(angle) / 0.3 * 4.0 + 10.0)
         await send_goal(goal=goal, action_client=self.bridge.act_spin, name='spin')
         self.send({'accepted': True, 'angle': angle})
+
+
+def apply_live_motion_parameters(node, settings: dict) -> None:
+    """Asynchronously update active ROS 2 nodes with dynamic motion parameters."""
+    if node is None:
+        return
+    try:
+        from rcl_interfaces.msg import Parameter as RclParam, ParameterType, ParameterValue
+        from rcl_interfaces.srv import SetParameters
+    except ImportError:
+        return
+
+    def p_double(name: str, val: float) -> RclParam:
+        return RclParam(
+            name=name,
+            value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(val)),
+        )
+
+    def p_double_array(name: str, vals: list) -> RclParam:
+        return RclParam(
+            name=name,
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE_ARRAY,
+                double_array_value=[float(x) for x in vals],
+            ),
+        )
+
+    max_lin = float(settings.get('max_linear_speed', 0.35))
+    min_lin = float(settings.get('min_linear_speed', 0.05))
+    max_ang = float(settings.get('max_angular_speed', 0.30))
+    min_ang = float(settings.get('min_angular_speed', 0.10))
+    acc_lin = float(settings.get('linear_accel', 0.09))
+    dec_lin = float(settings.get('linear_decel', -0.18))
+    acc_ang = float(settings.get('angular_accel', 0.50))
+    dec_ang = -1.0 * abs(acc_ang) * 1.4
+
+    # 1. velocity_smoother
+    try:
+        vs_client = node.create_client(SetParameters, '/velocity_smoother/set_parameters')
+        if vs_client.service_is_ready():
+            req = SetParameters.Request()
+            req.parameters = [
+                p_double_array('max_velocity', [max_lin, 0.0, max_ang]),
+                p_double_array('min_velocity', [-0.08, 0.0, -max_ang]),
+                p_double_array('max_accel', [acc_lin, 0.0, acc_ang]),
+                p_double_array('max_decel', [dec_lin, 0.0, dec_ang]),
+            ]
+            vs_client.call_async(req)
+    except Exception as e:
+        node.get_logger().debug(f'Could not set velocity_smoother params: {e}')
+
+    # 2. controller_server
+    try:
+        cs_client = node.create_client(SetParameters, '/controller_server/set_parameters')
+        if cs_client.service_is_ready():
+            req = SetParameters.Request()
+            req.parameters = [
+                p_double('FollowPath.desired_linear_vel', max_lin),
+                p_double('FollowPath.min_approach_linear_velocity', min_lin),
+                p_double('FollowPath.rotate_to_heading_angular_vel', max_ang),
+                p_double('FollowPath.max_angular_accel', acc_ang),
+            ]
+            cs_client.call_async(req)
+    except Exception as e:
+        node.get_logger().debug(f'Could not set controller_server params: {e}')
+
+    # 3. behavior_server
+    try:
+        bs_client = node.create_client(SetParameters, '/behavior_server/set_parameters')
+        if bs_client.service_is_ready():
+            req = SetParameters.Request()
+            req.parameters = [
+                p_double('max_rotational_vel', max_ang),
+                p_double('min_rotational_vel', min_ang),
+                p_double('rotational_acc_lim', acc_ang),
+            ]
+            bs_client.call_async(req)
+    except Exception as e:
+        node.get_logger().debug(f'Could not set behavior_server params: {e}')
+
+    # 4. navpromini_dock_manager
+    try:
+        dm_client = node.create_client(SetParameters, '/navpromini_dock_manager/set_parameters')
+        if dm_client.service_is_ready():
+            req = SetParameters.Request()
+            req.parameters = [
+                p_double('undock_speed', float(settings.get('undock_speed', 0.13))),
+                p_double('dock_speed', float(settings.get('dock_speed', 0.13))),
+            ]
+            dm_client.call_async(req)
+    except Exception as e:
+        node.get_logger().debug(f'Could not set dock_manager params: {e}')
+
+
+class MotionSettingsHandler(BaseHandler):
+    """Query or update motion and docking tuning parameters stored in robot SQLite database."""
+
+    def get(self) -> None:
+        try:
+            from navpromini_controller.motion_config import (
+                DEFAULT_MOTION_SETTINGS,
+                SAFETY_LIMITS,
+                get_motion_settings,
+            )
+            settings = get_motion_settings()
+            defaults = DEFAULT_MOTION_SETTINGS
+            limits = SAFETY_LIMITS
+        except Exception as e:
+            self.fail(500, 'motion_config_error', f'Could not read motion configuration: {e}')
+            return
+
+        self.send({
+            'success': True,
+            'settings': settings,
+            'defaults': defaults,
+            'safety_limits': limits,
+        })
+
+    def put(self) -> None:
+        try:
+            from navpromini_controller.motion_config import save_motion_settings
+        except Exception as e:
+            self.fail(500, 'motion_config_error', f'Could not load motion configuration: {e}')
+            return
+
+        data = self.body()
+        try:
+            saved = save_motion_settings(data)
+            apply_live_motion_parameters(self.bridge.node, saved)
+            self.send({
+                'success': True,
+                'settings': saved,
+                'message': 'Motion parameters persisted to robot database and applied to live nodes.',
+            })
+        except Exception as e:
+            self.fail(400, 'save_failed', f'Failed to save motion settings: {e}')
+
+
+class MotionSettingsRestoreHandler(BaseHandler):
+    """Restore all motion settings to their calibrated baseline defaults in the robot SQLite database."""
+
+    def post(self) -> None:
+        try:
+            from navpromini_controller.motion_config import (
+                DEFAULT_MOTION_SETTINGS,
+                restore_default_motion_settings,
+            )
+            restored = restore_default_motion_settings()
+            apply_live_motion_parameters(self.bridge.node, restored)
+            self.send({
+                'success': True,
+                'settings': restored,
+                'defaults': DEFAULT_MOTION_SETTINGS,
+                'message': 'Motion settings restored to defaults in robot database.',
+            })
+        except Exception as e:
+            self.fail(500, 'restore_failed', f'Failed to restore default motion settings: {e}')
+

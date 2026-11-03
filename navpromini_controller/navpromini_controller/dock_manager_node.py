@@ -13,6 +13,7 @@ from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped, Quaternion, Twist
 from nav2_msgs.action import DockRobot, NavigateToPose
 from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -81,11 +82,23 @@ class DockManagerNode(Node):
         p('stall_confirm_sec', 1.2)
         p('stall_charge_wait_sec', 10.0)
         p('stall_min_travel_m', 0.08)
+        # Load persisted motion settings from database if available
+        undock_spd = 0.13
+        dock_spd = 0.13
+        try:
+            from .motion_config import get_motion_settings
+            ms = get_motion_settings()
+            undock_spd = float(ms.get('undock_speed', 0.13))
+            dock_spd = float(ms.get('dock_speed', 0.13))
+        except Exception:
+            pass
+
         p('straight_kp', 1.5)
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
         p('undock_distance', 0.45)
-        p('undock_speed', 0.065)
+        p('undock_speed', undock_spd)
+        p('dock_speed', dock_spd)
         p('dock_origin_offset_m', 0.13)
         p('standoff_m', 0.70)
         p('staging_timeout_sec', 300.0)
@@ -124,12 +137,15 @@ class DockManagerNode(Node):
         self._retreat_on_fail = float(g('retreat_on_fail_m'))
         self._undock_distance = float(g('undock_distance'))
         self._undock_speed = float(g('undock_speed'))
+        self._dock_speed = float(g('dock_speed'))
         self._dock_origin_offset = float(g('dock_origin_offset_m'))
         self._standoff = float(g('standoff_m'))
         self._staging_timeout = float(g('staging_timeout_sec'))
         self._marker_timeout = float(g('marker_wait_timeout'))
         self._max_run = float(g('max_run_timeout'))
         self._settle = float(g('settle_sec'))
+
+        self.add_on_set_parameters_callback(self._on_set_parameters)
 
         cb = ReentrantCallbackGroup()
         self._busy = False
@@ -186,6 +202,16 @@ class DockManagerNode(Node):
         self.create_timer(_TICK, self._on_tick, callback_group=cb)
         self.create_timer(1.0, self._publish_status, callback_group=cb)
         self.get_logger().info('dock_manager ready — actions dock / undock')
+
+    def _on_set_parameters(self, params):
+        for p in params:
+            if p.name == 'undock_speed':
+                self._undock_speed = float(p.value)
+                self.get_logger().info(f'Dynamically updated undock_speed to {self._undock_speed:.3f} m/s')
+            elif p.name == 'dock_speed':
+                self._dock_speed = float(p.value)
+                self.get_logger().info(f'Dynamically updated dock_speed to {self._dock_speed:.3f} m/s')
+        return SetParametersResult(successful=True)
 
     def _on_goal(self, _request) -> GoalResponse:
         return GoalResponse.ACCEPT
@@ -961,19 +987,20 @@ class DockManagerNode(Node):
                     step = self._omega_slew * _TICK
                     omega_cmd += max(-step, min(step, target - omega_cmd))
 
-                    # Staged Approach Velocity (boosted to swivel caster wheels into alignment):
-                    # Far (>0.60m): 0.065 m/s
-                    # Medium (0.35m - 0.60m): 0.040 m/s
-                    # Close (0.20m - 0.35m): 0.026 m/s
-                    # Final (<=0.20m): 0.018 m/s (enough momentum for caster wheel trailing alignment)
+                    # Staged Approach Velocity (smooth deceleration as robot nears dock):
+                    # Far (>0.60m): self._dock_speed (doubled to ~0.13 m/s)
+                    # Medium (0.35m - 0.60m): ~62% of dock_speed (0.080 m/s)
+                    # Close (0.20m - 0.35m): ~35% of dock_speed (0.045 m/s)
+                    # Final (<=0.20m): 0.022 m/s (enough momentum for trailing alignment into charging contacts)
+                    max_dock_v = self._dock_speed
                     if tag_z > 0.60:
-                        v_stage = 0.065
+                        v_stage = max_dock_v
                     elif tag_z > 0.35:
-                        v_stage = 0.040
+                        v_stage = max(0.040, max_dock_v * 0.62)
                     elif tag_z > 0.20:
-                        v_stage = 0.026
+                        v_stage = max(0.030, max_dock_v * 0.35)
                     else:
-                        v_stage = 0.018
+                        v_stage = 0.022
 
                     # Slow down to gentle crawl during active angular turns to avoid compound motion blur
                     turn_fraction = abs(target) / max(1e-3, self._max_omega)
