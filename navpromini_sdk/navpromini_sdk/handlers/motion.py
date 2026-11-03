@@ -214,7 +214,7 @@ class MotionSettingsHandler(BaseHandler):
         data = self.body()
         try:
             saved = save_motion_settings(data)
-            apply_live_motion_parameters(self.bridge.node, saved)
+            apply_live_motion_parameters(self.bridge, saved)
             self.send({
                 'success': True,
                 'settings': saved,
@@ -234,7 +234,7 @@ class MotionSettingsRestoreHandler(BaseHandler):
                 restore_default_motion_settings,
             )
             restored = restore_default_motion_settings()
-            apply_live_motion_parameters(self.bridge.node, restored)
+            apply_live_motion_parameters(self.bridge, restored)
             self.send({
                 'success': True,
                 'settings': restored,
