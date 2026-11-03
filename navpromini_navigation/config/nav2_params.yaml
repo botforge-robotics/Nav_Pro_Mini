@@ -93,28 +93,28 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.12
-      lookahead_dist: 0.25
-      min_lookahead_dist: 0.18
-      max_lookahead_dist: 0.30
-      lookahead_time: 1.0
-      use_velocity_scaled_lookahead_dist: false
+      desired_linear_vel: 0.50
+      lookahead_dist: 0.35
+      min_lookahead_dist: 0.25
+      max_lookahead_dist: 0.70
+      lookahead_time: 1.2
+      use_velocity_scaled_lookahead_dist: true
       use_rotate_to_heading: true
-      rotate_to_heading_angular_vel: 0.55
+      rotate_to_heading_angular_vel: 0.50
       rotate_to_heading_min_angle: 0.45
-      max_angular_accel: 3.20
+      max_angular_accel: 2.20
       use_approach_linear_velocity_scaling: true
-      approach_velocity_scaling_dist: 0.35
-      min_approach_linear_velocity: 0.05
+      approach_velocity_scaling_dist: 0.80
+      min_approach_linear_velocity: 0.08
       use_collision_detection: false
-      max_allowed_time_to_collision_up_to_carrot: 0.6
+      max_allowed_time_to_collision_up_to_carrot: 1.2
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.30
-      regulated_linear_scaling_min_speed: 0.02
+      regulated_linear_scaling_min_radius: 0.45
+      regulated_linear_scaling_min_speed: 0.15
       use_cost_regulated_linear_velocity_scaling: true
-      cost_scaling_dist: 0.22
-      cost_scaling_gain: 1.0
-      inflation_cost_scaling_factor: 4.2
+      cost_scaling_dist: 0.45
+      cost_scaling_gain: 1.2
+      inflation_cost_scaling_factor: 3.5
       transform_tolerance: 2.5
       allow_reversing: false
       max_robot_pose_search_dist: 10.0
@@ -126,9 +126,9 @@ controller_server:
       angular_dist_threshold: 0.90
       angular_disengage_threshold: 0.35
       forward_sampling_distance: 0.30
-      rotate_to_heading_angular_vel: 0.31
-      max_angular_accel: 0.55
-      simulate_ahead_time: 1.0
+      rotate_to_heading_angular_vel: 0.50
+      max_angular_accel: 1.20
+      simulate_ahead_time: 1.8
       rotate_to_heading_once: true
       rotate_to_goal_heading: false
       closed_loop: true
@@ -136,19 +136,19 @@ controller_server:
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.175
+      max_vel_x: 0.50
       max_vel_y: 0.0
-      max_vel_theta: 0.44
+      max_vel_theta: 0.55
       min_speed_xy: 0.0
-      max_speed_xy: 0.175
+      max_speed_xy: 0.50
       min_speed_theta: 0.0
-      max_speed_theta: 0.58
-      acc_lim_x: 0.12
+      max_speed_theta: 0.55
+      acc_lim_x: 0.30
       acc_lim_y: 0.0
-      acc_lim_theta: 0.45
-      decel_lim_x: -0.14
+      acc_lim_theta: 1.20
+      decel_lim_x: -0.45
       decel_lim_y: 0.0
-      decel_lim_theta: -0.48
+      decel_lim_theta: -1.80
       vx_samples: 14
       vy_samples: 1
       vtheta_samples: 24
@@ -185,8 +185,8 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 8.0
-      publish_frequency: 2.0
+      update_frequency: 10.0
+      publish_frequency: 4.0
       global_frame: odom
       robot_base_frame: base_link
       transform_tolerance: 2.5
@@ -213,14 +213,14 @@ local_costmap:
           obstacle_min_range: 0.14
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.2
-        inflation_radius: 0.32
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.48
       always_send_full_costmap: True
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 2.5
+      update_frequency: 3.0
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
@@ -259,8 +259,8 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.2
-        inflation_radius: 0.32
+        cost_scaling_factor: 3.8
+        inflation_radius: 0.40
       always_send_full_costmap: True
 
 map_saver:
@@ -332,10 +332,10 @@ behavior_server:
     global_frame: map
     robot_base_frame: base_link
     transform_tolerance: 2.5
-    simulate_ahead_time: 0.8
-    max_rotational_vel: 0.24
-    min_rotational_vel: 0.12
-    rotational_acc_lim: 0.45
+    simulate_ahead_time: 1.0
+    max_rotational_vel: 0.50
+    min_rotational_vel: 0.15
+    rotational_acc_lim: 1.00
 
 waypoint_follower:
   ros__parameters:
@@ -369,14 +369,14 @@ route_server:
 
 velocity_smoother:
   ros__parameters:
-    smoothing_frequency: 10.0
+    smoothing_frequency: 20.0
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: True
     feedback: "OPEN_LOOP"
-    max_velocity: [0.15, 0.0, 0.65]
-    min_velocity: [-0.05, 0.0, -0.65]
-    max_accel: [0.15, 0.0, 2.00]
-    max_decel: [-0.20, 0.0, -2.50]
+    max_velocity: [0.50, 0.0, 0.55]
+    min_velocity: [-0.08, 0.0, -0.55]
+    max_accel: [0.30, 0.0, 1.20]
+    max_decel: [-0.45, 0.0, -1.80]
     odom_topic: "odom"
     odom_duration: 0.15
     # deadband_velocity suppresses micro-commands inside the motor dead zone,
@@ -407,7 +407,7 @@ collision_monitor:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
-      time_before_collision: 1.0
+      time_before_collision: 1.2
       simulation_time_step: 0.05
       min_points: 3
       visualize: False

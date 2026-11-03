@@ -14,7 +14,7 @@ from .roscall import send_goal
 # Clamps matching the robot's configured navigation limits. The API must not be
 # a way around the speed limits the rest of the stack respects — a caller
 # asking for 5 m/s gets a clear 400, not a robot that tries.
-MAX_LINEAR = 0.35
+MAX_LINEAR = 0.50
 MAX_ANGULAR = 1.2
 
 
