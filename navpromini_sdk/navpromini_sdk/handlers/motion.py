@@ -125,7 +125,7 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
     # 1. velocity_smoother
     try:
         vs_client = node.create_client(SetParameters, '/velocity_smoother/set_parameters')
-        if vs_client.service_is_ready():
+        if vs_client.service_is_ready() or vs_client.wait_for_service(timeout_sec=0.5):
             req = SetParameters.Request()
             req.parameters = [
                 p_double_array('max_velocity', [max_lin, 0.0, max_ang]),
@@ -140,7 +140,7 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
     # 2. controller_server
     try:
         cs_client = node.create_client(SetParameters, '/controller_server/set_parameters')
-        if cs_client.service_is_ready():
+        if cs_client.service_is_ready() or cs_client.wait_for_service(timeout_sec=0.5):
             req = SetParameters.Request()
             req.parameters = [
                 p_double('FollowPath.desired_linear_vel', max_lin),
@@ -155,7 +155,7 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
     # 3. behavior_server
     try:
         bs_client = node.create_client(SetParameters, '/behavior_server/set_parameters')
-        if bs_client.service_is_ready():
+        if bs_client.service_is_ready() or bs_client.wait_for_service(timeout_sec=0.5):
             req = SetParameters.Request()
             req.parameters = [
                 p_double('max_rotational_vel', max_ang),
@@ -169,7 +169,7 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
     # 4. navpromini_dock_manager
     try:
         dm_client = node.create_client(SetParameters, '/navpromini_dock_manager/set_parameters')
-        if dm_client.service_is_ready():
+        if dm_client.service_is_ready() or dm_client.wait_for_service(timeout_sec=0.5):
             req = SetParameters.Request()
             req.parameters = [
                 p_double('undock_speed', float(settings.get('undock_speed', 0.13))),
