@@ -25,12 +25,39 @@ DEFAULT_MOTION_SETTINGS: Dict[str, float] = {
     'min_linear_speed': 0.05,     # m/s (Creep speed near goal tolerance)
     'max_angular_speed': 0.30,    # rad/s (~17.2 deg/s, calm heading alignment)
     'min_angular_speed': 0.10,    # rad/s (~5.7 deg/s)
-    'linear_accel': 0.09,         # m/s^2 (Halved breakaway acceleration, zero slip)
-    'linear_decel': -0.18,        # m/s^2 (Smooth controlled deceleration)
-    'angular_accel': 0.50,        # rad/s^2 (Soft progressive angular acceleration)
+    'linear_accel': 0.088,        # m/s^2 (Auto-computed: max_linear_speed / 4.0, zero wheel slip)
+    'linear_decel': -0.175,       # m/s^2 (Auto-computed: -max_linear_speed / 2.0, smooth stopping)
+    'angular_accel': 0.50,        # rad/s^2 (Auto-computed: max_angular_speed * 1.67)
     'undock_speed': 0.13,         # m/s (Doubled undock roll-off speed)
     'dock_speed': 0.13,           # m/s (Doubled dock visual servo approach speed)
 }
+
+def compute_derived_accelerations(
+    max_linear_speed: float,
+    max_angular_speed: Optional[float] = None,
+) -> Dict[str, float]:
+    """Auto-configure linear and angular acceleration/deceleration from max speeds.
+
+    Formulas:
+      - linear_accel = max_linear_speed / 4.0
+        Ramps gently to max speed in ~4.0s without wheel slip or odometry drift.
+      - linear_decel = -max_linear_speed / 2.0  (= -2.0 * linear_accel)
+        Safe obstacle and goal stopping brake rate without pitching or sliding.
+      - angular_accel = max_angular_speed * 1.67
+        Smooth rotational acceleration entering/exiting heading turns.
+    """
+    v_max = float(max_linear_speed)
+    acc_lin = round(v_max / 4.0, 3)
+    dec_lin = -round(v_max / 2.0, 3)
+
+    out = {
+        'linear_accel': acc_lin,
+        'linear_decel': dec_lin,
+    }
+    if max_angular_speed is not None:
+        w_max = float(max_angular_speed)
+        out['angular_accel'] = round(w_max * 1.67, 2)
+    return out
 
 # Safety clamps: absolute min/max limits that cannot be violated
 SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
@@ -67,28 +94,31 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
         'desc': 'Minimum turning velocity threshold',
     },
     'linear_accel': {
-        'min': 0.04,
+        'min': 0.02,
         'max': 0.20,
-        'step': 0.01,
+        'step': 0.001,
         'unit': 'm/s²',
         'label': 'Linear Acceleration',
-        'desc': 'Ramp-up rate from standstill (prevents wheel slip on smooth floors)',
+        'desc': 'Auto-computed: max_linear_speed / 4.0 (prevents wheel slip on smooth tile)',
+        'auto_formula': 'v_max / 4',
     },
     'linear_decel': {
-        'min': -0.35,
-        'max': -0.08,
-        'step': 0.01,
+        'min': -0.40,
+        'max': -0.04,
+        'step': 0.001,
         'unit': 'm/s²',
         'label': 'Linear Deceleration',
-        'desc': 'Stopping brake rate when approaching obstacles or goal',
+        'desc': 'Auto-computed: -max_linear_speed / 2.0 (safe progressive stopping rate)',
+        'auto_formula': '-v_max / 2',
     },
     'angular_accel': {
-        'min': 0.20,
+        'min': 0.10,
         'max': 1.00,
-        'step': 0.05,
+        'step': 0.01,
         'unit': 'rad/s²',
         'label': 'Angular Acceleration',
-        'desc': 'Rotational ramp rate entering and exiting turns',
+        'desc': 'Auto-computed: max_angular_speed * 1.67 (smooth rotational ramp)',
+        'auto_formula': 'w_max * 1.67',
     },
     'undock_speed': {
         'min': 0.05,
@@ -148,27 +178,33 @@ def get_motion_settings() -> Dict[str, float]:
     settings = dict(DEFAULT_MOTION_SETTINGS)
     db_path = get_db_path()
 
-    if not db_path.exists():
-        return settings
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            with conn:
+                conn.execute(
+                    'CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+                )
+                row = conn.execute(
+                    'SELECT value FROM kv WHERE key = ?', ('motion_settings',)
+                ).fetchone()
+                if row and row[0]:
+                    loaded = json.loads(row[0])
+                    if isinstance(loaded, dict):
+                        for k, v in loaded.items():
+                            if k in DEFAULT_MOTION_SETTINGS:
+                                settings[k] = clamp_setting(k, v)
+            conn.close()
+        except Exception as exc:
+            print(f"[motion_config] Warning reading from DB ({db_path}): {exc}")
 
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
-        with conn:
-            conn.execute(
-                'CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
-            )
-            row = conn.execute(
-                'SELECT value FROM kv WHERE key = ?', ('motion_settings',)
-            ).fetchone()
-            if row and row[0]:
-                loaded = json.loads(row[0])
-                if isinstance(loaded, dict):
-                    for k, v in loaded.items():
-                        if k in DEFAULT_MOTION_SETTINGS:
-                            settings[k] = clamp_setting(k, v)
-        conn.close()
-    except Exception as exc:
-        print(f"[motion_config] Warning reading from DB ({db_path}): {exc}")
+    # Synchronize derived acceleration/deceleration with formulas
+    max_lin = settings.get('max_linear_speed', DEFAULT_MOTION_SETTINGS['max_linear_speed'])
+    max_ang = settings.get('max_angular_speed', DEFAULT_MOTION_SETTINGS['max_angular_speed'])
+    derived = compute_derived_accelerations(max_lin, max_ang)
+    settings['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
+    settings['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
+    settings['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
 
     return settings
 
@@ -179,6 +215,14 @@ def save_motion_settings(new_settings: Dict[str, Any]) -> Dict[str, float]:
     for k, v in new_settings.items():
         if k in DEFAULT_MOTION_SETTINGS:
             current[k] = clamp_setting(k, v)
+
+    # Auto-calculate formula-derived dynamic parameters from speeds
+    max_lin = current.get('max_linear_speed', DEFAULT_MOTION_SETTINGS['max_linear_speed'])
+    max_ang = current.get('max_angular_speed', DEFAULT_MOTION_SETTINGS['max_angular_speed'])
+    derived = compute_derived_accelerations(max_lin, max_ang)
+    current['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
+    current['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
+    current['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
 
     db_path = get_db_path()
     try:
@@ -216,8 +260,8 @@ def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict
     min_lin = float(cfg.get('min_linear_speed', 0.05))
     max_ang = float(cfg.get('max_angular_speed', 0.30))
     min_ang = float(cfg.get('min_angular_speed', 0.10))
-    acc_lin = float(cfg.get('linear_accel', 0.09))
-    dec_lin = float(cfg.get('linear_decel', -0.18))
+    acc_lin = float(cfg.get('linear_accel', 0.088))
+    dec_lin = float(cfg.get('linear_decel', -0.175))
     acc_ang = float(cfg.get('angular_accel', 0.50))
     dec_ang = -1.0 * abs(acc_ang) * 1.4
 

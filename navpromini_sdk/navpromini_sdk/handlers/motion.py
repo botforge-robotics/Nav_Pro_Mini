@@ -117,8 +117,8 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
     min_lin = float(settings.get('min_linear_speed', 0.05))
     max_ang = float(settings.get('max_angular_speed', 0.30))
     min_ang = float(settings.get('min_angular_speed', 0.10))
-    acc_lin = float(settings.get('linear_accel', 0.09))
-    dec_lin = float(settings.get('linear_decel', -0.18))
+    acc_lin = float(settings.get('linear_accel', 0.088))
+    dec_lin = float(settings.get('linear_decel', -0.175))
     acc_ang = float(settings.get('angular_accel', 0.50))
     dec_ang = -1.0 * abs(acc_ang) * 1.4
 
