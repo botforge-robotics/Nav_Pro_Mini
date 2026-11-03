@@ -147,13 +147,13 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
                 p_double('FollowPath.min_approach_linear_velocity', min_lin),
                 p_double('FollowPath.rotate_to_heading_angular_vel', max_ang),
                 p_double('FollowPath.max_angular_accel', acc_ang),
-                p_double('FollowPath.rotate_to_heading_min_angle', 0.15),
-                p_double('FollowPath.lookahead_dist', 0.20),
-                p_double('FollowPath.min_lookahead_dist', 0.15),
-                p_double('FollowPath.max_lookahead_dist', 0.45),
-                p_double('FollowPath.lookahead_time', 1.0),
-                p_double('FollowPath.regulated_linear_scaling_min_radius', 0.90),
-                p_double('FollowPath.regulated_linear_scaling_min_speed', 0.04),
+                p_double('FollowPath.rotate_to_heading_min_angle', 0.40),
+                p_double('FollowPath.lookahead_dist', 0.30),
+                p_double('FollowPath.min_lookahead_dist', 0.25),
+                p_double('FollowPath.max_lookahead_dist', 0.60),
+                p_double('FollowPath.lookahead_time', 1.5),
+                p_double('FollowPath.regulated_linear_scaling_min_radius', 0.60),
+                p_double('FollowPath.regulated_linear_scaling_min_speed', 0.08),
             ]
             cs_client.call_async(req)
     except Exception as e:
@@ -165,8 +165,8 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
         if rs_client.service_is_ready() or rs_client.wait_for_service(timeout_sec=0.5):
             req = SetParameters.Request()
             req.parameters = [
-                p_double('radius_to_achieve_node', 0.25),
-                p_double('boundary_radius_to_achieve_node', 0.20),
+                p_double('radius_to_achieve_node', 0.35),
+                p_double('boundary_radius_to_achieve_node', 0.25),
             ]
             rs_client.call_async(req)
     except Exception as e:
