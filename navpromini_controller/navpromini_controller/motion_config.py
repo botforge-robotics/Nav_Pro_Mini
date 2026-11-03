@@ -27,7 +27,7 @@ DEFAULT_MOTION_SETTINGS: Dict[str, float] = {
     'min_angular_speed': 0.10,    # rad/s (~5.7 deg/s)
     'linear_accel': 0.050,        # m/s^2 (Auto-computed: max_linear_speed / 7.0, gentle anti-overshoot ramp)
     'linear_decel': -0.117,       # m/s^2 (Auto-computed: -max_linear_speed / 3.0, smooth stopping)
-    'angular_accel': 0.33,        # rad/s^2 (Auto-computed: max_angular_speed * 1.10)
+    'angular_accel': 0.50,        # rad/s^2 (Auto-computed: max_angular_speed * 1.67, responsive turns)
     'undock_speed': 0.13,         # m/s (Doubled undock roll-off speed)
     'dock_speed': 0.13,           # m/s (Doubled dock visual servo approach speed)
 }
@@ -44,8 +44,8 @@ def compute_derived_accelerations(
         Prevents surging forward on small turns and overshooting road network lines.
       - linear_decel = -max_linear_speed / 3.0
         Smooth, firm stopping brake rate without pitching or wheel skid.
-      - angular_accel = max_angular_speed * 1.10
-        Smooth rotational acceleration matching heading turn rate.
+      - angular_accel = max_angular_speed * 1.67
+        Responsive rotational acceleration for crisp heading alignment.
     """
     v_max = float(max_linear_speed)
     acc_lin = round(v_max / 7.0 + 1e-9, 3)
@@ -57,7 +57,7 @@ def compute_derived_accelerations(
     }
     if max_angular_speed is not None:
         w_max = float(max_angular_speed)
-        out['angular_accel'] = round(w_max * 1.10, 2)
+        out['angular_accel'] = round(w_max * 1.67, 2)
     return out
 
 # Safety clamps: absolute min/max limits that cannot be violated
@@ -118,8 +118,8 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
         'step': 0.01,
         'unit': 'rad/s²',
         'label': 'Angular Acceleration',
-        'desc': 'Auto-computed: max_angular_speed * 1.10 (smooth rotational ramp)',
-        'auto_formula': 'w_max * 1.1',
+        'desc': 'Auto-computed: max_angular_speed * 1.67 (responsive rotational ramp for crisp heading alignment)',
+        'auto_formula': 'w_max * 1.67',
     },
     'undock_speed': {
         'min': 0.05,
@@ -324,7 +324,7 @@ def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict
     min_ang = float(cfg.get('min_angular_speed', 0.10))
     acc_lin = float(cfg.get('linear_accel', 0.050))
     dec_lin = float(cfg.get('linear_decel', -0.117))
-    acc_ang = float(cfg.get('angular_accel', 0.33))
+    acc_ang = float(cfg.get('angular_accel', 0.50))
     dec_ang = -1.0 * abs(acc_ang) * 1.4
 
     return {
