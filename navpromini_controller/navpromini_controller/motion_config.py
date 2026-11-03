@@ -47,8 +47,8 @@ def compute_derived_accelerations(
         Smooth rotational acceleration entering/exiting heading turns.
     """
     v_max = float(max_linear_speed)
-    acc_lin = round(v_max / 4.0, 3)
-    dec_lin = -round(v_max / 2.0, 3)
+    acc_lin = round(v_max / 4.0 + 1e-9, 3)
+    dec_lin = -round(v_max / 2.0 + 1e-9, 3)
 
     out = {
         'linear_accel': acc_lin,
