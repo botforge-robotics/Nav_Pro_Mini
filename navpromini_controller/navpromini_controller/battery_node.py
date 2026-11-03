@@ -72,6 +72,7 @@ class BatteryNode(Node):
 
         self._last_full_read = 0.0
         self._is_full_latched = False
+        self._fail_count = 0
         period = 1.0 / max(rate, 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(
@@ -88,15 +89,30 @@ class BatteryNode(Node):
 
     def _tick(self) -> None:
         if not self._ok:
-            return
+            try:
+                self._bms.open()
+                self._ok = True
+                self.get_logger().info('Daly BMS serial reconnected.')
+            except Exception:
+                return
+
         now = time.monotonic()
         do_full = (now - self._last_full_read) >= 2.0
         try:
             snap = self._bms.read(full=do_full)
             if do_full:
                 self._last_full_read = now
+            self._fail_count = 0
         except Exception as exc:  # noqa: BLE001
+            self._fail_count += 1
             self.get_logger().warn(f'BMS read failed: {exc}', throttle_duration_sec=5.0)
+            if self._fail_count >= 3:
+                self.get_logger().warn('Consecutive BMS read failures — resetting port to reconnect.')
+                try:
+                    self._bms.close()
+                except Exception:
+                    pass
+                self._ok = False
             return
         self._publish(snap)
 
