@@ -208,8 +208,8 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
         req.parameters = [
             p_double('undock_speed', float(settings.get('undock_speed', 0.13))),
             p_double('dock_speed', float(settings.get('dock_speed', 0.13))),
-            ]
-            dm_client.call_async(req)
+        ]
+        dm_client.call_async(req)
     except Exception as e:
         node.get_logger().debug(f'Could not set dock_manager params: {e}')
 
