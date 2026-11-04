@@ -762,6 +762,24 @@ class DockManagerNode(Node):
                 except Exception:
                     pass
                 return True
+            # Early visual lock: if AprilTag is clearly visible in the camera and the robot
+            # has arrived near the standoff zone, hand off to visual servoing immediately
+            # without waiting for Nav2 to fight obstacle inflation on the staging waypoint.
+            if self._in_view() and self._tag is not None:
+                try:
+                    tag_z = float(self._tag[4])
+                    x_rel, y_rel = self._get_dock_relative_pose()
+                    if tag_z <= (self._standoff + 0.60) and (y_rel is None or abs(y_rel) <= 0.50):
+                        self.get_logger().info(
+                            f'staging navigation: AprilTag locked (z={tag_z*100:.1f}cm) in standoff zone — '
+                            'canceling Nav2 staging and engaging visual servoing directly')
+                        try:
+                            await goal_handle.cancel_goal_async()
+                        except Exception:
+                            pass
+                        return True
+                except Exception:
+                    pass
             if time.monotonic() > deadline:
                 self.get_logger().warn('staging navigation exceeded staging_timeout — canceling')
                 await goal_handle.cancel_goal_async()
