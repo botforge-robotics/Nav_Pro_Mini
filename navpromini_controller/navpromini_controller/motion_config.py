@@ -95,30 +95,30 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
         'desc': 'Minimum turning velocity threshold',
     },
     'linear_accel': {
-        'min': 0.02,
+        'min': 0.05,
         'max': 0.50,
-        'step': 0.001,
+        'step': 0.01,
         'unit': 'm/s²',
-        'label': 'Linear Acceleration',
-        'desc': 'Auto-computed: max_linear_speed / 1.6 (brisk ramp, responsive starting)',
+        'label': 'Linear Accel & Decel',
+        'desc': 'Single slider controlling both linear acceleration and braking deceleration rate',
         'auto_formula': 'v_max / 1.6',
     },
     'linear_decel': {
         'min': -0.60,
-        'max': -0.04,
-        'step': 0.001,
+        'max': -0.05,
+        'step': 0.01,
         'unit': 'm/s²',
         'label': 'Linear Deceleration',
-        'desc': 'Auto-computed: -max_linear_speed / 1.2 (controlled progressive stopping rate)',
+        'desc': 'Coupled to linear acceleration (1.33x firm braking)',
         'auto_formula': '-v_max / 1.2',
     },
     'angular_accel': {
-        'min': 0.10,
+        'min': 0.20,
         'max': 2.50,
-        'step': 0.01,
+        'step': 0.05,
         'unit': 'rad/s²',
-        'label': 'Angular Acceleration',
-        'desc': 'Auto-computed: max_angular_speed * 2.5 (brisk rotational ramp for crisp heading alignment)',
+        'label': 'Turn Accel & Decel',
+        'desc': 'Single slider controlling rotational acceleration and turn stopping rate',
         'auto_formula': 'w_max * 2.5',
     },
     'undock_speed': {
@@ -179,6 +179,8 @@ def get_motion_settings() -> Dict[str, float]:
     settings = dict(DEFAULT_MOTION_SETTINGS)
     db_path = get_db_path()
 
+    has_saved_linear_accel = False
+    has_saved_angular_accel = False
     if db_path.exists():
         try:
             conn = sqlite3.connect(str(db_path), timeout=5.0)
@@ -195,17 +197,23 @@ def get_motion_settings() -> Dict[str, float]:
                         for k, v in loaded.items():
                             if k in DEFAULT_MOTION_SETTINGS:
                                 settings[k] = clamp_setting(k, v)
+                        if 'linear_accel' in loaded:
+                            has_saved_linear_accel = True
+                        if 'angular_accel' in loaded:
+                            has_saved_angular_accel = True
             conn.close()
         except Exception as exc:
             print(f"[motion_config] Warning reading from DB ({db_path}): {exc}")
 
-    # Synchronize derived acceleration/deceleration with formulas
+    # Synchronize derived acceleration/deceleration with formulas only if not explicitly saved
     max_lin = settings.get('max_linear_speed', DEFAULT_MOTION_SETTINGS['max_linear_speed'])
     max_ang = settings.get('max_angular_speed', DEFAULT_MOTION_SETTINGS['max_angular_speed'])
     derived = compute_derived_accelerations(max_lin, max_ang)
-    settings['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
-    settings['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
-    settings['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
+    if not has_saved_linear_accel:
+        settings['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
+        settings['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
+    if not has_saved_angular_accel:
+        settings['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
 
     return settings
 
@@ -217,13 +225,14 @@ def save_motion_settings(new_settings: Dict[str, Any]) -> Dict[str, float]:
         if k in DEFAULT_MOTION_SETTINGS:
             current[k] = clamp_setting(k, v)
 
-    # Auto-calculate formula-derived dynamic parameters from speeds
-    max_lin = current.get('max_linear_speed', DEFAULT_MOTION_SETTINGS['max_linear_speed'])
-    max_ang = current.get('max_angular_speed', DEFAULT_MOTION_SETTINGS['max_angular_speed'])
-    derived = compute_derived_accelerations(max_lin, max_ang)
-    current['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
-    current['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
-    current['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
+    # If linear_accel is explicitly provided, couple linear_decel with it (1.33x firm braking)
+    if 'linear_accel' in new_settings:
+        acc_lin = clamp_setting('linear_accel', new_settings['linear_accel'])
+        current['linear_accel'] = acc_lin
+        current['linear_decel'] = clamp_setting('linear_decel', -round(acc_lin * 1.33, 3))
+
+    if 'angular_accel' in new_settings:
+        current['angular_accel'] = clamp_setting('angular_accel', new_settings['angular_accel'])
 
     db_path = get_db_path()
     try:
@@ -252,6 +261,8 @@ def get_default_motion_settings() -> Dict[str, float]:
     """Retrieve default motion settings (reads custom defaults from DB if stored, else baseline)."""
     defaults = dict(DEFAULT_MOTION_SETTINGS)
     db_path = get_db_path()
+    has_saved_linear_accel = False
+    has_saved_angular_accel = False
     if db_path.exists():
         try:
             conn = sqlite3.connect(str(db_path), timeout=5.0)
@@ -268,17 +279,23 @@ def get_default_motion_settings() -> Dict[str, float]:
                         for k, v in loaded.items():
                             if k in DEFAULT_MOTION_SETTINGS:
                                 defaults[k] = clamp_setting(k, v)
+                        if 'linear_accel' in loaded:
+                            has_saved_linear_accel = True
+                        if 'angular_accel' in loaded:
+                            has_saved_angular_accel = True
             conn.close()
         except Exception as exc:
             print(f"[motion_config] Warning reading defaults from DB ({db_path}): {exc}")
 
-    # Synchronize formula-derived parameters
+    # Synchronize formula-derived parameters only if not stored
     max_lin = defaults.get('max_linear_speed', DEFAULT_MOTION_SETTINGS['max_linear_speed'])
     max_ang = defaults.get('max_angular_speed', DEFAULT_MOTION_SETTINGS['max_angular_speed'])
     derived = compute_derived_accelerations(max_lin, max_ang)
-    defaults['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
-    defaults['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
-    defaults['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
+    if not has_saved_linear_accel:
+        defaults['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
+        defaults['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
+    if not has_saved_angular_accel:
+        defaults['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
     return defaults
 
 
