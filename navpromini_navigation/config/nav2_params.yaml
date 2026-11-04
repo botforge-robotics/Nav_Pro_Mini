@@ -95,7 +95,7 @@ controller_server:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
       desired_linear_vel: 0.35
       lookahead_dist: 0.28
-      min_lookahead_dist: 0.20
+      min_lookahead_dist: 0.15
       max_lookahead_dist: 0.45
       lookahead_time: 1.0
       use_velocity_scaled_lookahead_dist: true
@@ -215,8 +215,8 @@ local_costmap:
           obstacle_min_range: 0.14
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.6
-        inflation_radius: 0.55
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.45
       always_send_full_costmap: True
 
 global_costmap:
@@ -261,8 +261,8 @@ global_costmap:
         unknown_cost_value: 0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.6
-        inflation_radius: 0.55
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.45
       always_send_full_costmap: True
 
 map_saver:
@@ -286,7 +286,7 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 2000
       max_planning_time: 5.0
-      cost_travel_multiplier: 2.5
+      cost_travel_multiplier: 1.0
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
