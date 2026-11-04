@@ -654,7 +654,7 @@ class TouchscreenKioskHandler(BaseHandler):
         })
 
     def post(self) -> None:
-        body = self.json_body() or {}
+        body = self.body()
         action = body.get('action', 'toggle').lower()
         launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
 
