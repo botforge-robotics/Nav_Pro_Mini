@@ -23,7 +23,7 @@ import rclpy
 import tornado.ioloop
 import tornado.web
 from geometry_msgs.msg import PoseStamped
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 
 from .client_hold import ClientHold, ModeState
 from .handlers import (
@@ -320,7 +320,7 @@ def main(args=None) -> None:
     rosbridge_url = str(bridge.get_parameter('rosbridge_url').value)
 
     # Spin ROS on its own thread; tornado owns the main thread.
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = SingleThreadedExecutor()
     executor.add_node(bridge)
 
     def _spin_loop():

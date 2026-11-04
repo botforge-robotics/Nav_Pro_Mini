@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import time
 
 from navpromini_launch_manager_interfaces.srv import LaunchWithArgs, StopLaunch
 from geometry_msgs.msg import PoseStamped
@@ -204,6 +205,34 @@ def watch_localization(bridge, state) -> None:
 _RECONCILE_IDLE_SETTLE_SEC = 30.0
 
 
+_proc_cache_time = 0.0
+_cached_running_cmds: list[bytes] = []
+
+
+def _get_active_cmdlines() -> list[bytes]:
+    global _proc_cache_time, _cached_running_cmds
+    now = time.monotonic()
+    if now - _proc_cache_time < 3.0:
+        return _cached_running_cmds
+    cmds: list[bytes] = []
+    my_pid = str(os.getpid())
+    try:
+        for pid in os.listdir('/proc'):
+            if pid.isdigit() and pid != my_pid:
+                try:
+                    with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                        c = f.read()
+                        if c:
+                            cmds.append(c)
+                except (FileNotFoundError, ProcessLookupError, PermissionError):
+                    pass
+    except Exception:
+        pass
+    _cached_running_cmds = cmds
+    _proc_cache_time = now
+    return cmds
+
+
 def _is_process_running(keyword: str) -> bool:
     """Check if an OS process containing `keyword` in cmdline is currently alive in /proc.
 
@@ -212,19 +241,9 @@ def _is_process_running(keyword: str) -> bool:
     mapping or navigation was started externally.
     """
     keyword_bytes = keyword.encode('utf-8')
-    my_pid = str(os.getpid())
-    try:
-        for pid in os.listdir('/proc'):
-            if pid.isdigit() and pid != my_pid:
-                try:
-                    with open(f'/proc/{pid}/cmdline', 'rb') as f:
-                        cmd = f.read()
-                        if keyword_bytes in cmd:
-                            return True
-                except (FileNotFoundError, ProcessLookupError, PermissionError):
-                    pass
-    except Exception:
-        return True
+    for cmd in _get_active_cmdlines():
+        if keyword_bytes in cmd:
+            return True
     return False
 
 

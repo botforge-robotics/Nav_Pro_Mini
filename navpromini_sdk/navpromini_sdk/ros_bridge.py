@@ -219,11 +219,26 @@ class RosBridge(Node):
     def _put(self, key: str, value: Any) -> None:
         with self._lock:
             self._cache[key] = (value, time.time())
-        for fn in list(self._listeners):
-            try:
-                fn(key, value)
-            except Exception:  # noqa: BLE001 — a bad listener must not kill ROS
-                self.get_logger().warn(f'event listener raised on {key}', once=True)
+        if self._listeners:
+            for fn in list(self._listeners):
+                try:
+                    fn(key, value)
+                except Exception:  # noqa: BLE001 — a bad listener must not kill ROS
+                    self.get_logger().warn(f'event listener raised on {key}', once=True)
+
+    def _put_many(self, items: dict[str, Any]) -> None:
+        now = time.time()
+        with self._lock:
+            for k, v in items.items():
+                self._cache[k] = (v, now)
+        if self._listeners:
+            listeners = list(self._listeners)
+            for k, v in items.items():
+                for fn in listeners:
+                    try:
+                        fn(k, v)
+                    except Exception:
+                        self.get_logger().warn(f'event listener raised on {k}', once=True)
 
     def get(self, key: str) -> Optional[Any]:
         with self._lock:
@@ -374,14 +389,16 @@ class RosBridge(Node):
 
     def _on_odom(self, m: Odometry) -> None:
         p = m.pose.pose.position
-        self._put('pose_odom', {
-            'x': round(p.x, 4), 'y': round(p.y, 4),
-            'theta': round(yaw_of(m.pose.pose.orientation), 4),
-            'frame': m.header.frame_id or 'odom',
-        })
-        self._put('velocity', {
-            'linear': round(m.twist.twist.linear.x, 4),
-            'angular': round(m.twist.twist.angular.z, 4),
+        self._put_many({
+            'pose_odom': {
+                'x': round(p.x, 4), 'y': round(p.y, 4),
+                'theta': round(yaw_of(m.pose.pose.orientation), 4),
+                'frame': m.header.frame_id or 'odom',
+            },
+            'velocity': {
+                'linear': round(m.twist.twist.linear.x, 4),
+                'angular': round(m.twist.twist.angular.z, 4),
+            },
         })
 
     def _on_amcl(self, m: PoseWithCovarianceStamped) -> None:
@@ -463,8 +480,19 @@ class RosBridge(Node):
         })
 
     def _on_scan(self, m: LaserScan) -> None:
-        # Full 720-beam scans are large and most callers want a shape, not
-        # every beam; the raw arrays stay available over rosbridge.
+        now = time.monotonic()
+        # Rate limit scan deserialization to ~2.5 Hz (WebSocket throttles to 2.0 Hz anyway,
+        # and lifecycle freshness check only requires age < 3.0s).
+        if hasattr(self, '_last_scan_time') and (now - self._last_scan_time < 0.40):
+            # Touch cache timestamp so get_with_age('scan') stays fresh (<0.4s)
+            with self._lock:
+                entry = self._cache.get('scan')
+                if entry is not None:
+                    self._cache['scan'] = (entry[0], time.time())
+            return
+        self._last_scan_time = now
+
+        # Full scans are large; most callers want a shape, not every beam.
         self._put('scan', {
             'angle_min': round(m.angle_min, 5),
             'angle_max': round(m.angle_max, 5),
@@ -472,7 +500,7 @@ class RosBridge(Node):
             'range_min': round(m.range_min, 3),
             'range_max': round(m.range_max, 3),
             'count': len(m.ranges),
-            'ranges': [None if not math.isfinite(r) else round(float(r), 3)
+            'ranges': [round(r, 3) if math.isfinite(r) else None
                        for r in m.ranges],
         })
 
