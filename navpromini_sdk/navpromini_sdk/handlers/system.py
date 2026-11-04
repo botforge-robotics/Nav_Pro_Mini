@@ -633,6 +633,128 @@ class ToggleKeyboardHandler(BaseHandler):
             raise ApiError(500, 'keyboard_toggle_failed', str(exc))
 
 
+class TouchscreenKioskHandler(BaseHandler):
+    """Enable, disable, or query the onboard WebKit Touchscreen UI to reclaim CPU/RAM."""
+
+    FLAG_FILE = Path('/home/navpromini/.config/navpro_screen_disabled')
+    AUTOSTART_FILE = Path('/home/navpromini/.config/autostart/NavPro_Robot_Screen.desktop')
+
+    def get(self) -> None:
+        p = subprocess.run(['pgrep', '-f', 'navpromini_robot_ui_runner|WebKitWebProcess'], capture_output=True, text=True)
+        running = p.returncode == 0
+        pids = [int(x) for x in p.stdout.strip().split()] if running else []
+        enabled = not self.FLAG_FILE.is_file()
+
+        self.send({
+            'success': True,
+            'enabled': enabled,
+            'running': running,
+            'pids': pids,
+            'message': 'Touchscreen UI is active (~75-90% CPU load)' if running else 'Touchscreen UI is stopped (saving ~80-90% of 1 CPU core and ~1GB RAM)',
+        })
+
+    def post(self) -> None:
+        body = self.json_body() or {}
+        action = body.get('action', 'toggle').lower()
+        launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
+
+        if action == 'disable':
+            self.FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.FLAG_FILE.touch(exist_ok=True)
+            if self.AUTOSTART_FILE.is_file():
+                try:
+                    txt = self.AUTOSTART_FILE.read_text()
+                    if 'Hidden=' in txt:
+                        self.AUTOSTART_FILE.write_text(txt.replace('Hidden=false', 'Hidden=true'))
+                    else:
+                        self.AUTOSTART_FILE.write_text(txt + '\nHidden=true\n')
+                except Exception:
+                    pass
+            subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'WebKitWebProcess'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], capture_output=True)
+            message = 'Touchscreen UI disabled on boot and stopped. CPU load reduced.'
+        elif action == 'enable':
+            if self.FLAG_FILE.is_file():
+                self.FLAG_FILE.unlink(missing_ok=True)
+            if self.AUTOSTART_FILE.is_file():
+                try:
+                    txt = self.AUTOSTART_FILE.read_text()
+                    self.AUTOSTART_FILE.write_text(txt.replace('Hidden=true', 'Hidden=false'))
+                except Exception:
+                    pass
+            if launcher.is_file():
+                subprocess.Popen([
+                    'sudo', '-u', 'navpromini',
+                    'DISPLAY=:0',
+                    'XAUTHORITY=/home/navpromini/.Xauthority',
+                    '/bin/bash', str(launcher)
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            message = 'Touchscreen UI enabled on boot and started.'
+        elif action == 'stop':
+            subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'WebKitWebProcess'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], capture_output=True)
+            message = 'Touchscreen UI temporarily stopped.'
+        elif action == 'start':
+            if launcher.is_file():
+                subprocess.Popen([
+                    'sudo', '-u', 'navpromini',
+                    'DISPLAY=:0',
+                    'XAUTHORITY=/home/navpromini/.Xauthority',
+                    '/bin/bash', str(launcher)
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            message = 'Touchscreen UI started.'
+        elif action == 'toggle':
+            if self.FLAG_FILE.is_file():
+                self.FLAG_FILE.unlink(missing_ok=True)
+                if self.AUTOSTART_FILE.is_file():
+                    try:
+                        txt = self.AUTOSTART_FILE.read_text()
+                        self.AUTOSTART_FILE.write_text(txt.replace('Hidden=true', 'Hidden=false'))
+                    except Exception:
+                        pass
+                if launcher.is_file():
+                    subprocess.Popen([
+                        'sudo', '-u', 'navpromini',
+                        'DISPLAY=:0',
+                        'XAUTHORITY=/home/navpromini/.Xauthority',
+                        '/bin/bash', str(launcher)
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                message = 'Touchscreen UI enabled and started.'
+            else:
+                self.FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+                self.FLAG_FILE.touch(exist_ok=True)
+                if self.AUTOSTART_FILE.is_file():
+                    try:
+                        txt = self.AUTOSTART_FILE.read_text()
+                        if 'Hidden=' in txt:
+                            self.AUTOSTART_FILE.write_text(txt.replace('Hidden=false', 'Hidden=true'))
+                        else:
+                            self.AUTOSTART_FILE.write_text(txt + '\nHidden=true\n')
+                    except Exception:
+                        pass
+                subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], capture_output=True)
+                subprocess.run(['pkill', '-9', '-f', 'WebKitWebProcess'], capture_output=True)
+                subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], capture_output=True)
+                message = 'Touchscreen UI disabled and stopped.'
+        else:
+            self.fail(400, 'invalid_action', f'Unknown action "{action}". Valid actions: enable, disable, start, stop, toggle')
+            return
+
+        time.sleep(0.5)
+        p = subprocess.run(['pgrep', '-f', 'navpromini_robot_ui_runner|WebKitWebProcess'], capture_output=True, text=True)
+        running = p.returncode == 0
+        enabled = not self.FLAG_FILE.is_file()
+        self.send({
+            'success': True,
+            'action': action,
+            'enabled': enabled,
+            'running': running,
+            'message': message,
+        })
+
+
 class WifiStatusHandler(BaseHandler):
     """GET /api/v1/system/wifi/status - returns Wi-Fi connection info and IP."""
     def get(self) -> None:

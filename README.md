@@ -742,6 +742,45 @@ colcon build && source install/setup.bash
 
 ---
 
+## Onboard Touchscreen UI & CPU Load Optimization
+
+The physical robot display runs a portrait WebKitGTK kiosk UI (`navpromini_robot_ui`) rendered via X11. Because WebKit is a full web engine, it consumes **~75% to 90% of a single CPU core** and approximately **1 GB of RAM**.
+
+When operating headless, conducting intensive navigation benchmarking, or controlling the robot exclusively through the Mission Planner tablet/desktop GUI or mobile app, the Touchscreen UI can be disabled to dramatically reduce CPU load and thermal throttling:
+
+### 1. CLI Control (`navpro-screen`)
+
+A dedicated management utility is installed on the robot at `/usr/local/bin/navpro-screen`:
+
+```bash
+# Check status, active WebKit PIDs, and autostart state
+navpro-screen status
+
+# Disable Touchscreen UI on boot and kill running WebKit immediately (frees ~80-90% CPU)
+navpro-screen disable
+
+# Re-enable Touchscreen UI on boot and launch kiosk immediately on display :0
+navpro-screen enable
+
+# Temporarily stop WebKit without altering boot autostart
+navpro-screen stop
+
+# Manually launch Touchscreen UI
+navpro-screen start
+```
+
+### 2. REST API Control
+
+The Python SDK exposes dedicated endpoints to toggle or inspect the screen remotely:
+
+* **Get Status:** `GET http://<robot-ip>:8090/api/v1/system/screen`
+* **Change State:** `POST http://<robot-ip>:8090/api/v1/system/screen`
+  ```json
+  { "action": "disable" }   // Options: "disable", "enable", "start", "stop", "toggle"
+  ```
+
+---
+
 ## Notes
 
 - Cafe floor is raised; launch auto-spawns near `z≈0.28` for `world_name:=cafe`.

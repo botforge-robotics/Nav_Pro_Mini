@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# navpro-screen - Manage NavPro Mini Onboard Touchscreen UI (WebKit Kiosk)
+#
+# Allows enabling, disabling, starting, and stopping the WebKitGTK Touchscreen UI
+# to reclaim ~80-90% CPU of a core and over 1GB RAM when operating headless or
+# managing the robot exclusively from the web or tablet GUI.
+# ==============================================================================
+
+FLAG_FILE="/home/navpromini/.config/navpro_screen_disabled"
+AUTOSTART_FILE="/home/navpromini/.config/autostart/NavPro_Robot_Screen.desktop"
+LAUNCHER="/home/navpromini/navpromini_robot_ui/start_robot_screen.sh"
+
+get_status() {
+    local running=false
+    local enabled=true
+    local pids=$(pgrep -f "navpromini_robot_ui_runner|WebKitWebProcess" | tr '\n' ' ')
+
+    if [[ -n "${pids}" ]]; then
+        running=true
+    fi
+
+    if [[ -f "${FLAG_FILE}" ]]; then
+        enabled=false
+    elif [[ -f "${AUTOSTART_FILE}" ]] && grep -q "Hidden=true" "${AUTOSTART_FILE}"; then
+        enabled=false
+    fi
+
+    echo "Touchscreen UI Enabled on Boot : ${enabled}"
+    echo "Touchscreen UI Currently Running: ${running}"
+    if [[ "${running}" == "true" ]]; then
+        echo "Active WebKit PIDs             : ${pids}"
+        echo "Status                         : RUNNING (~75-90% CPU)"
+    else
+        echo "Status                         : STOPPED (CPU and RAM saved)"
+    fi
+}
+
+stop_screen() {
+    echo "[navpro-screen] Stopping WebKit Touchscreen UI..."
+    pkill -9 -f "navpromini_robot_ui_runner" 2>/dev/null || true
+    pkill -9 -f "WebKitWebProcess" 2>/dev/null || true
+    pkill -9 -f "NavProMiniRobotUI" 2>/dev/null || true
+    sleep 1
+    echo "[navpro-screen] Stopped. Freed ~80-90% of a CPU core and ~1GB RAM."
+}
+
+start_screen() {
+    if [[ -f "${FLAG_FILE}" ]]; then
+        echo "[navpro-screen] Removing disable flag ${FLAG_FILE}..."
+        rm -f "${FLAG_FILE}"
+    fi
+    echo "[navpro-screen] Starting Touchscreen UI on display :0..."
+    if [[ "$(whoami)" == "navpromini" ]]; then
+        setsid bash "${LAUNCHER}" </dev/null >/tmp/navpro_screen.log 2>&1 &
+    else
+        sudo -u navpromini DISPLAY=:0 XAUTHORITY=/home/navpromini/.Xauthority setsid bash "${LAUNCHER}" </dev/null >/tmp/navpro_screen.log 2>&1 &
+    fi
+    sleep 2
+    echo "[navpro-screen] Touchscreen UI launched."
+}
+
+disable_screen() {
+    echo "[navpro-screen] Disabling Touchscreen UI autostart..."
+    mkdir -p "$(dirname "${FLAG_FILE}")"
+    touch "${FLAG_FILE}"
+    if [[ -f "${AUTOSTART_FILE}" ]]; then
+        if grep -q "Hidden=" "${AUTOSTART_FILE}"; then
+            sed -i 's/Hidden=.*/Hidden=true/' "${AUTOSTART_FILE}"
+        else
+            echo "Hidden=true" >> "${AUTOSTART_FILE}"
+        fi
+    fi
+    stop_screen
+    echo "[navpro-screen] Touchscreen UI disabled. It will not launch on boot."
+}
+
+enable_screen() {
+    echo "[navpro-screen] Enabling Touchscreen UI autostart..."
+    rm -f "${FLAG_FILE}"
+    if [[ -f "${AUTOSTART_FILE}" ]]; then
+        sed -i 's/Hidden=true/Hidden=false/' "${AUTOSTART_FILE}"
+    fi
+    start_screen
+    echo "[navpro-screen] Touchscreen UI enabled and running."
+}
+
+case "$1" in
+    status)
+        get_status
+        ;;
+    disable)
+        disable_screen
+        ;;
+    enable)
+        enable_screen
+        ;;
+    start)
+        start_screen
+        ;;
+    stop)
+        stop_screen
+        ;;
+    toggle)
+        if [[ -f "${FLAG_FILE}" ]]; then
+            enable_screen
+        else
+            disable_screen
+        fi
+        ;;
+    *)
+        echo "Usage: navpro-screen {status|enable|disable|start|stop|toggle}"
+        echo ""
+        echo "Commands:"
+        echo "  status   - Check if touchscreen UI is enabled on boot and actively running"
+        echo "  disable  - Stop WebKit immediately and disable autostart (saves ~80-90% CPU)"
+        echo "  enable   - Enable autostart on boot and launch the touchscreen UI"
+        echo "  stop     - Temporarily stop running WebKit (without changing boot config)"
+        echo "  start    - Launch the touchscreen UI immediately on display :0"
+        echo "  toggle   - Toggle between enabled and disabled"
+        exit 1
+        ;;
+esac
