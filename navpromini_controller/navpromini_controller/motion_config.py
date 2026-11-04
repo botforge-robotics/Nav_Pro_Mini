@@ -226,13 +226,21 @@ def save_motion_settings(new_settings: Dict[str, Any]) -> Dict[str, float]:
             current[k] = clamp_setting(k, v)
 
     # If linear_accel is explicitly provided, couple linear_decel with it (1.33x firm braking)
+    # Otherwise auto-configure from max_linear_speed
     if 'linear_accel' in new_settings:
         acc_lin = clamp_setting('linear_accel', new_settings['linear_accel'])
         current['linear_accel'] = acc_lin
         current['linear_decel'] = clamp_setting('linear_decel', -round(acc_lin * 1.33, 3))
+    elif 'max_linear_speed' in new_settings:
+        derived = compute_derived_accelerations(current['max_linear_speed'])
+        current['linear_accel'] = clamp_setting('linear_accel', derived['linear_accel'])
+        current['linear_decel'] = clamp_setting('linear_decel', derived['linear_decel'])
 
     if 'angular_accel' in new_settings:
         current['angular_accel'] = clamp_setting('angular_accel', new_settings['angular_accel'])
+    elif 'max_angular_speed' in new_settings:
+        derived = compute_derived_accelerations(current['max_linear_speed'], current['max_angular_speed'])
+        current['angular_accel'] = clamp_setting('angular_accel', derived['angular_accel'])
 
     db_path = get_db_path()
     try:
@@ -347,18 +355,22 @@ def get_nav2_param_rewrites(settings: Optional[Dict[str, float]] = None) -> Dict
     return {
         'controller_server.ros__parameters.controller_frequency': 15.0,
         'controller_server.ros__parameters.FollowPath.desired_linear_vel': max_lin,
-        'controller_server.ros__parameters.FollowPath.min_approach_linear_velocity': min_lin,
+        'controller_server.ros__parameters.FollowPath.min_approach_linear_velocity': max(min_lin, 0.12),
+        'controller_server.ros__parameters.FollowPath.approach_velocity_scaling_dist': 0.30,
         'controller_server.ros__parameters.FollowPath.rotate_to_heading_angular_vel': max_ang,
         'controller_server.ros__parameters.FollowPath.max_angular_accel': acc_ang,
-        'controller_server.ros__parameters.FollowPath.rotate_to_heading_min_angle': 0.785,
+        'controller_server.ros__parameters.FollowPath.rotate_to_heading_min_angle': 0.85,
         'controller_server.ros__parameters.FollowPath.lookahead_dist': 0.28,
-        'controller_server.ros__parameters.FollowPath.min_lookahead_dist': 0.20,
+        'controller_server.ros__parameters.FollowPath.min_lookahead_dist': 0.22,
         'controller_server.ros__parameters.FollowPath.max_lookahead_dist': 0.45,
         'controller_server.ros__parameters.FollowPath.lookahead_time': 1.0,
         'controller_server.ros__parameters.FollowPath.use_fixed_curvature_lookahead': True,
         'controller_server.ros__parameters.FollowPath.curvature_lookahead_dist': 0.35,
         'controller_server.ros__parameters.FollowPath.regulated_linear_scaling_min_radius': 0.70,
-        'controller_server.ros__parameters.FollowPath.regulated_linear_scaling_min_speed': 0.10,
+        'controller_server.ros__parameters.FollowPath.regulated_linear_scaling_min_speed': 0.12,
+        'controller_server.ros__parameters.FollowPath.use_cost_regulated_linear_velocity_scaling': False,
+        'controller_server.ros__parameters.general_goal_checker.xy_goal_tolerance': 0.15,
+        'controller_server.ros__parameters.general_goal_checker.yaw_goal_tolerance': 0.25,
         'controller_server.ros__parameters.FollowPathDWB.max_vel_x': max_lin,
         'controller_server.ros__parameters.FollowPathDWB.max_speed_xy': max_lin,
         'controller_server.ros__parameters.FollowPathDWB.max_vel_theta': max_ang,
