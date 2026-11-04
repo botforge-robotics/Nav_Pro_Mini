@@ -128,81 +128,86 @@ def apply_live_motion_parameters(node, settings: dict) -> None:
     acc_ang = float(settings.get('angular_accel', 0.50))
     dec_ang = -1.0 * abs(acc_ang) * 1.4
 
+    def _get_client(attr_name: str, srv_name: str):
+        cli = getattr(node, attr_name, None)
+        if cli is None:
+            cli = node.create_client(SetParameters, srv_name)
+            setattr(node, attr_name, cli)
+        return cli
+
     # 1. velocity_smoother
     try:
-        vs_client = node.create_client(SetParameters, '/velocity_smoother/set_parameters')
-        if vs_client.service_is_ready() or vs_client.wait_for_service(timeout_sec=0.5):
-            req = SetParameters.Request()
-            req.parameters = [
-                p_double_array('max_velocity', [max_lin, 0.0, max_ang]),
-                p_double_array('min_velocity', [-0.08, 0.0, -max_ang]),
-                p_double_array('max_accel', [acc_lin, 0.0, acc_ang]),
-                p_double_array('max_decel', [dec_lin, 0.0, dec_ang]),
-            ]
-            vs_client.call_async(req)
+        vs_client = _get_client('_cli_vs_param', '/velocity_smoother/set_parameters')
+        req = SetParameters.Request()
+        req.parameters = [
+            p_double_array('max_velocity', [max_lin, 0.0, max_ang]),
+            p_double_array('min_velocity', [-0.10, 0.0, -max_ang]),
+            p_double_array('max_accel', [acc_lin, 0.0, acc_ang]),
+            p_double_array('max_decel', [dec_lin, 0.0, dec_ang]),
+        ]
+        vs_client.call_async(req)
     except Exception as e:
         node.get_logger().debug(f'Could not set velocity_smoother params: {e}')
 
     # 2. controller_server
     try:
-        cs_client = node.create_client(SetParameters, '/controller_server/set_parameters')
-        if cs_client.service_is_ready() or cs_client.wait_for_service(timeout_sec=0.5):
-            req = SetParameters.Request()
-            req.parameters = [
-                p_double('controller_frequency', 15.0),
-                p_double('FollowPath.desired_linear_vel', max_lin),
-                p_double('FollowPath.min_approach_linear_velocity', min_lin),
-                p_double('FollowPath.rotate_to_heading_angular_vel', max_ang),
-                p_double('FollowPath.max_angular_accel', acc_ang),
-                p_double('FollowPath.rotate_to_heading_min_angle', 0.785),
-                p_double('FollowPath.lookahead_dist', 0.28),
-                p_double('FollowPath.min_lookahead_dist', 0.20),
-                p_double('FollowPath.max_lookahead_dist', 0.45),
-                p_double('FollowPath.lookahead_time', 1.0),
-                p_bool('FollowPath.use_fixed_curvature_lookahead', True),
-                p_double('FollowPath.curvature_lookahead_dist', 0.35),
-                p_double('FollowPath.regulated_linear_scaling_min_radius', 0.70),
-                p_double('FollowPath.regulated_linear_scaling_min_speed', 0.10),
-            ]
-            cs_client.call_async(req)
+        cs_client = _get_client('_cli_cs_param', '/controller_server/set_parameters')
+        req = SetParameters.Request()
+        req.parameters = [
+            p_double('controller_frequency', 15.0),
+            p_double('FollowPath.desired_linear_vel', max_lin),
+            p_double('FollowPath.min_approach_linear_velocity', min_lin),
+            p_double('FollowPath.approach_velocity_scaling_dist', 0.45),
+            p_double('FollowPath.rotate_to_heading_angular_vel', max_ang),
+            p_double('FollowPath.max_angular_accel', acc_ang),
+            p_double('FollowPath.rotate_to_heading_min_angle', 0.785),
+            p_double('FollowPath.lookahead_dist', 0.28),
+            p_double('FollowPath.min_lookahead_dist', 0.20),
+            p_double('FollowPath.max_lookahead_dist', 0.45),
+            p_double('FollowPath.lookahead_time', 1.0),
+            p_bool('FollowPath.use_fixed_curvature_lookahead', True),
+            p_double('FollowPath.curvature_lookahead_dist', 0.35),
+            p_double('FollowPath.regulated_linear_scaling_min_radius', 0.70),
+            p_double('FollowPath.regulated_linear_scaling_min_speed', 0.10),
+            p_double('general_goal_checker.xy_goal_tolerance', 0.12),
+            p_double('general_goal_checker.yaw_goal_tolerance', 0.22),
+        ]
+        cs_client.call_async(req)
     except Exception as e:
         node.get_logger().debug(f'Could not set controller_server params: {e}')
 
     # 3. route_server
     try:
-        rs_client = node.create_client(SetParameters, '/route_server/set_parameters')
-        if rs_client.service_is_ready() or rs_client.wait_for_service(timeout_sec=0.5):
-            req = SetParameters.Request()
-            req.parameters = [
-                p_double('radius_to_achieve_node', 0.35),
-                p_double('boundary_radius_to_achieve_node', 0.25),
-            ]
-            rs_client.call_async(req)
+        rs_client = _get_client('_cli_rs_param', '/route_server/set_parameters')
+        req = SetParameters.Request()
+        req.parameters = [
+            p_double('radius_to_achieve_node', 0.35),
+            p_double('boundary_radius_to_achieve_node', 0.25),
+        ]
+        rs_client.call_async(req)
     except Exception as e:
         node.get_logger().debug(f'Could not set route_server params: {e}')
 
-    # 3. behavior_server
+    # 4. behavior_server
     try:
-        bs_client = node.create_client(SetParameters, '/behavior_server/set_parameters')
-        if bs_client.service_is_ready() or bs_client.wait_for_service(timeout_sec=0.5):
-            req = SetParameters.Request()
-            req.parameters = [
-                p_double('max_rotational_vel', max_ang),
-                p_double('min_rotational_vel', min_ang),
-                p_double('rotational_acc_lim', acc_ang),
-            ]
-            bs_client.call_async(req)
+        bs_client = _get_client('_cli_bs_param', '/behavior_server/set_parameters')
+        req = SetParameters.Request()
+        req.parameters = [
+            p_double('max_rotational_vel', max_ang),
+            p_double('min_rotational_vel', min_ang),
+            p_double('rotational_acc_lim', acc_ang),
+        ]
+        bs_client.call_async(req)
     except Exception as e:
         node.get_logger().debug(f'Could not set behavior_server params: {e}')
 
-    # 4. navpromini_dock_manager
+    # 5. navpromini_dock_manager
     try:
-        dm_client = node.create_client(SetParameters, '/navpromini_dock_manager/set_parameters')
-        if dm_client.service_is_ready() or dm_client.wait_for_service(timeout_sec=0.5):
-            req = SetParameters.Request()
-            req.parameters = [
-                p_double('undock_speed', float(settings.get('undock_speed', 0.13))),
-                p_double('dock_speed', float(settings.get('dock_speed', 0.13))),
+        dm_client = _get_client('_cli_dm_param', '/navpromini_dock_manager/set_parameters')
+        req = SetParameters.Request()
+        req.parameters = [
+            p_double('undock_speed', float(settings.get('undock_speed', 0.13))),
+            p_double('dock_speed', float(settings.get('dock_speed', 0.13))),
             ]
             dm_client.call_async(req)
     except Exception as e:
