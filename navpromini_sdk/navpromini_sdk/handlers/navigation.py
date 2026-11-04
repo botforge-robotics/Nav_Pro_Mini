@@ -890,6 +890,30 @@ async def await_navigate_result(bridge, handle, target: dict, timeout: float = 3
             else:
                 bridge.get_logger().info(f'Superseded navigation goal ({target}) was canceled; ignoring result.')
             return {'ok': False, 'message': 'Goal was canceled'}
+
+        # Status 6 = ABORTED (e.g. Nav2 planner or controller failed, wheel slip delocalization)
+        if status == 6 and is_current and not target.get('_recovery_retried', False):
+            near_dock, dock_info = is_near_dock_or_docked(bridge)
+            if not dock_info.get('is_docked'):
+                bridge.get_logger().warn(
+                    f'Navigation goal to {target.get("name") or target} aborted by Nav2 (status 6). '
+                    'Attempting autonomous relocalization recovery before retry...'
+                )
+                bridge.emit_event('navigation.recovering', {'target': target, 'reason': 'nav2_aborted'})
+                try:
+                    reloc_res = await run_relocalize_spin(bridge, max_tries=2, timeout_sec=30.0)
+                    if reloc_res.get('converged'):
+                        bridge.get_logger().info('Autonomous relocalization succeeded! Retrying navigation goal...')
+                        target_retry = dict(target)
+                        target_retry['_recovery_retried'] = True
+                        new_handle = await send_navigate_goal(bridge, target_retry)
+                        TRACKER.handle = new_handle
+                        return await await_navigate_result(bridge, new_handle, target_retry, timeout=timeout)
+                    else:
+                        bridge.get_logger().warn('Autonomous relocalization timed out; proceeding with goal failure.')
+                except Exception as reloc_err:
+                    bridge.get_logger().warn(f'Relocalization recovery attempt error: {reloc_err}')
+
         message = f'Navigation ended with status {status}'
         if is_current:
             TRACKER.finish('failed', message)

@@ -27,7 +27,7 @@ from rclpy.qos import (
 from rclpy.task import Future
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Float32MultiArray, String
-from std_srvs.srv import SetBool
+from std_srvs.srv import Empty, SetBool
 
 DOCK_POSE_FILE = os.path.expanduser('~/.navpromini_dock_pose.json')
 _TICK = 0.1
@@ -177,6 +177,8 @@ class DockManagerNode(Node):
 
         self._camera_client = self.create_client(
             SetBool, 'camera/set_active', callback_group=cb)
+        self._reinit_amcl_client = self.create_client(
+            Empty, 'reinitialize_global_localization', callback_group=cb)
         self._nav_client = ActionClient(
             self, NavigateToPose, 'navigate_to_pose', callback_group=cb)
 
@@ -275,6 +277,21 @@ class DockManagerNode(Node):
 
     def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
         self._amcl_pose = msg
+        self._amcl_pose_stamp = time.monotonic()
+
+    def _amcl_converged(self, target_cov: float = 0.15, target_cov_yaw: float = 0.15) -> bool:
+        if self._amcl_pose is None:
+            return False
+        # Freshness check: must have received pose update recently
+        if (time.monotonic() - getattr(self, '_amcl_pose_stamp', 0.0)) > 3.0:
+            return False
+        cov = self._amcl_pose.pose.covariance
+        if len(cov) >= 36:
+            cx = float(cov[0])
+            cy = float(cov[7])
+            cyaw = float(cov[35])
+            return cx < target_cov and cy < target_cov and cyaw < target_cov_yaw
+        return False
 
     def _charging(self) -> bool:
         # Never consider charging while actively executing undock roll-off
@@ -428,14 +445,15 @@ class DockManagerNode(Node):
         for _ in range(3):
             self._cmd.publish(Twist())
 
-    async def _turn(self, radians: float, stop_when=None) -> bool:
+    async def _turn(self, radians: float, speed: float | None = None, stop_when=None) -> bool:
         """Closed-loop encoder angle turn: uses odometry to rotate precisely
         by the requested angle with P-control. Stops immediately if stop_when() is True."""
+        max_w = abs(speed) if speed is not None else self._max_omega
         start_yaw = self._odom_yaw()
         if start_yaw is None:
             # Fallback to timed if odometry is unavailable
-            period = max(abs(radians) / self._w_rate, self._min_turn_period)
-            rate = -self._w_rate if radians > 0 else self._w_rate
+            period = max(abs(radians) / max_w, self._min_turn_period)
+            rate = max_w if radians > 0 else -max_w
             end = time.monotonic() + period
             while time.monotonic() < end:
                 if stop_when is not None and stop_when():
@@ -448,7 +466,7 @@ class DockManagerNode(Node):
 
         # In robot frame: turning left/CCW is positive radians, turning right/CW is negative radians
         target_yaw = (start_yaw + radians + math.pi) % (2.0 * math.pi) - math.pi
-        deadline = time.monotonic() + max(3.0, (abs(radians) / max(0.05, self._w_rate)) * 2.5)
+        deadline = time.monotonic() + max(3.0, (abs(radians) / max(0.05, max_w)) * 2.5)
 
         while time.monotonic() < deadline:
             if stop_when is not None and stop_when():
@@ -466,7 +484,7 @@ class DockManagerNode(Node):
 
             # Closed-loop P-controller on heading error
             kp = 1.0
-            omega = max(-self._max_omega, min(self._max_omega, kp * err))
+            omega = max(-max_w, min(max_w, kp * err))
             if abs(omega) < 0.04:
                 omega = 0.04 if err > 0 else -0.04
 
@@ -569,6 +587,72 @@ class DockManagerNode(Node):
         if abs(yaw_diff) < 0.05:
             return True
         return await self._turn(yaw_diff)
+
+    async def _recover_localization(self, parent_goal_handle=None) -> bool:
+        """Attempt autonomous recovery from AMCL delocalization or lost staging path:
+        1. Calls /reinitialize_global_localization to disperse AMCL particles.
+        2. Executes an active 360-degree rotation while rear camera searches for dock tag
+           and AMCL resamples against laser scans.
+        3. Stops immediately if AprilTag is locked or AMCL covariance converges.
+        Returns True if tag is locked or AMCL converges, False otherwise."""
+        self.get_logger().warn('Staging navigation failed — starting autonomous relocalization & visual tag search...')
+        self._set_status('searching')
+        await self._set_camera(True)
+
+        if self._in_view():
+            self.get_logger().info('AprilTag already visible before recovery turn!')
+            return True
+
+        # Disperse AMCL particles across map if service is available
+        dispersed = False
+        if self._reinit_amcl_client.wait_for_service(timeout_sec=2.0):
+            try:
+                await self._reinit_amcl_client.call_async(Empty.Request())
+                dispersed = True
+                self.get_logger().info('AMCL particles dispersed across map for relocalization')
+            except Exception as e:
+                self.get_logger().warn(f'Failed to call reinitialize_global_localization: {e}')
+
+        await self._sleep(0.5)
+        start_time = time.monotonic()
+
+        def _check_stop() -> bool:
+            if parent_goal_handle is not None and parent_goal_handle.is_cancel_requested:
+                return True
+            if self._in_view():
+                return True
+            # Require at least 2.0s of rotation after particle dispersal before accepting convergence
+            if dispersed and (time.monotonic() - start_time) > 2.0 and self._amcl_converged():
+                return True
+            return False
+
+        # First scan turn: 360 degrees CCW (2 * pi) at 0.35 rad/s
+        await self._turn(2.0 * math.pi, speed=0.35, stop_when=_check_stop)
+
+        if self._in_view():
+            self.get_logger().info('Recovery turn succeeded: AprilTag acquired in camera!')
+            return True
+        if dispersed and self._amcl_converged():
+            self.get_logger().info('Recovery turn succeeded: AMCL converged onto map!')
+            return True
+
+        if parent_goal_handle is not None and parent_goal_handle.is_cancel_requested:
+            return False
+
+        # Second scan turn: 360 degrees CW in reverse if first turn did not converge
+        await self._sleep(0.4)
+        start_time = time.monotonic()
+        await self._turn(-2.0 * math.pi, speed=0.35, stop_when=_check_stop)
+
+        if self._in_view():
+            self.get_logger().info('Reverse recovery turn succeeded: AprilTag acquired in camera!')
+            return True
+        if dispersed and self._amcl_converged():
+            self.get_logger().info('Reverse recovery turn succeeded: AMCL converged onto map!')
+            return True
+
+        self.get_logger().warn('Autonomous relocalization turn did not acquire tag or converge AMCL')
+        return False
 
     async def _drive_straight(self, distance: float,
                               speed: Optional[float] = None,
@@ -854,18 +938,31 @@ class DockManagerNode(Node):
                 self.get_logger().info('dock: tag already in camera view — skipping staging nav, starting visual servoing directly')
             elif dock_pose is not None:
                 self._set_status('staging')
-                if not await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle):
-                    if not self._in_view():
+                staging_ok = await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle)
+                if not staging_ok and not self._in_view():
+                    if goal_handle.is_cancel_requested:
                         self._stop()
-                        if goal_handle.is_cancel_requested:
-                            goal_handle.canceled()
-                            self._set_status('undocked')
-                            return DockRobot.Result(success=False, error_msg='cancelled')
-                        self.get_logger().error('failed to reach staging pose and tag not visible')
-                        self._set_status('docking_failed')
-                        goal_handle.abort()
-                        return DockRobot.Result(
-                            success=False, error_msg='failed to reach staging pose')
+                        goal_handle.canceled()
+                        self._set_status('undocked')
+                        return DockRobot.Result(success=False, error_msg='cancelled')
+                    self.get_logger().warn('Staging navigation failed — attempting autonomous relocalization & visual recovery...')
+                    recovered = await self._recover_localization(parent_goal_handle=goal_handle)
+                    if not self._in_view() and recovered and self._amcl_converged():
+                        self.get_logger().info('AMCL re-localized successfully; retrying navigation to staging pose...')
+                        self._set_status('staging')
+                        staging_ok = await self._navigate_to_staging(dock_pose, parent_goal_handle=goal_handle)
+
+                if not staging_ok and not self._in_view():
+                    self._stop()
+                    if goal_handle.is_cancel_requested:
+                        goal_handle.canceled()
+                        self._set_status('undocked')
+                        return DockRobot.Result(success=False, error_msg='cancelled')
+                    self.get_logger().error('failed to reach staging pose and tag not visible after recovery')
+                    self._set_status('docking_failed')
+                    goal_handle.abort()
+                    return DockRobot.Result(
+                        success=False, error_msg='failed to reach staging pose')
             else:
                 self.get_logger().warn(
                     'no dock pose configured — attempting visual servoing directly')
