@@ -119,7 +119,7 @@ controller_server:
       inflation_cost_scaling_factor: 2.6
       transform_tolerance: 2.5
       allow_reversing: false
-      max_robot_pose_search_dist: 10.0
+      max_robot_pose_search_dist: 2.0
       use_interpolation: true
 
     FollowPathDWB:
