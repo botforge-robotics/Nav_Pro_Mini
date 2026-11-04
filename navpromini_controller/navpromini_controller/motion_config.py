@@ -22,14 +22,14 @@ from typing import Any, Dict, Optional
 # Finalized default values established through testing & calibration
 DEFAULT_MOTION_SETTINGS: Dict[str, float] = {
     'max_linear_speed': 0.35,     # m/s (Autonomous cruising speed ceiling)
-    'min_linear_speed': 0.05,     # m/s (Creep speed near goal tolerance)
-    'max_angular_speed': 0.30,    # rad/s (~17.2 deg/s, calm heading alignment)
-    'min_angular_speed': 0.10,    # rad/s (~5.7 deg/s)
-    'linear_accel': 0.050,        # m/s^2 (Auto-computed: max_linear_speed / 7.0, gentle anti-overshoot ramp)
-    'linear_decel': -0.117,       # m/s^2 (Auto-computed: -max_linear_speed / 3.0, smooth stopping)
-    'angular_accel': 0.50,        # rad/s^2 (Auto-computed: max_angular_speed * 1.67, responsive turns)
-    'undock_speed': 0.13,         # m/s (Doubled undock roll-off speed)
-    'dock_speed': 0.13,           # m/s (Doubled dock visual servo approach speed)
+    'min_linear_speed': 0.08,     # m/s (Approach speed near goal tolerance)
+    'max_angular_speed': 0.65,    # rad/s (~37.2 deg/s, brisk, crisp heading alignment)
+    'min_angular_speed': 0.15,    # rad/s (~8.6 deg/s)
+    'linear_accel': 0.250,        # m/s^2 (Auto-computed: max_linear_speed / 1.6, responsive acceleration)
+    'linear_decel': -0.333,       # m/s^2 (Auto-computed: -max_linear_speed / 1.2, smooth firm stopping)
+    'angular_accel': 1.63,        # rad/s^2 (Auto-computed: max_angular_speed * 2.5, brisk rotation)
+    'undock_speed': 0.15,         # m/s (Undock roll-off speed)
+    'dock_speed': 0.13,           # m/s (Dock visual servo approach speed)
 }
 
 def compute_derived_accelerations(
@@ -39,17 +39,17 @@ def compute_derived_accelerations(
     """Auto-configure linear and angular acceleration/deceleration from max speeds.
 
     Formulas:
-      - linear_accel = max_linear_speed / 7.0
-        Gentle acceleration ramp (0.029 m/s² at 0.2 m/s, 0.050 m/s² at 0.35 m/s).
-        Prevents surging forward on small turns and overshooting road network lines.
-      - linear_decel = -max_linear_speed / 3.0
+      - linear_accel = max_linear_speed / 1.6
+        Brisk acceleration ramp (~0.25 m/s² at 0.4 m/s).
+        Eliminates sluggish 7-second ramp-up while maintaining wheel traction.
+      - linear_decel = -max_linear_speed / 1.2
         Smooth, firm stopping brake rate without pitching or wheel skid.
-      - angular_accel = max_angular_speed * 1.67
-        Responsive rotational acceleration for crisp heading alignment.
+      - angular_accel = max_angular_speed * 2.5
+        Brisk rotational acceleration for snappy heading alignment.
     """
     v_max = float(max_linear_speed)
-    acc_lin = round(v_max / 7.0 + 1e-9, 3)
-    dec_lin = -round(v_max / 3.0 + 1e-9, 3)
+    acc_lin = round(v_max / 1.6 + 1e-9, 3)
+    dec_lin = -round(v_max / 1.2 + 1e-9, 3)
 
     out = {
         'linear_accel': acc_lin,
@@ -57,7 +57,7 @@ def compute_derived_accelerations(
     }
     if max_angular_speed is not None:
         w_max = float(max_angular_speed)
-        out['angular_accel'] = round(w_max * 1.67, 2)
+        out['angular_accel'] = round(w_max * 2.5, 2)
     return out
 
 # Safety clamps: absolute min/max limits that cannot be violated
@@ -80,7 +80,7 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
     },
     'max_angular_speed': {
         'min': 0.10,
-        'max': 0.50,
+        'max': 0.85,
         'step': 0.01,
         'unit': 'rad/s',
         'label': 'Max Angular Speed',
@@ -88,7 +88,7 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
     },
     'min_angular_speed': {
         'min': 0.05,
-        'max': 0.20,
+        'max': 0.25,
         'step': 0.01,
         'unit': 'rad/s',
         'label': 'Min Angular Speed',
@@ -96,30 +96,30 @@ SAFETY_LIMITS: Dict[str, Dict[str, Any]] = {
     },
     'linear_accel': {
         'min': 0.02,
-        'max': 0.20,
+        'max': 0.50,
         'step': 0.001,
         'unit': 'm/s²',
         'label': 'Linear Acceleration',
-        'desc': 'Auto-computed: max_linear_speed / 7.0 (gentle ramp, zero overshoot on turns)',
-        'auto_formula': 'v_max / 7',
+        'desc': 'Auto-computed: max_linear_speed / 1.6 (brisk ramp, responsive starting)',
+        'auto_formula': 'v_max / 1.6',
     },
     'linear_decel': {
-        'min': -0.40,
+        'min': -0.60,
         'max': -0.04,
         'step': 0.001,
         'unit': 'm/s²',
         'label': 'Linear Deceleration',
-        'desc': 'Auto-computed: -max_linear_speed / 3.0 (controlled progressive stopping rate)',
-        'auto_formula': '-v_max / 3',
+        'desc': 'Auto-computed: -max_linear_speed / 1.2 (controlled progressive stopping rate)',
+        'auto_formula': '-v_max / 1.2',
     },
     'angular_accel': {
         'min': 0.10,
-        'max': 1.00,
+        'max': 2.50,
         'step': 0.01,
         'unit': 'rad/s²',
         'label': 'Angular Acceleration',
-        'desc': 'Auto-computed: max_angular_speed * 1.67 (responsive rotational ramp for crisp heading alignment)',
-        'auto_formula': 'w_max * 1.67',
+        'desc': 'Auto-computed: max_angular_speed * 2.5 (brisk rotational ramp for crisp heading alignment)',
+        'auto_formula': 'w_max * 2.5',
     },
     'undock_speed': {
         'min': 0.05,

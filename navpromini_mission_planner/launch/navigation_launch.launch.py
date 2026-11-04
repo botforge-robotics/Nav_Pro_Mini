@@ -201,9 +201,15 @@ def launch_setup(context, *args, **kwargs):
 
             cs_params = yaml_data.setdefault('controller_server', {}).setdefault('ros__parameters', {})
             cs_params['controller_frequency'] = 15.0
+
+            gc = cs_params.setdefault('general_goal_checker', {})
+            gc['xy_goal_tolerance'] = 0.12
+            gc['yaw_goal_tolerance'] = 0.22
+
             fp = cs_params.setdefault('FollowPath', {})
             fp['desired_linear_vel'] = max_lin
-            fp['min_approach_linear_velocity'] = min_lin
+            fp['approach_velocity_scaling_dist'] = 0.45
+            fp['min_approach_linear_velocity'] = max(min_lin, 0.08)
             fp['rotate_to_heading_angular_vel'] = max_ang
             fp['max_angular_accel'] = acc_ang
             fp['rotate_to_heading_min_angle'] = 0.785
@@ -227,7 +233,7 @@ def launch_setup(context, *args, **kwargs):
 
             vs_params = yaml_data.setdefault('velocity_smoother', {}).setdefault('ros__parameters', {})
             vs_params['max_velocity'] = [max_lin, 0.0, max_ang]
-            vs_params['min_velocity'] = [-0.08, 0.0, -max_ang]
+            vs_params['min_velocity'] = [-0.10, 0.0, -max_ang]
             vs_params['max_accel'] = [acc_lin, 0.0, acc_ang]
             vs_params['max_decel'] = [dec_lin, 0.0, dec_ang]
 
