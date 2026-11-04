@@ -203,24 +203,25 @@ def launch_setup(context, *args, **kwargs):
             cs_params['controller_frequency'] = 15.0
 
             gc = cs_params.setdefault('general_goal_checker', {})
-            gc['xy_goal_tolerance'] = 0.12
-            gc['yaw_goal_tolerance'] = 0.22
+            gc['xy_goal_tolerance'] = 0.15
+            gc['yaw_goal_tolerance'] = 0.25
 
             fp = cs_params.setdefault('FollowPath', {})
             fp['desired_linear_vel'] = max_lin
-            fp['approach_velocity_scaling_dist'] = 0.45
-            fp['min_approach_linear_velocity'] = max(min_lin, 0.08)
+            fp['approach_velocity_scaling_dist'] = 0.30
+            fp['min_approach_linear_velocity'] = max(min_lin, 0.12)
             fp['rotate_to_heading_angular_vel'] = max_ang
             fp['max_angular_accel'] = acc_ang
-            fp['rotate_to_heading_min_angle'] = 0.785
+            fp['rotate_to_heading_min_angle'] = 0.85
             fp['lookahead_dist'] = 0.28
-            fp['min_lookahead_dist'] = 0.20
+            fp['min_lookahead_dist'] = 0.22
             fp['max_lookahead_dist'] = 0.45
             fp['lookahead_time'] = 1.0
             fp['use_fixed_curvature_lookahead'] = True
             fp['curvature_lookahead_dist'] = 0.35
             fp['regulated_linear_scaling_min_radius'] = 0.70
-            fp['regulated_linear_scaling_min_speed'] = 0.10
+            fp['regulated_linear_scaling_min_speed'] = 0.12
+            fp['use_cost_regulated_linear_velocity_scaling'] = False
 
             dwb = cs_params.setdefault('FollowPathDWB', {})
             dwb['max_vel_x'] = max_lin

@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 # Finalized default values established through testing & calibration
 DEFAULT_MOTION_SETTINGS: Dict[str, float] = {
     'max_linear_speed': 0.35,     # m/s (Autonomous cruising speed ceiling)
-    'min_linear_speed': 0.08,     # m/s (Approach speed near goal tolerance)
+    'min_linear_speed': 0.12,     # m/s (Approach speed near goal tolerance, eliminates crawling)
     'max_angular_speed': 0.65,    # rad/s (~37.2 deg/s, brisk, crisp heading alignment)
     'min_angular_speed': 0.15,    # rad/s (~8.6 deg/s)
     'linear_accel': 0.250,        # m/s^2 (Auto-computed: max_linear_speed / 1.6, responsive acceleration)
