@@ -200,11 +200,21 @@ def launch_setup(context, *args, **kwargs):
             dec_ang = -1.0 * abs(acc_ang) * 1.4
 
             cs_params = yaml_data.setdefault('controller_server', {}).setdefault('ros__parameters', {})
+            cs_params['controller_frequency'] = 15.0
             fp = cs_params.setdefault('FollowPath', {})
             fp['desired_linear_vel'] = max_lin
             fp['min_approach_linear_velocity'] = min_lin
             fp['rotate_to_heading_angular_vel'] = max_ang
             fp['max_angular_accel'] = acc_ang
+            fp['rotate_to_heading_min_angle'] = 0.785
+            fp['lookahead_dist'] = 0.28
+            fp['min_lookahead_dist'] = 0.20
+            fp['max_lookahead_dist'] = 0.45
+            fp['lookahead_time'] = 1.0
+            fp['use_fixed_curvature_lookahead'] = True
+            fp['curvature_lookahead_dist'] = 0.35
+            fp['regulated_linear_scaling_min_radius'] = 0.70
+            fp['regulated_linear_scaling_min_speed'] = 0.10
 
             dwb = cs_params.setdefault('FollowPathDWB', {})
             dwb['max_vel_x'] = max_lin
