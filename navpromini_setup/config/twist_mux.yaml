@@ -1,4 +1,4 @@
-# twist_mux: teleop + Nav2 + IR docking.
+# twist_mux: teleop + Nav2 + docking + safety locks.
 
 twist_mux:
   ros__parameters:
@@ -8,21 +8,26 @@ twist_mux:
         topic: cmd_vel_smoothed
         timeout: 0.5
         priority: 10
-      docking:
-        # ir_dock_node's final IR-guided approach. Above nav so the docking
-        # approach isn't fought by a stale controller_server command, below
-        # teleop so a human can always take over mid-dock — which matters,
-        # since this state deliberately drives the robot backward into a
-        # fixed object.
-        topic: cmd_vel_dock
-        timeout: 0.5
-        priority: 30
       teleop:
         topic: cmd_vel_teleop
         timeout: 0.5
         priority: 50
+      docking:
+        # Autonomy docking & undocking actions (from dock to standoff).
+        # Priority 60 is above teleop (50) so dock/undock maneuvers have authority
+        # inside the dock zone and are unaffected by the dock_zone teleop safety lock (55).
+        topic: cmd_vel_dock
+        timeout: 0.5
+        priority: 60
     locks:
       estop:
         topic: navpro/cmd_vel_lock
         timeout: 0.0
         priority: 100
+      dock_zone:
+        # Safety interlock: locks all topics with priority < 55 (teleop 50, navigation 10)
+        # whenever the robot is inside the dock zone bounding box or at the dock.
+        # Only docking (priority 60) can drive in this zone to execute safe undock/docking.
+        topic: navpro/dock_zone_lock
+        timeout: 0.0
+        priority: 55

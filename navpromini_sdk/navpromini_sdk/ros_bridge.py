@@ -55,7 +55,7 @@ from rclpy.qos import (
     QoSReliabilityPolicy,
 )
 from sensor_msgs.msg import BatteryState, CompressedImage, Imu, LaserScan
-from std_msgs.msg import Float32, Float32MultiArray, String
+from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 from std_srvs.srv import Empty, Trigger
 
 from navpromini_launch_manager_interfaces.srv import (
@@ -153,6 +153,8 @@ class RosBridge(Node):
                                  LATCHED_QOS, callback_group=cb)
         self.create_subscription(Float32MultiArray, 'dock_tag', self._on_dock_tag, 10,
                                  callback_group=cb)
+        self.create_subscription(Bool, 'dock/in_dock_zone', self._on_in_dock_zone,
+                                 LATCHED_QOS, callback_group=cb)
 
         # Video streams (camera & dock_debug) are subscribed on-demand when active
         # clients connect to avoid continuous 15/30 FPS JPEG processing when idle.
@@ -510,6 +512,19 @@ class RosBridge(Node):
     def _on_dock_status(self, m: String) -> None:
         self._put('dock_status', m.data)
 
+    def _on_in_dock_zone(self, m: Bool) -> None:
+        self._put('in_dock_zone', bool(m.data))
+
+    @property
+    def is_in_dock_zone(self) -> bool:
+        """True if the robot is inside the dock zone or parked at the dock."""
+        if self._get('in_dock_zone') is True:
+            return True
+        st = self._get('dock_status')
+        if st in ('docked', 'charging', 'full', 'docking', 'undocking'):
+            return True
+        return False
+
     def _on_dock_pose(self, m: PoseStamped) -> None:
         p = m.pose.position
         self._put('dock_pose', {
@@ -602,6 +617,11 @@ class RosBridge(Node):
     # -- outbound helpers ---------------------------------------------------
 
     def publish_cmd_vel(self, linear: float, angular: float) -> None:
+        if self.is_in_dock_zone and (abs(linear) > 0.001 or abs(angular) > 0.001):
+            self.get_logger().warn(
+                'SDK teleop blocked: Robot is in dock zone. Undock first before driving.',
+                throttle_duration_sec=2.0)
+            return
         t = Twist()
         t.linear.x = float(linear)
         t.angular.z = float(angular)

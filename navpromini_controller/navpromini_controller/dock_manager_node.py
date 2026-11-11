@@ -26,7 +26,7 @@ from rclpy.qos import (
 )
 from rclpy.task import Future
 from sensor_msgs.msg import BatteryState
-from std_msgs.msg import Float32MultiArray, String
+from std_msgs.msg import Bool, Float32MultiArray, String
 from std_srvs.srv import Empty, SetBool
 
 DOCK_POSE_FILE = os.path.expanduser('~/.navpromini_dock_pose.json')
@@ -96,11 +96,11 @@ class DockManagerNode(Node):
         p('straight_kp', 1.5)
         p('straight_max_omega', 0.1)
         p('retreat_on_fail_m', 0.25)
-        p('undock_distance', 0.45)
+        p('undock_distance', 0.85)
         p('undock_speed', undock_spd)
         p('dock_speed', dock_spd)
         p('dock_origin_offset_m', 0.13)
-        p('standoff_m', 0.70)
+        p('standoff_m', 0.85)
         p('staging_timeout_sec', 300.0)
         p('marker_wait_timeout', 0.6)
         p('max_run_timeout', 600.0)
@@ -152,6 +152,8 @@ class DockManagerNode(Node):
         self._docked = False
         self._docked_state_known = False
         self._status = 'undocked'
+        self._in_dock_zone: bool = False
+        self._last_teleop_warn_time: float = 0.0
         self._tag: Optional[list] = None
         self._tag_stamp = 0.0
         self._power: Optional[int] = None
@@ -161,6 +163,8 @@ class DockManagerNode(Node):
 
         self._cmd = self.create_publisher(Twist, 'cmd_vel_dock', 10)
         self._status_pub = self.create_publisher(String, 'dock_status', _LATCHED_QOS)
+        self._dock_zone_lock_pub = self.create_publisher(Bool, 'navpro/dock_zone_lock', _LATCHED_QOS)
+        self._in_dock_zone_pub = self.create_publisher(Bool, 'dock/in_dock_zone', _LATCHED_QOS)
         self._dock_pose_pub = self.create_publisher(
             PoseStamped, 'dock_pose', _LATCHED_QOS)
         self.create_subscription(PoseStamped, 'dock_pose',
@@ -174,6 +178,8 @@ class DockManagerNode(Node):
                                  self._on_odom, _SENSOR_QOS, callback_group=cb)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose',
                                  self._on_amcl_pose, _SENSOR_QOS, callback_group=cb)
+        self.create_subscription(Twist, 'cmd_vel_teleop',
+                                 self._on_teleop_cmd, 10, callback_group=cb)
 
         self._camera_client = self.create_client(
             SetBool, 'camera/set_active', callback_group=cb)
@@ -224,6 +230,25 @@ class DockManagerNode(Node):
         for f in waiters:
             if not f.done():
                 f.set_result(None)
+
+        in_zone = self._is_in_dock_zone()
+        if in_zone != self._in_dock_zone:
+            self._in_dock_zone = in_zone
+            self.get_logger().info(
+                f'Dock zone safety lock changed: in_dock_zone={in_zone} '
+                f'(teleop {"LOCKED" if in_zone else "UNLOCKED"})')
+            self._dock_zone_lock_pub.publish(Bool(data=in_zone))
+            self._in_dock_zone_pub.publish(Bool(data=in_zone))
+
+    def _on_teleop_cmd(self, msg: Twist) -> None:
+        if self._is_in_dock_zone():
+            if abs(msg.linear.x) > 0.001 or abs(msg.angular.z) > 0.001:
+                now = time.monotonic()
+                if now - self._last_teleop_warn_time > 2.0:
+                    self._last_teleop_warn_time = now
+                    self.get_logger().warn(
+                        'Manual teleop command blocked by dock zone safety interlock! '
+                        'Robot is inside dock zone. Undock first before driving manually.')
 
     async def _tick(self) -> None:
         fut = Future()
@@ -362,24 +387,30 @@ class DockManagerNode(Node):
 
     def _is_in_dock_zone(self) -> bool:
         """Determines if the robot is inside the docking zone bounding box
-        (extending from behind the dock charger up to the standoff position in front,
-        and within the lateral approach corridor), even if charging contacts are not engaged."""
+        (extending from behind the dock charger up to the standoff mark in front,
+        and spanning symmetrically left and right by the standoff distance).
+        Any manual teleop is blocked within this zone to prevent disturbing the dock."""
         if self._charging() or self._docked:
             return True
-        if self._status in ('charging', 'full', 'docked'):
+        if self._status in ('charging', 'full', 'docked', 'docking', 'undocking'):
             return True
         if self._in_view() and self._tag:
             try:
+                # Tag frame: z is longitudinal depth, x is lateral offset
                 z = float(self._tag[4])
-                if z < (self._standoff + 0.35):
+                x = float(self._tag[2])
+                lat_limit = max(0.60, self._standoff)
+                if z <= (self._standoff + 0.15) and abs(x) <= (lat_limit + 0.15):
                     return True
             except Exception:
                 pass
 
         x_rel, y_rel = self._get_dock_relative_pose()
         if x_rel is not None and y_rel is not None:
-            # Box: from -0.30m behind dock to standoff + 0.25m in front, and +/- 0.50m left/right
-            if -0.30 <= x_rel <= (self._standoff + 0.25) and abs(y_rel) <= 0.50:
+            # Box: from -0.35m behind dock to standoff + 0.05m in front,
+            # and left/right by the standoff distance (+/- standoff)
+            lat_limit = max(0.60, self._standoff)
+            if -0.35 <= x_rel <= (self._standoff + 0.05) and abs(y_rel) <= lat_limit:
                 return True
 
         return False
@@ -421,6 +452,9 @@ class DockManagerNode(Node):
 
     def _publish_status(self) -> None:
         self._status_pub.publish(String(data=self._status))
+        self._in_dock_zone = self._is_in_dock_zone()
+        self._dock_zone_lock_pub.publish(Bool(data=self._in_dock_zone))
+        self._in_dock_zone_pub.publish(Bool(data=self._in_dock_zone))
 
     def _drive(self, lin: float, ang: float, effort_boost: float = 1.0) -> None:
         lin = float(lin)
@@ -1191,18 +1225,26 @@ class DockManagerNode(Node):
         self._busy = True
         try:
             goal: NavigateToPose.Goal = goal_handle.request
-            if self._is_inside_dock_slot():
-                # Only execute physical undock roll-off when physically inside dock slot:
+            if self._is_inside_dock_slot() or self._is_in_dock_zone():
+                # Execute physical undock roll-off when inside dock slot or dock zone:
                 self._set_status('undocking')
                 self._docked = False
+
+                # Drive forward to reach the standoff mark and completely clear the dock zone
+                roll_dist = max(self._undock_distance, self._standoff)
+                x_rel, _ = self._get_dock_relative_pose()
+                if x_rel is not None:
+                    needed = self._standoff - max(0.0, x_rel)
+                    roll_dist = max(0.25, needed)
+
                 self.get_logger().info(
-                    f'undock: robot is inside dock slot — driving straight forward {self._undock_distance:.2f}m at {self._undock_speed:.2f}m/s to clear dock')
+                    f'undock: driving straight forward {roll_dist:.2f}m at {self._undock_speed:.2f}m/s to reach standoff mark')
                 ok = False
                 for attempt in range(3):
                     if goal_handle.is_cancel_requested:
                         break
                     ok = await self._drive_straight(
-                        self._undock_distance,
+                        roll_dist,
                         speed=self._undock_speed,
                         is_canceled=lambda: goal_handle.is_cancel_requested)
                     if ok or goal_handle.is_cancel_requested:
@@ -1211,6 +1253,10 @@ class DockManagerNode(Node):
                         f'undock: stalled on attempt {attempt + 1} — pushing forward again')
                 self._docked = False
                 self._set_status('undocked')
+                # Refresh dock zone state and release lock if outside zone
+                self._in_dock_zone = self._is_in_dock_zone()
+                self._dock_zone_lock_pub.publish(Bool(data=self._in_dock_zone))
+                self._in_dock_zone_pub.publish(Bool(data=self._in_dock_zone))
                 if goal_handle.is_cancel_requested:
                     self._stop()
                     goal_handle.canceled()
@@ -1221,9 +1267,12 @@ class DockManagerNode(Node):
                     return NavigateToPose.Result()
             else:
                 self.get_logger().info(
-                    'undock: robot is outside dock slot — skipping physical roll-off')
+                    'undock: robot is outside dock slot & zone — skipping physical roll-off')
                 self._docked = False
                 self._set_status('undocked')
+                self._in_dock_zone = self._is_in_dock_zone()
+                self._dock_zone_lock_pub.publish(Bool(data=self._in_dock_zone))
+                self._in_dock_zone_pub.publish(Bool(data=self._in_dock_zone))
 
             # If no destination pose was provided (pure 'Undock' button press), finish here
             if not self._has_nav_goal(goal):

@@ -45,6 +45,9 @@ class VelocityHandler(BaseHandler):
         data = self.body()
         linear = _clamped(data.get('linear', 0.0), MAX_LINEAR, 'linear')
         angular = _clamped(data.get('angular', 0.0), MAX_ANGULAR, 'angular')
+        if (abs(linear) > 0.001 or abs(angular) > 0.001) and self.bridge.is_in_dock_zone:
+            raise ApiError(409, 'robot_in_dock_zone',
+                           'Manual teleop is disabled in the dock zone to protect the dock. Please undock first.')
         self.bridge.publish_cmd_vel(linear, angular)
         self.send({'linear': linear, 'angular': angular,
                    'expires_in_sec': 0.5})
@@ -60,6 +63,9 @@ class MoveHandler(BaseHandler):
     """Drive a fixed distance and stop. Negative distance reverses."""
 
     async def post(self) -> None:
+        if self.bridge.is_in_dock_zone:
+            raise ApiError(409, 'robot_in_dock_zone',
+                           'Manual motion is disabled in the dock zone to protect the dock. Please undock first.')
         data = self.body(('distance',))
         distance = _clamped(data.get('distance'), 5.0, 'distance')
         speed = abs(_clamped(data.get('speed', 0.1), MAX_LINEAR, 'speed')) or 0.1
@@ -79,6 +85,9 @@ class RotateHandler(BaseHandler):
     """Rotate in place by an angle in radians. Positive is counter-clockwise."""
 
     async def post(self) -> None:
+        if self.bridge.is_in_dock_zone:
+            raise ApiError(409, 'robot_in_dock_zone',
+                           'Manual rotation is disabled in the dock zone to protect the dock. Please undock first.')
         data = self.body(('angle',))
         angle = _clamped(data.get('angle'), 2 * math.pi, 'angle')
         goal = Spin.Goal()
