@@ -518,9 +518,9 @@ class RosBridge(Node):
     @property
     def is_in_dock_zone(self) -> bool:
         """True if the robot is inside the dock zone or parked at the dock."""
-        if self._get('in_dock_zone') is True:
+        if self.get('in_dock_zone') is True:
             return True
-        st = self._get('dock_status')
+        st = self.get('dock_status')
         if st in ('docked', 'charging', 'full', 'docking', 'undocking'):
             return True
         return False
