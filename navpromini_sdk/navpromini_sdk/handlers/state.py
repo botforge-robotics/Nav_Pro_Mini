@@ -221,7 +221,8 @@ class RobotStateHandler(BaseHandler):
             },
             'dock': {'configured': bridge.get('dock_pose') is not None,
                     'status': dock_status_val,
-                    'operation': dock_tracker.state},
+                    'operation': dock_tracker.state,
+                    'in_dock_zone': bridge.is_in_dock_zone},
             'setup': {
                 'dismissed': setup_dismissed,
                 'completed': setup_completed,

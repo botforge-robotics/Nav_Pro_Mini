@@ -146,16 +146,25 @@ async def send_undock_goal(bridge):
     TRACKER.begin(None, 'undocking')
     bridge.emit_event('dock.started', {'operation': 'undock'})
 
-    # If physically sitting on the charger contacts, seed exact dock pose BEFORE rolling off!
+    # If physically sitting on the charger contacts, seed exact dock pose BEFORE rolling off,
+    # but ONLY IF AMCL is not already converged near the dock (to avoid resetting existing particles).
     battery = bridge.get('battery')
     is_charging = bool(battery and battery.get('charging'))
     dock_status = str(bridge.get('dock_status') or '').lower()
     if is_charging or dock_status in ('docked', 'charging', 'full'):
         dock = bridge.get('dock_pose')
         if dock and 'x' in dock and 'y' in dock:
-            bridge.get_logger().info('send_undock_goal: robot docked on contacts; seeding dock pose before undocking...')
-            bridge.publish_initial_pose(dock['x'], dock['y'], dock.get('theta', 0.0), dock.get('frame', 'map'))
-            await asyncio.sleep(0.3)
+            pose_map = bridge.get('pose_map')
+            rx = float(pose_map['x']) if pose_map and 'x' in pose_map else None
+            ry = float(pose_map['y']) if pose_map and 'y' in pose_map else None
+            amcl_needs_seed = True
+            if rx is not None and ry is not None:
+                if math.hypot(rx - float(dock['x']), ry - float(dock['y'])) < 0.30:
+                    amcl_needs_seed = False
+            if amcl_needs_seed:
+                bridge.get_logger().info('send_undock_goal: robot docked on contacts; seeding dock pose before undocking...')
+                bridge.publish_initial_pose(dock['x'], dock['y'], dock.get('theta', 0.0), dock.get('frame', 'map'))
+                await asyncio.sleep(0.3)
 
     goal = NavigateToPose.Goal()
     goal.pose = PoseStamped()   # empty frame_id + zero quaternion = undock only
@@ -182,12 +191,7 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
             bridge.emit_event('dock.completed' if ok else 'dock.failed',
                               {'operation': 'undock',
                                **({'message': message} if not ok else {})})
-            if ok:
-                try:
-                    from .navigation import relocalize_at_dock
-                    await relocalize_at_dock(bridge)
-                except Exception as e:
-                    bridge.get_logger().warn(f'Post-undock relocalize note: {e}')
+            # Note: Do NOT re-seed pose or relocalize after undocking; AMCL odometry smoothly tracks the roll-off!
         else:
             bridge.get_logger().info('Superseded undock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
