@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<robot name="NavProMiniV2_URDF" xmlns:xacro="http://www.ros.org/wiki/xacro" >
+
+<transmission name="RightWheelJoint_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="RightWheelJoint">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="RightWheelJoint_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="LeftWheelJoint_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="LeftWheelJoint">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="LeftWheelJoint_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+</robot>

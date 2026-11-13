@@ -1,0 +1,354 @@
+<?xml version="1.0" ?>
+<robot name="NavProMiniV2_URDF" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find NavProMiniV2_URDF_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find NavProMiniV2_URDF_description)/urdf/NavProMiniV2_URDF.trans" />
+<xacro:include filename="$(find NavProMiniV2_URDF_description)/urdf/NavProMiniV2_URDF.gazebo" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.007732589868670822 -0.012268620486389626 0.02281231773225211" rpy="0 0 0"/>
+    <mass value="1.5832461985590471"/>
+    <inertia ixx="0.006488" iyy="0.007762" izz="0.013605" ixy="-4e-06" iyz="-2e-06" ixz="0.000347"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="case_1">
+  <inertial>
+    <origin xyz="0.004156414740166747 -0.0022009986117417 0.08252041846336843" rpy="0 0 0"/>
+    <mass value="0.9059872724541711"/>
+    <inertia ixx="0.010579" iyy="0.008189" izz="0.015855" ixy="-2.2e-05" iyz="7.5e-05" ixz="-7.8e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.001649 0.012278 -0.012655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/case_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.001649 0.012278 -0.012655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/case_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FLCL_2">
+  <inertial>
+    <origin xyz="0.0014972340740296713 0.0010576981554579201 0.0018259229122038756" rpy="0 0 0"/>
+    <mass value="0.00253816428406674"/>
+    <inertia ixx="1e-06" iyy="0.0" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.106494 -0.060375 -0.088211" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FLCL_2.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.106494 -0.060375 -0.088211" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FLCL_2.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FLCR_1">
+  <inertial>
+    <origin xyz="0.0015011074808890107 -0.0010524871815968811 0.0018259229123386983" rpy="0 0 0"/>
+    <mass value="0.002538164284066739"/>
+    <inertia ixx="1e-06" iyy="0.0" izz="1e-06" ixy="-0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.106768 0.084536 -0.088211" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FLCR_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.106768 0.084536 -0.088211" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FLCR_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="BLC_1">
+  <inertial>
+    <origin xyz="0.015926115931285734 -4.856260717783778e-05 -0.009914444418581345" rpy="0 0 0"/>
+    <mass value="0.011583224330777717"/>
+    <inertia ixx="4.3e-05" iyy="2e-06" izz="4.5e-05" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.138323 0.011817 -0.112068" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/BLC_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.138323 0.011817 -0.112068" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/BLC_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="cheesePlate_1">
+  <inertial>
+    <origin xyz="0.0028088545073975835 0.012404121053397901 0.01736314493216104" rpy="0 0 0"/>
+    <mass value="1.0088826982512007"/>
+    <inertia ixx="0.006734" iyy="0.005261" izz="0.011772" ixy="2.7e-05" iyz="3.4e-05" ixz="4.4e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/cheesePlate_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/cheesePlate_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="BC_1">
+  <inertial>
+    <origin xyz="-0.0075683189708506265 0.00012946687762997386 -0.014882381750425777" rpy="0 0 0"/>
+    <mass value="0.008674563210963214"/>
+    <inertia ixx="1e-06" iyy="2e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.089967 0.012308 -0.033655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/BC_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.089967 0.012308 -0.033655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/BC_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FCR_1">
+  <inertial>
+    <origin xyz="-0.00756831897084638 0.0001294668776196939 -0.014882816360875045" rpy="0 0 0"/>
+    <mass value="0.008674563210963217"/>
+    <inertia ixx="1e-06" iyy="2e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.077608 0.070308 -0.033269" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FCR_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.077608 0.070308 -0.033269" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FCR_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FCL_1">
+  <inertial>
+    <origin xyz="-0.007568318970844368 0.0001294668776213384 -0.014882381750428969" rpy="0 0 0"/>
+    <mass value="0.00867456321096321"/>
+    <inertia ixx="1e-06" iyy="2e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.077608 -0.045692 -0.033655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FCL_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.077608 -0.045692 -0.033655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/FCL_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="dock_1">
+  <inertial>
+    <origin xyz="-0.04569784400661958 0.01197905230004586 0.07287556588943297" rpy="0 0 0"/>
+    <mass value="0.7979307247092986"/>
+    <inertia ixx="0.00821" iyy="0.0067" izz="0.004702" ixy="-5e-06" iyz="-9e-06" ixz="0.000888"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.136675 0.024359 -0.02531" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/dock_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.136675 0.024359 -0.02531" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/dock_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="rightWheel_1">
+  <inertial>
+    <origin xyz="-2.0915665097358954e-07 -0.023210028934350882 2.677555596547476e-07" rpy="0 0 0"/>
+    <mass value="0.03229644056631782"/>
+    <inertia ixx="1.4e-05" iyy="2.4e-05" izz="1.4e-05" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.002608 0.103808 -0.031905" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/rightWheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.002608 0.103808 -0.031905" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/rightWheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="leftWheel_2">
+  <inertial>
+    <origin xyz="-3.960973862840965e-07 0.023209213662924416 8.081480914329253e-08" rpy="0 0 0"/>
+    <mass value="0.03229644056631782"/>
+    <inertia ixx="1.4e-05" iyy="2.4e-05" izz="1.4e-05" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.002608 -0.079192 -0.031905" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/leftWheel_2.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.002608 -0.079192 -0.031905" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/leftWheel_2.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="lidar_1">
+  <inertial>
+    <origin xyz="-0.0008173264685971612 -0.0007150225822268701 0.0021967304095819595" rpy="0 0 0"/>
+    <mass value="0.6796219760569088"/>
+    <inertia ixx="0.000239" iyy="0.00024" izz="0.000412" ixy="7e-06" iyz="2e-06" ixz="2e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.057764 0.012279 -0.163655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.057764 0.012279 -0.163655" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find NavProMiniV2_URDF_description)/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="Rigid 5" type="fixed">
+  <origin xyz="0.001649 -0.012278 0.012655" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="case_1"/>
+</joint>
+
+<joint name="Rigid 6" type="fixed">
+  <origin xyz="0.104845 0.072653 0.075556" rpy="0 0 0"/>
+  <parent link="case_1"/>
+  <child link="FLCL_2"/>
+</joint>
+
+<joint name="Rigid 7" type="fixed">
+  <origin xyz="0.105119 -0.072258 0.075556" rpy="0 0 0"/>
+  <parent link="case_1"/>
+  <child link="FLCR_1"/>
+</joint>
+
+<joint name="Rigid 8" type="fixed">
+  <origin xyz="-0.139972 0.000461 0.099413" rpy="0 0 0"/>
+  <parent link="case_1"/>
+  <child link="BLC_1"/>
+</joint>
+
+<joint name="Rigid 9" type="fixed">
+  <origin xyz="0.0 0.0 0.148" rpy="0 0 0"/>
+  <parent link="case_1"/>
+  <child link="cheesePlate_1"/>
+</joint>
+
+<joint name="Rigid 10" type="fixed">
+  <origin xyz="-0.089967 -0.012308 0.033655" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="BC_1"/>
+</joint>
+
+<joint name="Rigid 11" type="fixed">
+  <origin xyz="0.077608 -0.070308 0.033269" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="FCR_1"/>
+</joint>
+
+<joint name="Rigid 12" type="fixed">
+  <origin xyz="0.077608 0.045692 0.033655" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="FCL_1"/>
+</joint>
+
+<joint name="dockJoint" type="fixed">
+  <origin xyz="-0.138324 -0.012081 0.012655" rpy="0 0 0"/>
+  <parent link="case_1"/>
+  <child link="dock_1"/>
+</joint>
+
+<joint name="RightWheelJoint" type="continuous">
+  <origin xyz="0.002608 -0.103808 0.031905" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="rightWheel_1"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<joint name="LeftWheelJoint" type="continuous">
+  <origin xyz="0.002608 0.079192 0.031905" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="leftWheel_2"/>
+  <axis xyz="0.0 1.0 0.0"/>
+</joint>
+
+<joint name="LidarJoint" type="fixed">
+  <origin xyz="0.056115 -1e-06 0.01" rpy="0 0 0"/>
+  <parent link="cheesePlate_1"/>
+  <child link="lidar_1"/>
+</joint>
+
+</robot>
