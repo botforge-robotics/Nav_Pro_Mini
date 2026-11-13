@@ -11,7 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     share_dir = get_package_share_directory('navpromini_description')
 
-    xacro_file = os.path.join(share_dir, 'urdf', 'NavProMini.xacro')
+    xacro_file = os.path.join(share_dir, 'urdf', 'navpromini.xacro')
     robot_description_config = xacro.process_file(xacro_file)
     robot_urdf = robot_description_config.toxml()
 
@@ -19,7 +19,8 @@ def generate_launch_description():
 
     gui_arg = DeclareLaunchArgument(
         name='gui',
-        default_value='True'
+        default_value='True',
+        description='Flag to enable joint_state_publisher_gui'
     )
 
     show_gui = LaunchConfiguration('gui')

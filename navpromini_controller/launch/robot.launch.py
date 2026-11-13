@@ -36,7 +36,9 @@ def generate_launch_description():
     pkg = get_package_share_directory('navpromini_controller')
     pkg_desc = get_package_share_directory('navpromini_description')
 
-    xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
+    xacro_file = os.path.join(pkg_desc, 'urdf', 'navpromini.xacro')
+    if not os.path.isfile(xacro_file):
+        xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
     robot_description = ParameterValue(
         Command([
             'xacro ', xacro_file,

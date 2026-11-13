@@ -62,7 +62,9 @@ def _setup(context, *args, **kwargs):
         # Even if x/y overridden, keep robot above cafe floor
         z = WORLD_SPAWNS['cafe']['z']
 
-    xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
+    xacro_file = os.path.join(pkg_desc, 'urdf', 'navpromini.xacro')
+    if not os.path.isfile(xacro_file):
+        xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
     robot_description = ParameterValue(Command(['xacro ', xacro_file]), value_type=str)
 
     resource_paths = [

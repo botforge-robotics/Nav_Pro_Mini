@@ -1,0 +1,43 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    NavProMini V2 Docking Station / Dock Attachment.
+    Separated from main robot URDF so it can be attached optionally
+    or used as a standalone charging dock.
+  -->
+  <xacro:macro name="navpromini_dock" params="parent:=case_1">
+    <link name="dock_1">
+      <inertial>
+        <origin xyz="-0.04569784400661958 0.01197905230004586 0.07287556588943297" rpy="0 0 0"/>
+        <mass value="0.7979307247092986"/>
+        <inertia ixx="0.00821" iyy="0.0067" izz="0.004702" ixy="-5e-06" iyz="-9e-06" ixz="0.000888"/>
+      </inertial>
+      <visual>
+        <origin xyz="0.136675 0.024359 -0.02531" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://navpromini_description/meshes/dock_1.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver"/>
+      </visual>
+      <collision>
+        <origin xyz="0.136675 0.024359 -0.02531" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://navpromini_description/meshes/dock_1.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="dockJoint" type="fixed">
+      <origin xyz="-0.138324 -0.012081 0.012655" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child link="dock_1"/>
+    </joint>
+
+    <gazebo reference="dock_1">
+      <material>Gazebo/Silver</material>
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <self_collide>true</self_collide>
+    </gazebo>
+  </xacro:macro>
+</robot>
