@@ -1,40 +1,37 @@
-# joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
+# joint_limits.yaml - Calibrated to Waveshare 30kg Serial Bus Servo (ST3215 / STS3215)
+# Specs: Stall Torque = 30 kg·cm (2.94 N·m @ 12V), No-load Speed = 45 RPM (0.222s/60° ≈ 4.71 rad/s)
 
-# For beginners, we downscale velocity and acceleration limits.
-# You can always specify higher scaling factors (<= 1.0) in your motion requests.  # Increase the values below to 1.0 to always move at maximum speed.
-default_velocity_scaling_factor: 0.1
-default_acceleration_scaling_factor: 0.1
+default_velocity_scaling_factor: 0.5
+default_acceleration_scaling_factor: 0.5
 
-# Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration]
-# Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
 joint_limits:
-  elbow_flex:
-    has_velocity_limits: true
-    max_velocity: 10.0
-    has_acceleration_limits: false
-    max_acceleration: 0.0
-  gripper:
-    has_velocity_limits: true
-    max_velocity: 10.0
-    has_acceleration_limits: false
-    max_acceleration: 0.0
-  shoulder_lift:
-    has_velocity_limits: true
-    max_velocity: 10.0
-    has_acceleration_limits: false
-    max_acceleration: 0.0
   shoulder_pan:
     has_velocity_limits: true
-    max_velocity: 10.0
-    has_acceleration_limits: false
-    max_acceleration: 0.0
+    max_velocity: 4.71
+    has_acceleration_limits: true
+    max_acceleration: 10.0
+  shoulder_lift:
+    has_velocity_limits: true
+    max_velocity: 4.71
+    has_acceleration_limits: true
+    max_acceleration: 10.0
+  elbow_flex:
+    has_velocity_limits: true
+    max_velocity: 4.71
+    has_acceleration_limits: true
+    max_acceleration: 10.0
   wrist_flex:
     has_velocity_limits: true
-    max_velocity: 10.0
-    has_acceleration_limits: false
-    max_acceleration: 0.0
+    max_velocity: 4.71
+    has_acceleration_limits: true
+    max_acceleration: 12.0
   wrist_roll:
     has_velocity_limits: true
-    max_velocity: 10.0
-    has_acceleration_limits: false
-    max_acceleration: 0.0
+    max_velocity: 4.71
+    has_acceleration_limits: true
+    max_acceleration: 15.0
+  gripper:
+    has_velocity_limits: true
+    max_velocity: 4.71
+    has_acceleration_limits: true
+    max_acceleration: 15.0

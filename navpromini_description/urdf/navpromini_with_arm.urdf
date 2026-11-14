@@ -669,7 +669,7 @@
     <parent link="gripper_link"/>
     <child link="moving_jaw_so101_v1_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" lower="-0.174533" upper="1.74533" velocity="10"/>
+    <limit effort="3.0" lower="-0.174533" upper="1.74533" velocity="4.71"/>
     <dynamics damping="0.1" friction="0.01"/>
   </joint>
   <!-- Joint from wrist to gripper -->
@@ -678,7 +678,7 @@
     <parent link="wrist_link"/>
     <child link="gripper_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" lower="-2.74385" upper="2.84121" velocity="10"/>
+    <limit effort="3.0" lower="-2.74385" upper="2.84121" velocity="4.71"/>
     <dynamics damping="0.1" friction="0.01"/>
   </joint>
   <!-- Joint from lower_arm to wrist -->
@@ -687,7 +687,7 @@
     <parent link="lower_arm_link"/>
     <child link="wrist_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" lower="-1.65806" upper="1.65806" velocity="10"/>
+    <limit effort="3.0" lower="-1.65806" upper="1.65806" velocity="4.71"/>
     <dynamics damping="0.2" friction="0.02"/>
   </joint>
   <!-- Joint from upper_arm to lower_arm -->
@@ -697,7 +697,7 @@
     <parent link="upper_arm_link"/>
     <child link="lower_arm_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" lower="-1.69" upper="1.69" velocity="10"/>
+    <limit effort="3.0" lower="-1.69" upper="1.69" velocity="4.71"/>
     <dynamics damping="0.4" friction="0.05"/>
   </joint>
   <!-- Joint from shoulder to upper_arm -->
@@ -706,7 +706,7 @@
     <parent link="shoulder_link"/>
     <child link="upper_arm_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" lower="-1.74533" upper="1.74533" velocity="10"/>
+    <limit effort="3.0" lower="-1.74533" upper="1.74533" velocity="4.71"/>
     <dynamics damping="0.5" friction="0.05"/>
   </joint>
   <!-- Joint from base to shoulder -->
@@ -715,7 +715,7 @@
     <parent link="arm_base_link"/>
     <child link="shoulder_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" lower="-1.91986" upper="1.91986" velocity="10"/>
+    <limit effort="3.0" lower="-1.91986" upper="1.91986" velocity="4.71"/>
     <dynamics damping="0.3" friction="0.02"/>
   </joint>
   <!-- MoveIt standard Tool Frame (TCP) -->
