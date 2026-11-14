@@ -63,8 +63,6 @@ def _setup(context, *args, **kwargs):
         z = WORLD_SPAWNS['cafe']['z']
 
     xacro_file = os.path.join(pkg_desc, 'urdf', 'navpromini.xacro')
-    if not os.path.isfile(xacro_file):
-        xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
 
     use_arm = LaunchConfiguration('use_arm').perform(context)
     arm_z = LaunchConfiguration('arm_z').perform(context)

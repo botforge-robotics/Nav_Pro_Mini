@@ -5,7 +5,7 @@
     Source: https://github.com/TheRobotStudio/SO-ARM100/tree/main/Simulation/SO101
     Exact kinematics, visual meshes, collision meshes, and inertias from SO101 CAD.
   -->
-  <xacro:macro name="navpromini_arm" params="parent:=lidar z_offset:=0.05 use_wrist_camera:=false">
+  <xacro:macro name="so101_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 use_wrist_camera:=false">
 
     <!-- Materials -->
     <material name="so101_3d_printed">
@@ -15,9 +15,10 @@
       <color rgba="0.1 0.1 0.1 1.0"/>
     </material>
 
-    <!-- Arm Base Joint connecting parent (lidar) to arm_base_link -->
+    <!-- Arm Base Joint connecting parent (base_link) to arm_base_link -->
+    <!-- Positioned directly above lidar at x=0.057764, y=-0.012279, z=0.220655 wrt base_link -->
     <joint name="arm_base_joint" type="fixed">
-      <origin xyz="0 0 ${z_offset}" rpy="0 0 0"/>
+      <origin xyz="${arm_x} ${arm_y} ${arm_z}" rpy="0 0 0"/>
       <parent link="${parent}"/>
       <child link="arm_base_link"/>
     </joint>
@@ -674,5 +675,10 @@
       <mu2>1.2</mu2>
     </gazebo>
 
+  </xacro:macro>
+
+  <!-- Backward-compatibility alias macro -->
+  <xacro:macro name="navpromini_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 z_offset:=0.220655 use_wrist_camera:=false">
+    <xacro:so101_arm parent="${parent}" arm_x="${arm_x}" arm_y="${arm_y}" arm_z="${arm_z}" use_wrist_camera="${use_wrist_camera}"/>
   </xacro:macro>
 </robot>

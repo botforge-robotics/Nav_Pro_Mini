@@ -45,14 +45,14 @@ map                         ← SLAM (mapping) or AMCL (navigation)
            └── base_link    ← robot base (+X forward)
                 ├── imu_link     ← QMI8658 (real)
                 ├── leftWheel / rightWheel (aliases: leftWheel_1, rightWheel_1)
+                ├── [optional] arm_base_link (SO-ARM100 / SO101, use_arm:=true, directly parented to base_link)
+                │    └── shoulder_link → upper_arm_link → lower_arm_link → wrist_link → gripper_link → moving_jaw / gripper_frame_link (tool0)
                 └── case (alias: chassis)
                      ├── flcl, flcr, cheeseplate, bc, fcr, fcl
                      ├── blc
                      │    └── camera_link (facing -X)
                      │         └── camera_optical_frame (alias: camera_color_optical_frame)
                      ├── lidar (alias: lidar_1)   ← LaserScan frame_id
-                     │    └── [optional] arm_base_link (SO-ARM100 / SO101 follower, use_arm:=true, arm_z:=0.05)
-                     │         └── shoulder_link → upper_arm_link → lower_arm_link → wrist_link → gripper_link → moving_jaw / gripper_frame_link (tool0)
                      └── [optional] dock (alias: dock_1)
 ```
 

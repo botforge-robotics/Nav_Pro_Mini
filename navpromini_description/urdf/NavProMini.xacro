@@ -1,5 +1,0 @@
-<?xml version="1.0" ?>
-<robot name="NavProMini" xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <!-- Backward-compatibility wrapper pointing to lowercase navpromini.xacro -->
-  <xacro:include filename="$(find navpromini_description)/urdf/navpromini.xacro" />
-</robot>
