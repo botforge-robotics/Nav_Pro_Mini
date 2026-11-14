@@ -176,6 +176,68 @@
     <child link="blc"/>
   </joint>
 
+  <!-- Lenovo 300 FHD Webcam (Rear Camera: 1080p @ 30fps, 95° DFOV)
+       Mounted above BLC link +ve z axis by 25.6mm, facing in -x direction -->
+  <link name="camera_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.130"/>
+      <inertia ixx="0.000129" iyy="0.000065" izz="0.000111" ixy="0" iyz="0" ixz="0"/>
+    </inertial>
+    <visual>
+      <!-- Webcam main body (90mm x 46mm x 35mm) -->
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.046 0.090 0.035"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <visual>
+      <!-- Lens barrel -->
+      <origin xyz="0.023 0 0" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.010" length="0.006"/>
+      </geometry>
+      <material name="charcoal"/>
+    </visual>
+    <visual>
+      <!-- Camera lens optic -->
+      <origin xyz="0.026 0 0" rpy="0 1.57079632679 0"/>
+      <geometry>
+        <cylinder radius="0.005" length="0.002"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.046 0.090 0.062"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <origin xyz="0.0 0.0 0.0256" rpy="0 0 3.14159265359"/>
+    <parent link="blc"/>
+    <child link="camera_link"/>
+  </joint>
+
+  <!-- Standard REP-103 Camera Optical Frame (+Z forward out of lens, +X right, +Y down) -->
+  <link name="camera_optical_frame"/>
+  <joint name="camera_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+    <parent link="camera_link"/>
+    <child link="camera_optical_frame"/>
+  </joint>
+
+  <!-- Compatibility optical alias -->
+  <link name="camera_color_optical_frame"/>
+  <joint name="camera_color_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="camera_optical_frame"/>
+    <child link="camera_color_optical_frame"/>
+  </joint>
+
   <!-- Cheeseplate (top mounting plate) -->
   <link name="cheeseplate">
     <inertial>
@@ -184,14 +246,14 @@
       <inertia ixx="0.006734" iyy="0.005261" izz="0.011772" ixy="2.7e-05" iyz="3.4e-05" ixz="4.4e-05"/>
     </inertial>
     <visual>
-      <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
+      <origin xyz="0.0 0.0 0.026" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://navpromini_description/meshes/cheeseplate.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
-      <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
+      <origin xyz="0.0 0.0 0.026" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://navpromini_description/meshes/cheeseplate.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -373,14 +435,14 @@
       <inertia ixx="0.000239" iyy="0.00024" izz="0.000412" ixy="7e-06" iyz="2e-06" ixz="2e-06"/>
     </inertial>
     <visual>
-      <origin xyz="-0.057764 0.012279 -0.163655" rpy="0 0 0"/>
+      <origin xyz="-0.057764 0.012279 -0.170" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://navpromini_description/meshes/lidar.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
-      <origin xyz="-0.057764 0.012279 -0.163655" rpy="0 0 0"/>
+      <origin xyz="-0.057764 0.012279 -0.170" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://navpromini_description/meshes/lidar.stl" scale="0.001 0.001 0.001"/>
       </geometry>

@@ -32,6 +32,7 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | Encoder      | **1470** ticks/rev → **≈7198.7** ticks/m                       |
 | Sim motors   | **10 kg·cm**, **300 RPM** (Nav2 capped ~0.4 m/s)               |
 | Lidar        | RPLIDAR A1M8 → `/scan`, frame `lidar_1`                        |
+| Camera       | Lenovo 300 FHD Webcam (1080p, 95° DFOV, rear-facing `-X` on `blc`) |
 | Control      | `/cmd_vel` (`geometry_msgs/Twist`)                             |
 | Encoders     | 420 ticks/rev → `/joint_states` (ESP32) → `/odom` (controller) |
 
@@ -45,7 +46,10 @@ map                         ← SLAM (mapping) or AMCL (navigation)
                 ├── imu_link     ← QMI8658 (real)
                 ├── leftWheel / rightWheel (aliases: leftWheel_1, rightWheel_1)
                 └── case (alias: chassis)
-                     ├── flcl, flcr, blc, cheeseplate, bc, fcr, fcl
+                     ├── flcl, flcr, cheeseplate, bc, fcr, fcl
+                     ├── blc
+                     │    └── camera_link (facing -X)
+                     │         └── camera_optical_frame (alias: camera_color_optical_frame)
                      ├── lidar (alias: lidar_1)   ← LaserScan frame_id
                      └── [optional] dock (alias: dock_1)
 ```

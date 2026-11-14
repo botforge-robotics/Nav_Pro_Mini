@@ -189,6 +189,43 @@
     <self_collide>false</self_collide>
   </gazebo>
 
+  <!-- Lenovo 300 FHD Webcam (Rear Camera: 1080p @ 30fps, 95° DFOV ~ 1.46 rad HFOV) -->
+  <gazebo reference="camera_link">
+    <material>Gazebo/FlatBlack</material>
+    <visual>
+      <material>
+        <ambient>0.08 0.08 0.08 1.0</ambient>
+        <diffuse>0.08 0.08 0.08 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
+    <sensor name="lenovo_300_fhd_webcam" type="camera">
+      <always_on>true</always_on>
+      <visualize>true</visualize>
+      <update_rate>30.0</update_rate>
+      <topic>camera/image_raw</topic>
+      <gz_frame_id>camera_optical_frame</gz_frame_id>
+      <camera>
+        <camera_info_topic>camera/camera_info</camera_info_topic>
+        <horizontal_fov>1.46</horizontal_fov>
+        <image>
+          <width>1920</width>
+          <height>1080</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>10.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+    </sensor>
+  </gazebo>
+
   <!-- RPLIDAR A1M8 -->
   <gazebo reference="lidar">
     <visual>
