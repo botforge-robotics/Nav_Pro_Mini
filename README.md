@@ -51,8 +51,8 @@ map                         ← SLAM (mapping) or AMCL (navigation)
                      │    └── camera_link (facing -X)
                      │         └── camera_optical_frame (alias: camera_color_optical_frame)
                      ├── lidar (alias: lidar_1)   ← LaserScan frame_id
-                     │    └── [optional] arm_base_link (use_arm:=true, arm_z:=0.05)
-                     │         └── arm_link_1..5 → gripper_base_link → tool0
+                     │    └── [optional] arm_base_link (SO-ARM100 / SO101 follower, use_arm:=true, arm_z:=0.05)
+                     │         └── shoulder_link → upper_arm_link → lower_arm_link → wrist_link → gripper_link → moving_jaw / gripper_frame_link (tool0)
                      └── [optional] dock (alias: dock_1)
 ```
 
