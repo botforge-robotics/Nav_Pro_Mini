@@ -1,73 +1,48 @@
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
-from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+#!/usr/bin/env python3
+"""Launch NavProMini in Gazebo Harmonic via navpromini_gazebo."""
+
 import os
-import xacro
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    share_dir = get_package_share_directory('navpromini_description')
-
-    xacro_file = os.path.join(share_dir, 'urdf', 'navpromini.xacro')
-    robot_description_config = xacro.process_file(xacro_file)
-    robot_urdf = robot_description_config.toxml()
-
-    robot_state_publisher_node = Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        name='robot_state_publisher',
-        parameters=[
-            {'robot_description': robot_urdf}
-        ]
-    )
-
-    joint_state_publisher_node = Node(
-        package='joint_state_publisher',
-        executable='joint_state_publisher',
-        name='joint_state_publisher'
-    )
-
-    gazebo_server = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare('gazebo_ros'),
-                'launch',
-                'gzserver.launch.py'
-            ])
-        ]),
-        launch_arguments={
-            'pause': 'true'
-        }.items()
-    )
-
-    gazebo_client = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare('gazebo_ros'),
-                'launch',
-                'gzclient.launch.py'
-            ])
-        ])
-    )
-
-    urdf_spawn_node = Node(
-        package='gazebo_ros',
-        executable='spawn_entity.py',
-        arguments=[
-            '-entity', 'NavProMini',
-            '-topic', 'robot_description'
-        ],
-        output='screen'
-    )
+    pkg_navpromini_gazebo = get_package_share_directory('navpromini_gazebo')
+    gazebo_launch_path = os.path.join(pkg_navpromini_gazebo, 'launch', 'gazebo.launch.py')
 
     return LaunchDescription([
-        robot_state_publisher_node,
-        joint_state_publisher_node,
-        gazebo_server,
-        gazebo_client,
-        urdf_spawn_node,
+        DeclareLaunchArgument(
+            'world_name',
+            default_value='empty',
+            description='World to load: empty, office, cafe',
+        ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='true',
+            description='Use simulation (Gazebo) clock',
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='false',
+            description='Launch RViz2 for visualization',
+        ),
+        DeclareLaunchArgument('x', default_value='0.0', description='Initial X position'),
+        DeclareLaunchArgument('y', default_value='0.0', description='Initial Y position'),
+        DeclareLaunchArgument('z', default_value='0.06', description='Initial Z position'),
+        DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw angle'),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(gazebo_launch_path),
+            launch_arguments={
+                'world_name': LaunchConfiguration('world_name'),
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'use_rviz': LaunchConfiguration('use_rviz'),
+                'x': LaunchConfiguration('x'),
+                'y': LaunchConfiguration('y'),
+                'z': LaunchConfiguration('z'),
+                'yaw': LaunchConfiguration('yaw'),
+            }.items(),
+        ),
     ])
