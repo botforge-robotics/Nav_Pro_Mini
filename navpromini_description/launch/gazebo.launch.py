@@ -31,7 +31,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('x', default_value='0.0', description='Initial X position'),
         DeclareLaunchArgument('y', default_value='0.0', description='Initial Y position'),
-        DeclareLaunchArgument('z', default_value='0.06', description='Initial Z position'),
+        DeclareLaunchArgument('z', default_value='0.05', description='Initial Z position'),
         DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw angle'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(gazebo_launch_path),

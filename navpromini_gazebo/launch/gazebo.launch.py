@@ -23,11 +23,11 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 AVAILABLE_WORLDS = ('empty', 'office', 'cafe')
 
-# Cafe Fuel model floor top ≈ 0.0948 + 0.19/2 = 0.19 m
+# Cafe Fuel model floor top ≈ 0.0948 + 0.19/2 = 0.19 m (5cm above floor = 0.24m)
 WORLD_SPAWNS = {
-    'empty':  {'x': '0.0', 'y': '0.0',  'z': '0.06'},
-    'office': {'x': '0.0', 'y': '-6.5', 'z': '0.06'},   # lobby
-    'cafe':   {'x': '0.0', 'y': '-3.0', 'z': '0.28'},   # on cafe floor
+    'empty':  {'x': '0.0', 'y': '0.0',  'z': '0.05'},
+    'office': {'x': '0.0', 'y': '-6.5', 'z': '0.05'},   # lobby
+    'cafe':   {'x': '0.0', 'y': '-3.0', 'z': '0.24'},   # on cafe floor (5cm above ground)
 }
 
 
@@ -54,11 +54,11 @@ def _setup(context, *args, **kwargs):
     yaw = LaunchConfiguration('yaw').perform(context)
 
     # Dynamic spawn: apply world defaults when user left launch defaults
-    defaults_used = (x == '0.0' and y == '0.0' and z == '0.06')
+    defaults_used = (x == '0.0' and y == '0.0' and z == '0.05')
     if defaults_used:
         spawn = WORLD_SPAWNS[world_name]
         x, y, z = spawn['x'], spawn['y'], spawn['z']
-    elif world_name == 'cafe' and abs(float(z) - 0.06) < 1e-6:
+    elif world_name == 'cafe' and abs(float(z) - 0.05) < 1e-6:
         # Even if x/y overridden, keep robot above cafe floor
         z = WORLD_SPAWNS['cafe']['z']
 
@@ -164,7 +164,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('x', default_value='0.0'),
         DeclareLaunchArgument('y', default_value='0.0'),
-        DeclareLaunchArgument('z', default_value='0.06'),
+        DeclareLaunchArgument('z', default_value='0.05'),
         DeclareLaunchArgument('yaw', default_value='0.0'),
         OpaqueFunction(function=_setup),
     ])
