@@ -11,21 +11,84 @@
   <xacro:property name="max_angular_velocity" value="2.5"/>
 
   <gazebo reference="base_link">
-    <material>Gazebo/Silver</material>
+    <material>Gazebo/DarkGrey</material>
+    <visual>
+      <material>
+        <ambient>0.15 0.15 0.15 1.0</ambient>
+        <diffuse>0.15 0.15 0.15 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
     <self_collide>false</self_collide>
   </gazebo>
 
   <gazebo reference="case">
-    <material>Gazebo/Silver</material>
+    <material>Gazebo/Orange</material>
+    <visual>
+      <material>
+        <ambient>1.0 0.45 0.05 1.0</ambient>
+        <diffuse>1.0 0.45 0.05 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
     <self_collide>false</self_collide>
   </gazebo>
 
   <gazebo reference="cheeseplate">
-    <material>Gazebo/Silver</material>
+    <material>Gazebo/FlatBlack</material>
+    <visual>
+      <material>
+        <ambient>0.08 0.08 0.08 1.0</ambient>
+        <diffuse>0.08 0.08 0.08 1.0</diffuse>
+        <specular>0.1 0.1 0.1 1.0</specular>
+      </material>
+    </visual>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="flcl">
+    <material>Gazebo/White</material>
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="flcr">
+    <material>Gazebo/White</material>
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <self_collide>false</self_collide>
+  </gazebo>
+
+  <gazebo reference="blc">
+    <material>Gazebo/White</material>
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
     <self_collide>false</self_collide>
@@ -67,6 +130,14 @@
 
   <!-- Slippery caster wheels: support robot weight but do not fight diff-drive -->
   <gazebo reference="bc">
+    <material>Gazebo/FlatBlack</material>
+    <visual>
+      <material>
+        <ambient>0.1 0.1 0.1 1.0</ambient>
+        <diffuse>0.1 0.1 0.1 1.0</diffuse>
+        <specular>0.1 0.1 0.1 1.0</specular>
+      </material>
+    </visual>
     <mu1>0.01</mu1>
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
@@ -79,6 +150,14 @@
   </gazebo>
 
   <gazebo reference="fcr">
+    <material>Gazebo/FlatBlack</material>
+    <visual>
+      <material>
+        <ambient>0.1 0.1 0.1 1.0</ambient>
+        <diffuse>0.1 0.1 0.1 1.0</diffuse>
+        <specular>0.1 0.1 0.1 1.0</specular>
+      </material>
+    </visual>
     <mu1>0.01</mu1>
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
@@ -91,6 +170,14 @@
   </gazebo>
 
   <gazebo reference="fcl">
+    <material>Gazebo/FlatBlack</material>
+    <visual>
+      <material>
+        <ambient>0.1 0.1 0.1 1.0</ambient>
+        <diffuse>0.1 0.1 0.1 1.0</diffuse>
+        <specular>0.1 0.1 0.1 1.0</specular>
+      </material>
+    </visual>
     <mu1>0.01</mu1>
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>

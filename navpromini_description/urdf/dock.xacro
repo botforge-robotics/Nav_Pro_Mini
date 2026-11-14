@@ -17,7 +17,7 @@
         <geometry>
           <mesh filename="package://navpromini_description/meshes/dock.stl" scale="0.001 0.001 0.001"/>
         </geometry>
-        <material name="silver"/>
+        <material name="dark_grey"/>
       </visual>
       <collision>
         <origin xyz="0.136675 0.024359 -0.02531" rpy="0 0 0"/>
@@ -42,7 +42,14 @@
     </joint>
 
     <gazebo reference="dock">
-      <material>Gazebo/Silver</material>
+      <material>Gazebo/DarkGrey</material>
+      <visual>
+        <material>
+          <ambient>0.15 0.15 0.15 1.0</ambient>
+          <diffuse>0.15 0.15 0.15 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
       <mu1>0.2</mu1>
       <mu2>0.2</mu2>
       <self_collide>true</self_collide>

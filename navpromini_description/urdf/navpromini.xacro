@@ -46,7 +46,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="dark_grey"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -68,7 +68,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/case.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="orange"/>
     </visual>
     <collision>
       <origin xyz="-0.001649 0.012278 -0.012655" rpy="0 0 0"/>
@@ -104,7 +104,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/flcl.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="white"/>
     </visual>
     <collision>
       <origin xyz="-0.106494 -0.060375 -0.088211" rpy="0 0 0"/>
@@ -132,7 +132,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/flcr.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="white"/>
     </visual>
     <collision>
       <origin xyz="-0.106768 0.084536 -0.088211" rpy="0 0 0"/>
@@ -160,7 +160,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/blc.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0.138323 0.011817 -0.112068" rpy="0 0 0"/>
@@ -188,7 +188,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/cheeseplate.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="black"/>
     </visual>
     <collision>
       <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
@@ -216,7 +216,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/bc.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="charcoal"/>
     </visual>
     <collision>
       <origin xyz="0.089967 0.012308 -0.033655" rpy="0 0 0"/>
@@ -244,7 +244,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/fcr.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="charcoal"/>
     </visual>
     <collision>
       <origin xyz="-0.077608 0.070308 -0.033269" rpy="0 0 0"/>
@@ -272,7 +272,7 @@
       <geometry>
         <mesh filename="package://navpromini_description/meshes/fcl.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="silver"/>
+      <material name="charcoal"/>
     </visual>
     <collision>
       <origin xyz="-0.077608 -0.045692 -0.033655" rpy="0 0 0"/>
