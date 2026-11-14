@@ -9,7 +9,7 @@
 
     <!-- Materials -->
     <material name="so101_3d_printed">
-      <color rgba="1.0 0.82 0.12 1.0"/>
+      <color rgba="1.0 0.45 0.05 1.0"/>
     </material>
     <material name="so101_sts3215">
       <color rgba="0.1 0.1 0.1 1.0"/>
@@ -564,6 +564,7 @@
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>shoulder_lift</joint_name>
+        <initial_position>-1.5707963</initial_position>
         <p_gain>30.0</p_gain>
         <i_gain>0.2</i_gain>
         <d_gain>2.0</d_gain>
@@ -571,6 +572,7 @@
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>elbow_flex</joint_name>
+        <initial_position>1.5707963</initial_position>
         <p_gain>25.0</p_gain>
         <i_gain>0.2</i_gain>
         <d_gain>1.5</d_gain>
@@ -598,27 +600,76 @@
       </plugin>
     </gazebo>
 
-    <!-- Gazebo link colors & friction -->
+    <!-- Gazebo link colors & friction (Orange theme matching NavProMini case) -->
     <gazebo reference="arm_base_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
     </gazebo>
     <gazebo reference="shoulder_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
     </gazebo>
     <gazebo reference="upper_arm_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
     </gazebo>
     <gazebo reference="lower_arm_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
     </gazebo>
     <gazebo reference="wrist_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
     </gazebo>
     <gazebo reference="gripper_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
     </gazebo>
     <gazebo reference="moving_jaw_so101_v1_link">
-      <material>Gazebo/Yellow</material>
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
       <mu1>1.2</mu1>
       <mu2>1.2</mu2>
     </gazebo>
