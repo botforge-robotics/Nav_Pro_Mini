@@ -40,7 +40,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'arm_z',
-            default_value='0.05',
+            default_value='0.0198',
             description='Z offset of modular arm attachment above lidar in meters',
         ),
         IncludeLaunchDescription(
