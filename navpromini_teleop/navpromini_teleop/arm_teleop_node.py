@@ -12,8 +12,13 @@ Provides smooth trajectory interpolation and named poses for the 6-DOF SO101 arm
 """
 
 import math
+import time
+from threading import Lock
 import numpy as np
 import rclpy
+from control_msgs.action import FollowJointTrajectory
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Float64MultiArray, String
@@ -81,6 +86,24 @@ class ArmTeleopNode(Node):
         # Interactive GUI slider subscriber (from joint_state_publisher_gui remapped to /joint_states_gui)
         self.sub_gui = self.create_subscription(
             JointState, '/joint_states_gui', self.gui_joint_state_callback, 10
+        )
+
+        # Action Servers for MoveIt 2 FollowJointTrajectory execution
+        self.arm_action_server = ActionServer(
+            self,
+            FollowJointTrajectory,
+            '/arm_controller/follow_joint_trajectory',
+            execute_callback=self.execute_trajectory_callback,
+            goal_callback=self.action_goal_callback,
+            cancel_callback=self.action_cancel_callback,
+        )
+        self.gripper_action_server = ActionServer(
+            self,
+            FollowJointTrajectory,
+            '/gripper_controller/follow_joint_trajectory',
+            execute_callback=self.execute_trajectory_callback,
+            goal_callback=self.action_goal_callback,
+            cancel_callback=self.action_cancel_callback,
         )
 
         # Control loop timer
@@ -185,12 +208,68 @@ class ArmTeleopNode(Node):
             self.is_moving = False
             self.get_logger().info('Target arm pose reached.')
 
+    # MoveIt 2 FollowJointTrajectory Action Server Handlers
+    def action_goal_callback(self, goal_request):
+        self.get_logger().info('MoveIt FollowJointTrajectory goal received.')
+        return GoalResponse.ACCEPT
+
+    def action_cancel_callback(self, goal_handle):
+        self.get_logger().info('MoveIt FollowJointTrajectory goal cancel requested.')
+        return CancelResponse.ACCEPT
+
+    async def execute_trajectory_callback(self, goal_handle):
+        """Execute a planned trajectory from MoveIt 2 point-by-point in real time."""
+        trajectory = goal_handle.request.trajectory
+        joint_names = trajectory.joint_names
+        points = trajectory.points
+
+        if not points:
+            goal_handle.succeed()
+            result = FollowJointTrajectory.Result()
+            result.error_code = FollowJointTrajectory.Result.SUCCESSFUL
+            return result
+
+        self.get_logger().info(
+            f'Executing MoveIt trajectory: {len(points)} waypoints across {joint_names}...'
+        )
+
+        start_time = self.get_clock().now()
+        for idx, pt in enumerate(points):
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                result = FollowJointTrajectory.Result()
+                result.error_code = FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                self.get_logger().warn('Trajectory execution canceled.')
+                return result
+
+            # Target timestamp relative to trajectory start
+            target_time = pt.time_from_start.sec + pt.time_from_start.nanosec * 1e-9
+            elapsed = (self.get_clock().now() - start_time).nanoseconds * 1e-9
+            sleep_duration = target_time - elapsed
+            if sleep_duration > 0.001:
+                time.sleep(sleep_duration)
+
+            for name, pos in zip(joint_names, pt.positions):
+                if name in self.joint_pubs:
+                    msg = Float64()
+                    msg.data = float(pos)
+                    self.joint_pubs[name].publish(msg)
+                    self.target_positions[name] = float(pos)
+
+        goal_handle.succeed()
+        result = FollowJointTrajectory.Result()
+        result.error_code = FollowJointTrajectory.Result.SUCCESSFUL
+        self.get_logger().info('MoveIt trajectory executed successfully.')
+        return result
+
 
 def main(args=None):
     rclpy.init(args=args)
     node = ArmTeleopNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
