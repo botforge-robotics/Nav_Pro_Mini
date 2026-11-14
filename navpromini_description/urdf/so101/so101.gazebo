@@ -66,78 +66,19 @@
       </plugin>
     </gazebo>
 
-    <!-- Gazebo link colors & friction (Orange theme matching NavProMini case) -->
-    <gazebo reference="arm_base_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
-    </gazebo>
-    <gazebo reference="shoulder_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
-    </gazebo>
-    <gazebo reference="upper_arm_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
-    </gazebo>
-    <gazebo reference="lower_arm_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
-    </gazebo>
-    <gazebo reference="wrist_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
-    </gazebo>
+    <!-- Gripper grasping friction and contact properties (materials inherited directly from URDF visuals) -->
     <gazebo reference="gripper_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
-    </gazebo>
-    <gazebo reference="moving_jaw_so101_v1_link">
-      <material>Gazebo/Orange</material>
-      <visual>
-        <material>
-          <ambient>1.0 0.45 0.05 1.0</ambient>
-          <diffuse>1.0 0.45 0.05 1.0</diffuse>
-          <specular>0.2 0.2 0.2 1.0</specular>
-        </material>
-      </visual>
       <mu1>1.2</mu1>
       <mu2>1.2</mu2>
+      <kp>1000000.0</kp>
+      <kd>1.0</kd>
+    </gazebo>
+
+    <gazebo reference="moving_jaw_so101_v1_link">
+      <mu1>1.2</mu1>
+      <mu2>1.2</mu2>
+      <kp>1000000.0</kp>
+      <kd>1.0</kd>
     </gazebo>
   </xacro:macro>
 
