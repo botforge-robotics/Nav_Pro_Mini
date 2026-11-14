@@ -150,6 +150,14 @@ def _setup(context, *args, **kwargs):
             condition=IfCondition(use_rviz),
             output='screen',
         ),
+        Node(
+            package='navpromini_teleop',
+            executable='arm_teleop',
+            name='arm_teleop_node',
+            output='screen',
+            parameters=[{'use_sim_time': use_sim_time}],
+            condition=IfCondition(LaunchConfiguration('use_arm')),
+        ),
     ]
 
 
