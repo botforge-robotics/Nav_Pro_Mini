@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Materials for SO101 Robot Arm (Orange theme matching NavProMini case) -->
+  <material name="so101_3d_printed">
+    <color rgba="1.0 0.45 0.05 1.0"/>
+  </material>
+  <material name="so101_sts3215">
+    <color rgba="0.1 0.1 0.1 1.0"/>
+  </material>
+</robot>

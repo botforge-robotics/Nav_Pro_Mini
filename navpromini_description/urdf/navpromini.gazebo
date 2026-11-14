@@ -130,12 +130,12 @@
 
   <!-- Slippery caster wheels: support robot weight but do not fight diff-drive -->
   <gazebo reference="bc">
-    <material>Gazebo/FlatBlack</material>
+    <material>Gazebo/White</material>
     <visual>
       <material>
-        <ambient>0.1 0.1 0.1 1.0</ambient>
-        <diffuse>0.1 0.1 0.1 1.0</diffuse>
-        <specular>0.1 0.1 0.1 1.0</specular>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
       </material>
     </visual>
     <mu1>0.01</mu1>
@@ -150,12 +150,12 @@
   </gazebo>
 
   <gazebo reference="fcr">
-    <material>Gazebo/FlatBlack</material>
+    <material>Gazebo/White</material>
     <visual>
       <material>
-        <ambient>0.1 0.1 0.1 1.0</ambient>
-        <diffuse>0.1 0.1 0.1 1.0</diffuse>
-        <specular>0.1 0.1 0.1 1.0</specular>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
       </material>
     </visual>
     <mu1>0.01</mu1>
@@ -170,12 +170,12 @@
   </gazebo>
 
   <gazebo reference="fcl">
-    <material>Gazebo/FlatBlack</material>
+    <material>Gazebo/White</material>
     <visual>
       <material>
-        <ambient>0.1 0.1 0.1 1.0</ambient>
-        <diffuse>0.1 0.1 0.1 1.0</diffuse>
-        <specular>0.1 0.1 0.1 1.0</specular>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
       </material>
     </visual>
     <mu1>0.01</mu1>

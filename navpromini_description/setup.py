@@ -13,7 +13,8 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
+        (os.path.join('share', package_name, 'urdf'), [f for f in glob('urdf/*') if os.path.isfile(f)]),
+        (os.path.join('share', package_name, 'urdf', 'so101'), glob('urdf/so101/*')),
         (os.path.join('share', package_name, 'meshes'), [f for f in glob('meshes/*') if os.path.isfile(f)]),
         (os.path.join('share', package_name, 'meshes', 'so101'), glob('meshes/so101/*')),
         (os.path.join('share', package_name, 'config'), glob('config/*'))

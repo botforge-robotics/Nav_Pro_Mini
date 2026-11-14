@@ -1,0 +1,144 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="so101_arm_gazebo">
+    <!-- Gazebo Sim Joint State Publisher for SO101 Joints -->
+    <gazebo>
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher">
+        <joint_name>shoulder_pan</joint_name>
+        <joint_name>shoulder_lift</joint_name>
+        <joint_name>elbow_flex</joint_name>
+        <joint_name>wrist_flex</joint_name>
+        <joint_name>wrist_roll</joint_name>
+        <joint_name>gripper</joint_name>
+        <topic>/joint_states</topic>
+        <update_rate>50</update_rate>
+      </plugin>
+    </gazebo>
+
+    <!-- Gazebo Sim Joint Position Controllers for SO101 Motors (STS3215) -->
+    <!-- Home Position: shoulder_lift = -90 deg (-1.5708 rad), elbow_flex = +90 deg (+1.5708 rad) -->
+    <gazebo>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>shoulder_pan</joint_name>
+        <p_gain>20.0</p_gain>
+        <i_gain>0.1</i_gain>
+        <d_gain>1.0</d_gain>
+      </plugin>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>shoulder_lift</joint_name>
+        <initial_position>-1.5707963</initial_position>
+        <p_gain>30.0</p_gain>
+        <i_gain>0.2</i_gain>
+        <d_gain>2.0</d_gain>
+      </plugin>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>elbow_flex</joint_name>
+        <initial_position>1.5707963</initial_position>
+        <p_gain>25.0</p_gain>
+        <i_gain>0.2</i_gain>
+        <d_gain>1.5</d_gain>
+      </plugin>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>wrist_flex</joint_name>
+        <p_gain>15.0</p_gain>
+        <i_gain>0.1</i_gain>
+        <d_gain>1.0</d_gain>
+      </plugin>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>wrist_roll</joint_name>
+        <p_gain>10.0</p_gain>
+        <i_gain>0.05</i_gain>
+        <d_gain>0.5</d_gain>
+      </plugin>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>gripper</joint_name>
+        <p_gain>15.0</p_gain>
+        <i_gain>0.1</i_gain>
+        <d_gain>0.5</d_gain>
+      </plugin>
+    </gazebo>
+
+    <!-- Gazebo link colors & friction (Orange theme matching NavProMini case) -->
+    <gazebo reference="arm_base_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+    </gazebo>
+    <gazebo reference="shoulder_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+    </gazebo>
+    <gazebo reference="upper_arm_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+    </gazebo>
+    <gazebo reference="lower_arm_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+    </gazebo>
+    <gazebo reference="wrist_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+    </gazebo>
+    <gazebo reference="gripper_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+    </gazebo>
+    <gazebo reference="moving_jaw_so101_v1_link">
+      <material>Gazebo/Orange</material>
+      <visual>
+        <material>
+          <ambient>1.0 0.45 0.05 1.0</ambient>
+          <diffuse>1.0 0.45 0.05 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+      <mu1>1.2</mu1>
+      <mu2>1.2</mu2>
+    </gazebo>
+  </xacro:macro>
+
+</robot>

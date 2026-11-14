@@ -1,0 +1,61 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Optional Wrist Camera Attachment (from so101_new_calib_camera.urdf) -->
+  <xacro:macro name="so101_wrist_camera" params="parent:=gripper_link">
+    <link name="wrist_camera_mount_link">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.02"/>
+        <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://navpromini_description/meshes/so101/wrist_camera_mount_so101_v1.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="so101_3d_printed"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://navpromini_description/meshes/so101/wrist_camera_mount_so101_v1.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="wrist_camera_link">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.015"/>
+        <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://navpromini_description/meshes/so101/wrist_camera_so101_v1.stl"/>
+        </geometry>
+        <material name="so101_sts3215"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://navpromini_description/meshes/so101/wrist_camera_so101_v1.stl"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="wrist_camera_mount_joint" type="fixed">
+      <origin xyz="-0.0150 0.0240 -0.0315" rpy="-1.5708 -0.0008 -1.5708"/>
+      <parent link="${parent}"/>
+      <child link="wrist_camera_mount_link"/>
+    </joint>
+
+    <joint name="wrist_camera_joint" type="fixed">
+      <origin xyz="-0.04941 -0.03813 0.0175" rpy="0 -1.5708 -2.0076"/>
+      <parent link="wrist_camera_mount_link"/>
+      <child link="wrist_camera_link"/>
+    </joint>
+  </xacro:macro>
+
+</robot>

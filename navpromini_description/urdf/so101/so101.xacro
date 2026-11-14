@@ -1,0 +1,40 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    SO-ARM100 / SO101 Robot Arm (Follower, New Calibration)
+    Modular URDF package:
+    - so101_materials.xacro: Materials and colors
+    - so101_arm.xacro: 6-DOF kinematics (links and revolute joints)
+    - so101.trans: Hardware interface transmissions
+    - so101.gazebo: Gazebo controllers, joint state publisher, and physics properties
+    - so101_wrist_camera.xacro: Optional wrist camera attachment
+  -->
+
+  <xacro:include filename="$(find navpromini_description)/urdf/so101/so101_materials.xacro" />
+  <xacro:include filename="$(find navpromini_description)/urdf/so101/so101_arm.xacro" />
+  <xacro:include filename="$(find navpromini_description)/urdf/so101/so101.trans" />
+  <xacro:include filename="$(find navpromini_description)/urdf/so101/so101.gazebo" />
+  <xacro:include filename="$(find navpromini_description)/urdf/so101/so101_wrist_camera.xacro" />
+
+  <xacro:macro name="so101_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 use_wrist_camera:=false">
+    <!-- Arm Kinematics & Frames -->
+    <xacro:so101_arm_kinematics parent="${parent}" arm_x="${arm_x}" arm_y="${arm_y}" arm_z="${arm_z}"/>
+
+    <!-- Hardware Transmissions -->
+    <xacro:so101_arm_transmissions/>
+
+    <!-- Gazebo Sim Plugins, Controllers & Materials -->
+    <xacro:so101_arm_gazebo/>
+
+    <!-- Optional Wrist Camera -->
+    <xacro:if value="${use_wrist_camera}">
+      <xacro:so101_wrist_camera parent="gripper_link"/>
+    </xacro:if>
+  </xacro:macro>
+
+  <!-- Backward-compatibility alias macro -->
+  <xacro:macro name="navpromini_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 z_offset:=0.220655 use_wrist_camera:=false">
+    <xacro:so101_arm parent="${parent}" arm_x="${arm_x}" arm_y="${arm_y}" arm_z="${arm_z}" use_wrist_camera="${use_wrist_camera}"/>
+  </xacro:macro>
+
+</robot>
