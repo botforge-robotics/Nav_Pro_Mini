@@ -3,7 +3,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -18,6 +18,11 @@ def generate_launch_description():
         default_value='True',
         description='Flag to enable joint_state_publisher_gui',
     )
+    sim_arg = DeclareLaunchArgument(
+        name='sim',
+        default_value='false',
+        description='If true, connect GUI sliders to Gazebo simulation (remapped to /joint_states_gui)',
+    )
     use_arm_arg = DeclareLaunchArgument(
         name='use_arm',
         default_value='false',
@@ -30,6 +35,7 @@ def generate_launch_description():
     )
 
     show_gui = LaunchConfiguration('gui')
+    sim = LaunchConfiguration('sim')
     use_arm = LaunchConfiguration('use_arm')
     arm_z = LaunchConfiguration('arm_z')
 
@@ -46,7 +52,9 @@ def generate_launch_description():
         }
     ]
 
+    # Offline mode: robot_state_publisher publishes /tf from offline joint_states
     robot_state_publisher_node = Node(
+        condition=UnlessCondition(sim),
         package='robot_state_publisher',
         executable='robot_state_publisher',
         name='robot_state_publisher',
@@ -63,12 +71,23 @@ def generate_launch_description():
         parameters=jsp_params,
     )
 
-    joint_state_publisher_gui_node = Node(
-        condition=IfCondition(show_gui),
+    # Offline GUI: publishes to /joint_states
+    joint_state_publisher_gui_offline = Node(
+        condition=IfCondition(PythonExpression(["'", show_gui, "' == 'True' and '", sim, "' == 'false'"])),
         package='joint_state_publisher_gui',
         executable='joint_state_publisher_gui',
         name='joint_state_publisher_gui',
         parameters=jsp_params,
+    )
+
+    # Sim GUI: publishes to /joint_states_gui so arm_teleop forwards to Gazebo in real-time
+    joint_state_publisher_gui_sim = Node(
+        condition=IfCondition(PythonExpression(["'", show_gui, "' == 'True' and '", sim, "' == 'true'"])),
+        package='joint_state_publisher_gui',
+        executable='joint_state_publisher_gui',
+        name='joint_state_publisher_gui',
+        parameters=jsp_params,
+        remappings=[('/joint_states', '/joint_states_gui')],
     )
 
     rviz_node = Node(
@@ -76,15 +95,18 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz2',
         arguments=['-d', rviz_config_file],
+        parameters=[{'use_sim_time': sim}],
         output='screen',
     )
 
     return LaunchDescription([
         gui_arg,
+        sim_arg,
         use_arm_arg,
         arm_z_arg,
         robot_state_publisher_node,
         joint_state_publisher_node,
-        joint_state_publisher_gui_node,
+        joint_state_publisher_gui_offline,
+        joint_state_publisher_gui_sim,
         rviz_node,
     ])

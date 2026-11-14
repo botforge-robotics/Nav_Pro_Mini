@@ -78,6 +78,10 @@ class ArmTeleopNode(Node):
         self.sub_joint_states = self.create_subscription(
             JointState, '/joint_states', self.joint_state_callback, 10
         )
+        # Interactive GUI slider subscriber (from joint_state_publisher_gui remapped to /joint_states_gui)
+        self.sub_gui = self.create_subscription(
+            JointState, '/joint_states_gui', self.gui_joint_state_callback, 10
+        )
 
         # Control loop timer
         timer_period = 1.0 / self.control_rate
@@ -104,6 +108,17 @@ class ArmTeleopNode(Node):
         for name, pos in zip(msg.name, msg.position):
             if name in self.current_positions:
                 self.current_positions[name] = pos
+
+    def gui_joint_state_callback(self, msg: JointState):
+        """Forward slider positions from joint_state_publisher_gui directly to Gazebo controllers."""
+        for name, pos in zip(msg.name, msg.position):
+            if name in self.joint_pubs:
+                val = float(pos)
+                if abs(val - self.target_positions[name]) > 1e-4:
+                    self.target_positions[name] = val
+                    fmsg = Float64()
+                    fmsg.data = val
+                    self.joint_pubs[name].publish(fmsg)
 
     def named_pose_callback(self, msg: String):
         name = msg.data.strip().lower()
