@@ -37,10 +37,10 @@
         <joint name="wrist_roll" value="0"/>
     </group_state>
     <group_state name="stow" group="arm">
-        <joint name="elbow_flex" value="1.69"/>
-        <joint name="shoulder_lift" value="-1.74"/>
+        <joint name="elbow_flex" value="1.55"/>
+        <joint name="shoulder_lift" value="-1.65"/>
         <joint name="shoulder_pan" value="0"/>
-        <joint name="wrist_flex" value="-1.5"/>
+        <joint name="wrist_flex" value="-1.4"/>
         <joint name="wrist_roll" value="0"/>
     </group_state>
     <group_state name="zero" group="arm">
@@ -206,4 +206,9 @@
     <disable_collisions link1="rightWheel" link2="upper_arm_link" reason="Never"/>
     <disable_collisions link1="rightWheel" link2="wrist_link" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="upper_arm_link" reason="Adjacent"/>
+    <disable_collisions link1="shoulder_link" link2="lower_arm_link" reason="Never"/>
+    <disable_collisions link1="shoulder_link" link2="wrist_link" reason="Never"/>
+    <disable_collisions link1="shoulder_link" link2="gripper_link" reason="Never"/>
+    <disable_collisions link1="upper_arm_link" link2="wrist_link" reason="Never"/>
+    <disable_collisions link1="upper_arm_link" link2="gripper_link" reason="Never"/>
 </robot>
