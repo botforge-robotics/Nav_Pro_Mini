@@ -57,7 +57,7 @@ class DockManagerNode(Node):
 
         p = self.declare_parameter
         p('angular_rate', 0.045)
-        p('wheel_separation_m', 0.225)
+        p('wheel_separation_m', 0.23)
         p('wheel_breakaway_mps', 0.02)
         p('wheel_floor_max_scale', 1.8)
         p('linear_rate', 0.058)

@@ -28,7 +28,7 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | ------------ | -------------------------------------------------------------- |
 | Drive        | Differential drive                                             |
 | Wheel radius | **0.0325 m** (65 mm dia; URDF + firmware + odom)               |
-| Track        | **0.225 m** (22.5 cm; URDF + firmware + odom)                  |
+| Track        | **0.23 m** (23 cm; URDF + firmware + odom)                     |
 | Encoder      | **1470** ticks/rev → **≈7198.7** ticks/m                       |
 | Sim motors   | **10 kg·cm**, **300 RPM** (Nav2 capped ~0.4 m/s)               |
 | Lidar        | RPLIDAR A1M8 → `/scan`, frame `lidar_1`                        |
@@ -40,12 +40,14 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 ```text
 map                         ← SLAM (mapping) or AMCL (navigation)
  └── odom                   ← Gazebo odom (sim) or wheel odom node (real)
-      └── base_link         ← robot base (+X forward)
-           ├── imu_link     ← QMI8658 (real)
-           └── chassis
-                ├── leftWheel_1 / rightWheel_1
-                ├── casterWheel_1, FLLC_1, FRLC_1, BLC_1, FC_1
-                └── lidar_1   ← LaserScan frame_id
+      └── base_footprint    ← root footprint (REP-120 compliant)
+           └── base_link    ← robot base (+X forward)
+                ├── imu_link     ← QMI8658 (real)
+                ├── leftWheel / rightWheel (aliases: leftWheel_1, rightWheel_1)
+                └── case (alias: chassis)
+                     ├── flcl, flcr, blc, cheeseplate, bc, fcr, fcl
+                     ├── lidar (alias: lidar_1)   ← LaserScan frame_id
+                     └── [optional] dock (alias: dock_1)
 ```
 
 ---

@@ -3,10 +3,10 @@
 
   <!-- Physical parameters for NavProMini V2
        Wheel: 68 mm diameter → radius 0.034 m
-       Track: 22.5 cm → 0.225 m (must match firmware + odom)
+       Track: 23 cm → 0.23 m (wheel-to-wheel separation distance)
   -->
   <xacro:property name="wheel_radius" value="0.034"/>
-  <xacro:property name="wheel_separation" value="0.225"/>
+  <xacro:property name="wheel_separation" value="0.23"/>
   <xacro:property name="max_linear_velocity" value="0.6"/>
   <xacro:property name="max_angular_velocity" value="2.5"/>
 
@@ -17,21 +17,21 @@
     <self_collide>false</self_collide>
   </gazebo>
 
-  <gazebo reference="case_1">
+  <gazebo reference="case">
     <material>Gazebo/Silver</material>
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
     <self_collide>false</self_collide>
   </gazebo>
 
-  <gazebo reference="cheeseplate_1">
+  <gazebo reference="cheeseplate">
     <material>Gazebo/Silver</material>
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
     <self_collide>false</self_collide>
   </gazebo>
 
-  <gazebo reference="leftWheel_2">
+  <gazebo reference="leftWheel">
     <visual>
       <material>
         <ambient>0.05 0.05 0.05 1</ambient>
@@ -48,7 +48,7 @@
     <self_collide>false</self_collide>
   </gazebo>
 
-  <gazebo reference="rightWheel_1">
+  <gazebo reference="rightWheel">
     <visual>
       <material>
         <ambient>0.05 0.05 0.05 1</ambient>
@@ -66,7 +66,7 @@
   </gazebo>
 
   <!-- Slippery caster wheels: support robot weight but do not fight diff-drive -->
-  <gazebo reference="bc_1">
+  <gazebo reference="bc">
     <mu1>0.01</mu1>
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
@@ -78,7 +78,7 @@
     <self_collide>false</self_collide>
   </gazebo>
 
-  <gazebo reference="fcr_1">
+  <gazebo reference="fcr">
     <mu1>0.01</mu1>
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
@@ -90,7 +90,7 @@
     <self_collide>false</self_collide>
   </gazebo>
 
-  <gazebo reference="fcl_1">
+  <gazebo reference="fcl">
     <mu1>0.01</mu1>
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
@@ -103,7 +103,7 @@
   </gazebo>
 
   <!-- RPLIDAR A1M8 -->
-  <gazebo reference="lidar_1">
+  <gazebo reference="lidar">
     <visual>
       <material>
         <ambient>0.05 0.05 0.05 1</ambient>

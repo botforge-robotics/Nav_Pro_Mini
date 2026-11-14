@@ -11,6 +11,7 @@
   <xacro:property name="motor_velocity" value="31.416"/>
   <xacro:property name="wheel_radius" value="0.034"/>  <!-- 68 mm diameter -->
   <xacro:property name="wheel_width" value="0.03175"/>
+  <xacro:property name="wheel_separation" value="0.23"/>  <!-- 23 cm track -->
 
   <!-- Lidar yaw is tunable at launch:
        xacro ... lidar_yaw:=±1.5708 if /scan is 90° off vs driving direction. -->
@@ -21,7 +22,7 @@
   <xacro:arg name="use_dock" default="false"/>
   <xacro:if value="$(arg use_dock)">
     <xacro:include filename="$(find navpromini_description)/urdf/dock.xacro" />
-    <xacro:navpromini_dock parent="case_1"/>
+    <xacro:navpromini_dock parent="case"/>
   </xacro:if>
 
   <!-- Dummy root link to satisfy KDL parser (eliminates KDL root link inertia warning) -->
@@ -56,7 +57,7 @@
   </link>
 
   <!-- Case / Body structure -->
-  <link name="case_1">
+  <link name="case">
     <inertial>
       <origin xyz="0.004156414740166747 -0.0022009986117417 0.08252041846336843" rpy="0 0 0"/>
       <mass value="0.9059872724541711"/>
@@ -65,14 +66,14 @@
     <visual>
       <origin xyz="-0.001649 0.012278 -0.012655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/case_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/case.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="-0.001649 0.012278 -0.012655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/case_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/case.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
@@ -80,11 +81,19 @@
   <joint name="case_joint" type="fixed">
     <origin xyz="0.001649 -0.012278 0.012655" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="case_1"/>
+    <child link="case"/>
+  </joint>
+
+  <!-- Backward-compatibility alias: chassis frame from old URDF -->
+  <link name="chassis"/>
+  <joint name="chassis_alias_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="case"/>
+    <child link="chassis"/>
   </joint>
 
   <!-- Front Left Caster Leg -->
-  <link name="flcl_2">
+  <link name="flcl">
     <inertial>
       <origin xyz="0.0014972340740296713 0.0010576981554579201 0.0018259229122038756" rpy="0 0 0"/>
       <mass value="0.00253816428406674"/>
@@ -93,26 +102,26 @@
     <visual>
       <origin xyz="-0.106494 -0.060375 -0.088211" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/flcl_2.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/flcl.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="-0.106494 -0.060375 -0.088211" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/flcl_2.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/flcl.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
   <joint name="flcl_joint" type="fixed">
     <origin xyz="0.104845 0.072653 0.075556" rpy="0 0 0"/>
-    <parent link="case_1"/>
-    <child link="flcl_2"/>
+    <parent link="case"/>
+    <child link="flcl"/>
   </joint>
 
   <!-- Front Right Caster Leg -->
-  <link name="flcr_1">
+  <link name="flcr">
     <inertial>
       <origin xyz="0.0015011074808890107 -0.0010524871815968811 0.0018259229123386983" rpy="0 0 0"/>
       <mass value="0.002538164284066739"/>
@@ -121,26 +130,26 @@
     <visual>
       <origin xyz="-0.106768 0.084536 -0.088211" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/flcr_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/flcr.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="-0.106768 0.084536 -0.088211" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/flcr_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/flcr.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
   <joint name="flcr_joint" type="fixed">
     <origin xyz="0.105119 -0.072258 0.075556" rpy="0 0 0"/>
-    <parent link="case_1"/>
-    <child link="flcr_1"/>
+    <parent link="case"/>
+    <child link="flcr"/>
   </joint>
 
   <!-- Back Caster Leg -->
-  <link name="blc_1">
+  <link name="blc">
     <inertial>
       <origin xyz="0.015926115931285734 -4.856260717783778e-05 -0.009914444418581345" rpy="0 0 0"/>
       <mass value="0.011583224330777717"/>
@@ -149,26 +158,26 @@
     <visual>
       <origin xyz="0.138323 0.011817 -0.112068" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/blc_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/blc.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="0.138323 0.011817 -0.112068" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/blc_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/blc.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
   <joint name="blc_joint" type="fixed">
     <origin xyz="-0.139972 0.000461 0.099413" rpy="0 0 0"/>
-    <parent link="case_1"/>
-    <child link="blc_1"/>
+    <parent link="case"/>
+    <child link="blc"/>
   </joint>
 
   <!-- Cheeseplate (top mounting plate) -->
-  <link name="cheeseplate_1">
+  <link name="cheeseplate">
     <inertial>
       <origin xyz="0.0028088545073975835 0.012404121053397901 0.01736314493216104" rpy="0 0 0"/>
       <mass value="1.0088826982512007"/>
@@ -177,26 +186,26 @@
     <visual>
       <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/cheeseplate_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/cheeseplate.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="-0.001649 0.012278 -0.160655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/cheeseplate_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/cheeseplate.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
   <joint name="cheeseplate_joint" type="fixed">
     <origin xyz="0.0 0.0 0.148" rpy="0 0 0"/>
-    <parent link="case_1"/>
-    <child link="cheeseplate_1"/>
+    <parent link="case"/>
+    <child link="cheeseplate"/>
   </joint>
 
   <!-- Back Caster Wheel -->
-  <link name="bc_1">
+  <link name="bc">
     <inertial>
       <origin xyz="-0.0075683189708506265 0.00012946687762997386 -0.014882381750425777" rpy="0 0 0"/>
       <mass value="0.008674563210963214"/>
@@ -205,14 +214,14 @@
     <visual>
       <origin xyz="0.089967 0.012308 -0.033655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/bc_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/bc.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="0.089967 0.012308 -0.033655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/bc_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/bc.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
@@ -220,11 +229,11 @@
   <joint name="bc_joint" type="fixed">
     <origin xyz="-0.089967 -0.012308 0.033655" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="bc_1"/>
+    <child link="bc"/>
   </joint>
 
   <!-- Front Right Caster Wheel -->
-  <link name="fcr_1">
+  <link name="fcr">
     <inertial>
       <origin xyz="-0.00756831897084638 0.0001294668776196939 -0.014882816360875045" rpy="0 0 0"/>
       <mass value="0.008674563210963217"/>
@@ -233,14 +242,14 @@
     <visual>
       <origin xyz="-0.077608 0.070308 -0.033269" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/fcr_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/fcr.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="-0.077608 0.070308 -0.033269" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/fcr_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/fcr.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
@@ -248,11 +257,11 @@
   <joint name="fcr_joint" type="fixed">
     <origin xyz="0.077608 -0.070308 0.033269" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="fcr_1"/>
+    <child link="fcr"/>
   </joint>
 
   <!-- Front Left Caster Wheel -->
-  <link name="fcl_1">
+  <link name="fcl">
     <inertial>
       <origin xyz="-0.007568318970844368 0.0001294668776213384 -0.014882381750428969" rpy="0 0 0"/>
       <mass value="0.00867456321096321"/>
@@ -261,14 +270,14 @@
     <visual>
       <origin xyz="-0.077608 -0.045692 -0.033655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/fcl_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/fcl.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="-0.077608 -0.045692 -0.033655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/fcl_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/fcl.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
@@ -276,11 +285,11 @@
   <joint name="fcl_joint" type="fixed">
     <origin xyz="0.077608 0.045692 0.033655" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="fcl_1"/>
+    <child link="fcl"/>
   </joint>
 
   <!-- Drive Wheels -->
-  <link name="rightWheel_1">
+  <link name="rightWheel">
     <inertial>
       <origin xyz="-2.0915665097358954e-07 -0.023210028934350882 2.677555596547476e-07" rpy="0 0 0"/>
       <mass value="0.05"/>
@@ -289,7 +298,7 @@
     <visual>
       <origin xyz="-0.002608 0.103808 -0.031905" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/rightwheel_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/rightwheel.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="black"/>
     </visual>
@@ -304,13 +313,21 @@
   <joint name="RightWheelJoint" type="continuous">
     <origin xyz="0.002608 -0.103808 0.031905" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="rightWheel_1"/>
+    <child link="rightWheel"/>
     <axis xyz="0.0 1.0 0.0"/>
     <limit effort="${motor_effort}" velocity="${motor_velocity}"/>
     <dynamics damping="0.01" friction="0.0"/>
   </joint>
 
-  <link name="leftWheel_2">
+  <!-- Backward-compatibility alias: rightWheel_1 for legacy nodes -->
+  <link name="rightWheel_1"/>
+  <joint name="rightWheel_1_alias_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="rightWheel"/>
+    <child link="rightWheel_1"/>
+  </joint>
+
+  <link name="leftWheel">
     <inertial>
       <origin xyz="-3.960973862840965e-07 0.023209213662924416 8.081480914329253e-08" rpy="0 0 0"/>
       <mass value="0.05"/>
@@ -319,7 +336,7 @@
     <visual>
       <origin xyz="-0.002608 -0.079192 -0.031905" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/leftwheel_2.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/leftwheel.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="black"/>
     </visual>
@@ -334,14 +351,22 @@
   <joint name="LeftWheelJoint" type="continuous">
     <origin xyz="0.002608 0.079192 0.031905" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="leftWheel_2"/>
+    <child link="leftWheel"/>
     <axis xyz="0.0 1.0 0.0"/>
     <limit effort="${motor_effort}" velocity="${motor_velocity}"/>
     <dynamics damping="0.01" friction="0.0"/>
   </joint>
 
-  <!-- RPLidar A1M8 Link on top of cheeseplate_1 -->
-  <link name="lidar_1">
+  <!-- Backward-compatibility alias: leftWheel_1 for legacy nodes -->
+  <link name="leftWheel_1"/>
+  <joint name="leftWheel_1_alias_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="leftWheel"/>
+    <child link="leftWheel_1"/>
+  </joint>
+
+  <!-- RPLidar A1M8 Link on top of cheeseplate -->
+  <link name="lidar">
     <inertial>
       <origin xyz="-0.0008173264685971612 -0.0007150225822268701 0.0021967304095819595" rpy="0 0 0"/>
       <mass value="0.10"/>
@@ -350,21 +375,29 @@
     <visual>
       <origin xyz="-0.057764 0.012279 -0.163655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/lidar.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
       <origin xyz="-0.057764 0.012279 -0.163655" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/lidar_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://navpromini_description/meshes/lidar.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
   <joint name="LidarJoint" type="fixed">
     <origin xyz="0.056115 -1e-06 0.01" rpy="0 0 ${lidar_yaw}"/>
-    <parent link="cheeseplate_1"/>
+    <parent link="cheeseplate"/>
+    <child link="lidar"/>
+  </joint>
+
+  <!-- Compatibility alias: lidar_1 for SLAM, Nav2, self_filter, and RPLidar drivers -->
+  <link name="lidar_1"/>
+  <joint name="lidar_1_alias_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="lidar"/>
     <child link="lidar_1"/>
   </joint>
 

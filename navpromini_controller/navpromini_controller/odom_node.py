@@ -47,7 +47,7 @@ class OdomBridgeNode(Node):
         super().__init__("navpromini_odom")
 
         self.declare_parameter("wheel_radius", 0.0325)
-        self.declare_parameter("wheel_separation", 0.225)
+        self.declare_parameter("wheel_separation", 0.23)
         self.declare_parameter("ticks_per_revolution", 1470.0)
         self.declare_parameter("encoder_ticks_per_meter", 7800.0)
         self.declare_parameter("odom_frame", "odom")
