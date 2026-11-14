@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
+        (os.path.join('lib', package_name), ['scripts/arm_teleop']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,9 +23,4 @@ setup(
     description='Joystick and keyboard teleoperation for NavProMini',
     license='Apache-2.0',
     tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'arm_teleop = navpromini_teleop.arm_teleop_node:main',
-        ],
-    },
 )
