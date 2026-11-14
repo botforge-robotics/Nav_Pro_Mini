@@ -299,8 +299,6 @@
 
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
-      <joint_name>LeftWheelJoint</joint_name>
-      <joint_name>RightWheelJoint</joint_name>
       <topic>/joint_states</topic>
       <update_rate>50</update_rate>
     </plugin>

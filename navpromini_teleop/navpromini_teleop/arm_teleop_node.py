@@ -83,9 +83,22 @@ class ArmTeleopNode(Node):
         timer_period = 1.0 / self.control_rate
         self.timer = self.create_timer(timer_period, self.control_loop)
 
+        # Initial pose publish timer (after ros_gz_bridge connects)
+        self.init_timer = self.create_timer(1.0, self.publish_initial_pose)
+
         self.get_logger().info(
             'SO101 Arm Commander active. Ready for /arm/named_pose or /arm/joint_goals.'
         )
+
+    def publish_initial_pose(self):
+        if self.init_timer is not None:
+            self.init_timer.cancel()
+            self.init_timer = None
+        for joint in JOINT_NAMES:
+            msg = Float64()
+            msg.data = float(self.target_positions[joint])
+            self.joint_pubs[joint].publish(msg)
+        self.get_logger().info('Initial arm home pose locked and published.')
 
     def joint_state_callback(self, msg: JointState):
         for name, pos in zip(msg.name, msg.position):

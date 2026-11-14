@@ -345,7 +345,7 @@
       <child link="moving_jaw_so101_v1_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-0.174533" upper="1.74533"/>
-      <dynamics damping="0.5" friction="0.05"/>
+      <dynamics damping="0.1" friction="0.01"/>
     </joint>
   
     
@@ -357,7 +357,7 @@
       <child link="gripper_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-2.74385" upper="2.84121"/>
-      <dynamics damping="0.5" friction="0.05"/>
+      <dynamics damping="0.1" friction="0.01"/>
     </joint>
   
     
@@ -369,7 +369,7 @@
       <child link="wrist_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.65806" upper="1.65806"/>
-      <dynamics damping="0.8" friction="0.08"/>
+      <dynamics damping="0.2" friction="0.02"/>
     </joint>
   
     
@@ -382,7 +382,7 @@
       <child link="lower_arm_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.69" upper="1.69"/>
-      <dynamics damping="1.2" friction="0.1"/>
+      <dynamics damping="0.4" friction="0.05"/>
     </joint>
   
     
@@ -394,7 +394,7 @@
       <child link="upper_arm_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.74533" upper="1.74533"/>
-      <dynamics damping="1.5" friction="0.1"/>
+      <dynamics damping="0.5" friction="0.05"/>
     </joint>
   
     
@@ -406,7 +406,7 @@
       <child link="shoulder_link"/>
       <axis xyz="0 0 1"/>
       <limit effort="10" velocity="10" lower="-1.91986" upper="1.91986"/>
-      <dynamics damping="1.0" friction="0.1"/>
+      <dynamics damping="0.3" friction="0.02"/>
     </joint>
   
      

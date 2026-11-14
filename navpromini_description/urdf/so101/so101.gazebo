@@ -2,89 +2,115 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:macro name="so101_arm_gazebo">
-    <!-- Gazebo Sim Joint State Publisher for SO101 Joints -->
-    <gazebo>
-      <plugin filename="gz-sim-joint-state-publisher-system"
-              name="gz::sim::systems::JointStatePublisher">
-        <joint_name>shoulder_pan</joint_name>
-        <joint_name>shoulder_lift</joint_name>
-        <joint_name>elbow_flex</joint_name>
-        <joint_name>wrist_flex</joint_name>
-        <joint_name>wrist_roll</joint_name>
-        <joint_name>gripper</joint_name>
-        <topic>/joint_states</topic>
-        <update_rate>50</update_rate>
-      </plugin>
+    <!-- Disable self-collision on arm links to eliminate numerical contact jitter between adjacent CAD meshes -->
+    <gazebo reference="arm_base_link">
+      <self_collide>false</self_collide>
+    </gazebo>
+    <gazebo reference="shoulder_link">
+      <self_collide>false</self_collide>
+    </gazebo>
+    <gazebo reference="upper_arm_link">
+      <self_collide>false</self_collide>
+    </gazebo>
+    <gazebo reference="lower_arm_link">
+      <self_collide>false</self_collide>
+    </gazebo>
+    <gazebo reference="wrist_link">
+      <self_collide>false</self_collide>
+    </gazebo>
+    <gazebo reference="gripper_link">
+      <self_collide>false</self_collide>
+    </gazebo>
+    <gazebo reference="moving_jaw_so101_v1_link">
+      <self_collide>false</self_collide>
     </gazebo>
 
-    <!-- Gazebo Sim Joint Position Controllers for SO101 Motors (STS3215) -->
-    <!-- Home Position: shoulder_lift = -90 deg (-1.5708 rad), elbow_flex = +90 deg (+1.5708 rad) -->
+    <!-- Gazebo Sim Joint Position Controllers for SO101 Motors (STS3215)
+         Tuned with realistic torque limits (cmd_max=3.0 N·m) and critically damped gains
+         to avoid discrete-time numerical oscillation (d_gain << 2*I/dt).
+         Home Position: shoulder_lift = -90 deg (-1.5708 rad), elbow_flex = +90 deg (+1.5708 rad) -->
     <gazebo>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>shoulder_pan</joint_name>
         <topic>/arm/shoulder_pan/cmd_pos</topic>
-        <p_gain>50.0</p_gain>
-        <i_gain>1.0</i_gain>
-        <d_gain>5.0</d_gain>
-        <i_max>5.0</i_max>
-        <i_min>-5.0</i_min>
+        <initial_position>0.0</initial_position>
+        <p_gain>25.0</p_gain>
+        <i_gain>0.2</i_gain>
+        <d_gain>0.2</d_gain>
+        <i_max>0.5</i_max>
+        <i_min>-0.5</i_min>
+        <cmd_max>3.0</cmd_max>
+        <cmd_min>-3.0</cmd_min>
       </plugin>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>shoulder_lift</joint_name>
         <topic>/arm/shoulder_lift/cmd_pos</topic>
         <initial_position>-1.5707963</initial_position>
-        <p_gain>80.0</p_gain>
-        <i_gain>2.0</i_gain>
-        <d_gain>8.0</d_gain>
-        <i_max>10.0</i_max>
-        <i_min>-10.0</i_min>
+        <p_gain>40.0</p_gain>
+        <i_gain>0.5</i_gain>
+        <d_gain>0.25</d_gain>
+        <i_max>1.5</i_max>
+        <i_min>-1.5</i_min>
+        <cmd_max>3.0</cmd_max>
+        <cmd_min>-3.0</cmd_min>
       </plugin>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>elbow_flex</joint_name>
         <topic>/arm/elbow_flex/cmd_pos</topic>
         <initial_position>1.5707963</initial_position>
-        <p_gain>60.0</p_gain>
-        <i_gain>1.5</i_gain>
-        <d_gain>6.0</d_gain>
-        <i_max>8.0</i_max>
-        <i_min>-8.0</i_min>
+        <p_gain>30.0</p_gain>
+        <i_gain>0.3</i_gain>
+        <d_gain>0.2</d_gain>
+        <i_max>1.0</i_max>
+        <i_min>-1.0</i_min>
+        <cmd_max>3.0</cmd_max>
+        <cmd_min>-3.0</cmd_min>
       </plugin>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>wrist_flex</joint_name>
         <topic>/arm/wrist_flex/cmd_pos</topic>
-        <p_gain>30.0</p_gain>
-        <i_gain>0.5</i_gain>
-        <d_gain>3.0</d_gain>
-        <i_max>3.0</i_max>
-        <i_min>-3.0</i_min>
+        <initial_position>0.0</initial_position>
+        <p_gain>15.0</p_gain>
+        <i_gain>0.2</i_gain>
+        <d_gain>0.1</d_gain>
+        <i_max>0.5</i_max>
+        <i_min>-0.5</i_min>
+        <cmd_max>2.5</cmd_max>
+        <cmd_min>-2.5</cmd_min>
       </plugin>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>wrist_roll</joint_name>
         <topic>/arm/wrist_roll/cmd_pos</topic>
-        <p_gain>20.0</p_gain>
-        <i_gain>0.2</i_gain>
-        <d_gain>2.0</d_gain>
-        <i_max>2.0</i_max>
-        <i_min>-2.0</i_min>
+        <initial_position>0.0</initial_position>
+        <p_gain>10.0</p_gain>
+        <i_gain>0.1</i_gain>
+        <d_gain>0.05</d_gain>
+        <i_max>0.3</i_max>
+        <i_min>-0.3</i_min>
+        <cmd_max>2.0</cmd_max>
+        <cmd_min>-2.0</cmd_min>
       </plugin>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
         <joint_name>gripper</joint_name>
         <topic>/arm/gripper/cmd_pos</topic>
-        <p_gain>30.0</p_gain>
-        <i_gain>0.5</i_gain>
-        <d_gain>3.0</d_gain>
-        <i_max>5.0</i_max>
-        <i_min>-5.0</i_min>
+        <initial_position>0.0</initial_position>
+        <p_gain>12.0</p_gain>
+        <i_gain>0.1</i_gain>
+        <d_gain>0.05</d_gain>
+        <i_max>0.3</i_max>
+        <i_min>-0.3</i_min>
+        <cmd_max>1.5</cmd_max>
+        <cmd_min>-1.5</cmd_min>
       </plugin>
     </gazebo>
 
-    <!-- Gripper grasping friction and contact properties (materials inherited directly from URDF visuals) -->
+    <!-- Gripper grasping friction and contact properties -->
     <gazebo reference="gripper_link">
       <mu1>1.2</mu1>
       <mu2>1.2</mu2>
