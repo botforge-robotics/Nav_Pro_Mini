@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: navpromini_description
+    relative_path: urdf/navpromini_with_arm.urdf
+  srdf:
+    relative_path: config/NavProMini.srdf
+  package_settings:
+    author_name: Botforge Robotics Pvt Ltd
+    author_email: reachus@botforge.in
+    generated_timestamp: 1794682299
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity

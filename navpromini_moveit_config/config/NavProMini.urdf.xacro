@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="NavProMini">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import NavProMini urdf file -->
+    <xacro:include filename="$(find navpromini_description)/urdf/navpromini_with_arm.urdf" />
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="NavProMini.ros2_control.xacro" />
+
+
+    <xacro:NavProMini_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>
