@@ -65,7 +65,18 @@ def _setup(context, *args, **kwargs):
     xacro_file = os.path.join(pkg_desc, 'urdf', 'navpromini.xacro')
     if not os.path.isfile(xacro_file):
         xacro_file = os.path.join(pkg_desc, 'urdf', 'NavProMini.xacro')
-    robot_description = ParameterValue(Command(['xacro ', xacro_file]), value_type=str)
+
+    use_arm = LaunchConfiguration('use_arm').perform(context)
+    arm_z = LaunchConfiguration('arm_z').perform(context)
+
+    robot_description = ParameterValue(
+        Command([
+            'xacro ', xacro_file,
+            ' use_arm:=', use_arm,
+            ' arm_z:=', arm_z,
+        ]),
+        value_type=str,
+    )
 
     resource_paths = [
         str(Path(pkg_desc).parent.resolve()),
@@ -166,5 +177,15 @@ def generate_launch_description():
         DeclareLaunchArgument('y', default_value='0.0'),
         DeclareLaunchArgument('z', default_value='0.05'),
         DeclareLaunchArgument('yaw', default_value='0.0'),
+        DeclareLaunchArgument(
+            'use_arm',
+            default_value='false',
+            description='Spawn robot with modular arm attachment (true/false)',
+        ),
+        DeclareLaunchArgument(
+            'arm_z',
+            default_value='0.05',
+            description='Z offset of modular arm attachment above lidar in meters',
+        ),
         OpaqueFunction(function=_setup),
     ])

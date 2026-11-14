@@ -25,6 +25,14 @@
     <xacro:navpromini_dock parent="case"/>
   </xacro:if>
 
+  <!-- Optional modular robotic arm attachment (separated into arm.xacro, disabled by default) -->
+  <xacro:arg name="use_arm" default="false"/>
+  <xacro:arg name="arm_z" default="0.05"/>
+  <xacro:if value="$(arg use_arm)">
+    <xacro:include filename="$(find navpromini_description)/urdf/arm.xacro" />
+    <xacro:navpromini_arm parent="lidar" z_offset="$(arg arm_z)"/>
+  </xacro:if>
+
   <!-- Dummy root link to satisfy KDL parser (eliminates KDL root link inertia warning) -->
   <link name="base_footprint"/>
 

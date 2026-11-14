@@ -51,6 +51,8 @@ map                         ← SLAM (mapping) or AMCL (navigation)
                      │    └── camera_link (facing -X)
                      │         └── camera_optical_frame (alias: camera_color_optical_frame)
                      ├── lidar (alias: lidar_1)   ← LaserScan frame_id
+                     │    └── [optional] arm_base_link (use_arm:=true, arm_z:=0.05)
+                     │         └── arm_link_1..5 → gripper_base_link → tool0
                      └── [optional] dock (alias: dock_1)
 ```
 
@@ -144,10 +146,12 @@ ros2 topic echo /battery/info --once
 
 | Argument          | Default      | Description                                             |
 | ----------------- | ------------ | ------------------------------------------------------- |
-| `world_name`      | `empty`      | `empty`                                                 |
+| `world_name`      | `empty`      | `empty`, `office`, `cafe`                               |
 | `use_sim_time`    | `true`       | Use `/clock` from Gazebo                                |
 | `use_rviz`        | `false`      | Optional companion RViz (`navpromini_sim.rviz`)         |
-| `x` `y` `z` `yaw` | `0 0 0.06 0` | Spawn pose (world defaults applied if left at defaults) |
+| `x` `y` `z` `yaw` | `0 0 0.05 0` | Spawn pose (world defaults applied if left at defaults) |
+| `use_arm`         | `false`      | Spawn robot with modular arm attachment (true/false)    |
+| `arm_z`           | `0.05`       | Z offset of arm base above lidar in meters              |
 
 **World spawn defaults** (when x/y/z still `0,0,0.06`):
 
@@ -181,14 +185,20 @@ ros2 launch navpromini_gazebo gazebo.launch.py world_name:=cafe use_rviz:=true
 
 **Purpose:** RViz-only model check (no Gazebo).
 
-| Argument | Default | Description                  |
-| -------- | ------- | ---------------------------- |
-| `gui`    | `True`  | Joint state GUI vs plain JSP |
+| Argument  | Default | Description                                          |
+| --------- | ------- | ---------------------------------------------------- |
+| `gui`     | `True`  | Joint state GUI vs plain JSP                         |
+| `use_arm` | `false` | Spawn robot with modular arm attachment (true/false) |
+| `arm_z`   | `0.05`  | Z offset of arm base above lidar in meters           |
 
 **Nodes:** `robot_state_publisher`, `joint_state_publisher(_gui)`, `rviz2`
 
 ```bash
+# Default (without arm)
 ros2 launch navpromini_description display.launch.py
+
+# With modular arm attachment on top of LiDAR (adjustable arm_z)
+ros2 launch navpromini_description display.launch.py use_arm:=true arm_z:=0.05
 ```
 
 ---

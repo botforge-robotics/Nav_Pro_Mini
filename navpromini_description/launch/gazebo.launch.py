@@ -33,6 +33,16 @@ def generate_launch_description():
         DeclareLaunchArgument('y', default_value='0.0', description='Initial Y position'),
         DeclareLaunchArgument('z', default_value='0.05', description='Initial Z position'),
         DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw angle'),
+        DeclareLaunchArgument(
+            'use_arm',
+            default_value='false',
+            description='Spawn robot with modular arm attachment (true/false)',
+        ),
+        DeclareLaunchArgument(
+            'arm_z',
+            default_value='0.05',
+            description='Z offset of modular arm attachment above lidar in meters',
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(gazebo_launch_path),
             launch_arguments={
@@ -43,6 +53,8 @@ def generate_launch_description():
                 'y': LaunchConfiguration('y'),
                 'z': LaunchConfiguration('z'),
                 'yaw': LaunchConfiguration('yaw'),
+                'use_arm': LaunchConfiguration('use_arm'),
+                'arm_z': LaunchConfiguration('arm_z'),
             }.items(),
         ),
     ])

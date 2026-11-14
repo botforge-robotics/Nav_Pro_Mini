@@ -1,0 +1,368 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    NavProMini Modular Robotic Arm Attachment
+    5-DOF Articulated Manipulator + Parallel Gripper
+    Can be mounted on top of the lidar or mounting plate with user-adjustable Z offset.
+  -->
+  <xacro:macro name="navpromini_arm" params="parent:=lidar z_offset:=0.05">
+
+    <!-- Arm Base Mount / Pedestal on top of parent -->
+    <link name="arm_base_link">
+      <inertial>
+        <origin xyz="0 0 0.01" rpy="0 0 0"/>
+        <mass value="0.25"/>
+        <inertia ixx="0.00015" iyy="0.00015" izz="0.0002" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <!-- Circular mounting pedestal -->
+        <origin xyz="0 0 0.01" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.040" length="0.020"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.01" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.040" length="0.020"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_base_joint" type="fixed">
+      <origin xyz="0 0 ${z_offset}" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child link="arm_base_link"/>
+    </joint>
+
+    <!-- Joint 1: Waist Yaw (Rotation around Z) -->
+    <link name="arm_link_1">
+      <inertial>
+        <origin xyz="0 0 0.02" rpy="0 0 0"/>
+        <mass value="0.18"/>
+        <inertia ixx="0.00008" iyy="0.00008" izz="0.00006" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.02" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.030" length="0.040"/>
+        </geometry>
+        <material name="orange"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.02" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.030" length="0.040"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_joint_1" type="revolute">
+      <origin xyz="0 0 0.020" rpy="0 0 0"/>
+      <parent link="arm_base_link"/>
+      <child link="arm_link_1"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.14159" upper="3.14159" effort="5.0" velocity="2.0"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <!-- Joint 2: Shoulder Pitch (Rotation around Y) -->
+    <link name="arm_link_2">
+      <inertial>
+        <origin xyz="0 0 0.06" rpy="0 0 0"/>
+        <mass value="0.22"/>
+        <inertia ixx="0.0003" iyy="0.0003" izz="0.00005" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <!-- Shoulder pivot joint -->
+        <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+        <geometry>
+          <cylinder radius="0.022" length="0.035"/>
+        </geometry>
+        <material name="dark_grey"/>
+      </visual>
+      <visual>
+        <!-- Upper arm beam (120mm length) -->
+        <origin xyz="0 0 0.060" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.028 0.024 0.120"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.060" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.028 0.024 0.120"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_joint_2" type="revolute">
+      <origin xyz="0 0 0.040" rpy="0 0 0"/>
+      <parent link="arm_link_1"/>
+      <child link="arm_link_2"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-1.8" upper="1.8" effort="6.0" velocity="2.0"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <!-- Joint 3: Elbow Pitch (Rotation around Y) -->
+    <link name="arm_link_3">
+      <inertial>
+        <origin xyz="0 0 0.05" rpy="0 0 0"/>
+        <mass value="0.16"/>
+        <inertia ixx="0.00018" iyy="0.00018" izz="0.00003" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <!-- Elbow pivot joint -->
+        <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+        <geometry>
+          <cylinder radius="0.018" length="0.030"/>
+        </geometry>
+        <material name="orange"/>
+      </visual>
+      <visual>
+        <!-- Forearm beam (100mm length) -->
+        <origin xyz="0 0 0.050" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.024 0.020 0.100"/>
+        </geometry>
+        <material name="white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.050" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.024 0.020 0.100"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_joint_3" type="revolute">
+      <origin xyz="0 0 0.120" rpy="0 0 0"/>
+      <parent link="arm_link_2"/>
+      <child link="arm_link_3"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-2.2" upper="2.2" effort="5.0" velocity="2.0"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <!-- Joint 4: Wrist Pitch (Rotation around Y) -->
+    <link name="arm_link_4">
+      <inertial>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <mass value="0.08"/>
+        <inertia ixx="0.00003" iyy="0.00003" izz="0.00002" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <!-- Wrist pivot -->
+        <origin xyz="0 0 0" rpy="1.5707963 0 0"/>
+        <geometry>
+          <cylinder radius="0.015" length="0.025"/>
+        </geometry>
+        <material name="dark_grey"/>
+      </visual>
+      <visual>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.014" length="0.030"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.014" length="0.030"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_joint_4" type="revolute">
+      <origin xyz="0 0 0.100" rpy="0 0 0"/>
+      <parent link="arm_link_3"/>
+      <child link="arm_link_4"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-1.8" upper="1.8" effort="3.0" velocity="2.0"/>
+      <dynamics damping="0.05" friction="0.02"/>
+    </joint>
+
+    <!-- Joint 5: Wrist Roll (Rotation around Z) -->
+    <link name="arm_link_5">
+      <inertial>
+        <origin xyz="0 0 0.01" rpy="0 0 0"/>
+        <mass value="0.06"/>
+        <inertia ixx="0.00002" iyy="0.00002" izz="0.00001" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.010" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.018" length="0.020"/>
+        </geometry>
+        <material name="orange"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.010" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.018" length="0.020"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="arm_joint_5" type="revolute">
+      <origin xyz="0 0 0.030" rpy="0 0 0"/>
+      <parent link="arm_link_4"/>
+      <child link="arm_link_5"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.14159" upper="3.14159" effort="3.0" velocity="2.0"/>
+      <dynamics damping="0.05" friction="0.02"/>
+    </joint>
+
+    <!-- End-Effector / Parallel Gripper Base -->
+    <link name="gripper_base_link">
+      <inertial>
+        <origin xyz="0 0 0.01" rpy="0 0 0"/>
+        <mass value="0.08"/>
+        <inertia ixx="0.00002" iyy="0.00002" izz="0.00002" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.010" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.030 0.060 0.020"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.010" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.030 0.060 0.020"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="gripper_base_joint" type="fixed">
+      <origin xyz="0 0 0.020" rpy="0 0 0"/>
+      <parent link="arm_link_5"/>
+      <child link="gripper_base_link"/>
+    </joint>
+
+    <!-- Gripper Left Finger -->
+    <link name="gripper_left_finger">
+      <inertial>
+        <origin xyz="0 0 0.02" rpy="0 0 0"/>
+        <mass value="0.02"/>
+        <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.020" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.012 0.008 0.040"/>
+        </geometry>
+        <material name="dark_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.020" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.012 0.008 0.040"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="gripper_left_joint" type="prismatic">
+      <origin xyz="0 0.015 0.020" rpy="0 0 0"/>
+      <parent link="gripper_base_link"/>
+      <child link="gripper_left_finger"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.020" effort="5.0" velocity="0.2"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <!-- Gripper Right Finger -->
+    <link name="gripper_right_finger">
+      <inertial>
+        <origin xyz="0 0 0.02" rpy="0 0 0"/>
+        <mass value="0.02"/>
+        <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" iyz="0" ixz="0"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.020" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.012 0.008 0.040"/>
+        </geometry>
+        <material name="dark_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.020" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.012 0.008 0.040"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="gripper_right_joint" type="prismatic">
+      <origin xyz="0 -0.015 0.020" rpy="0 0 0"/>
+      <parent link="gripper_base_link"/>
+      <child link="gripper_right_finger"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="0.020" effort="5.0" velocity="0.2"/>
+      <dynamics damping="0.1" friction="0.05"/>
+    </joint>
+
+    <!-- Standard MoveIt / End-Effector Tool Frame (TCP) -->
+    <link name="tool0"/>
+    <joint name="tool0_joint" type="fixed">
+      <origin xyz="0 0 0.045" rpy="0 0 0"/>
+      <parent link="gripper_base_link"/>
+      <child link="tool0"/>
+    </joint>
+
+    <!-- Gazebo material colors and friction properties -->
+    <gazebo reference="arm_base_link">
+      <material>Gazebo/FlatBlack</material>
+    </gazebo>
+    <gazebo reference="arm_link_1">
+      <material>Gazebo/Orange</material>
+    </gazebo>
+    <gazebo reference="arm_link_2">
+      <material>Gazebo/FlatBlack</material>
+    </gazebo>
+    <gazebo reference="arm_link_3">
+      <material>Gazebo/White</material>
+    </gazebo>
+    <gazebo reference="arm_link_4">
+      <material>Gazebo/FlatBlack</material>
+    </gazebo>
+    <gazebo reference="arm_link_5">
+      <material>Gazebo/Orange</material>
+    </gazebo>
+    <gazebo reference="gripper_base_link">
+      <material>Gazebo/FlatBlack</material>
+    </gazebo>
+    <gazebo reference="gripper_left_finger">
+      <material>Gazebo/DarkGrey</material>
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="gripper_right_finger">
+      <material>Gazebo/DarkGrey</material>
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+    </gazebo>
+
+    <!-- Gazebo Joint State Publisher for Arm Joints -->
+    <gazebo>
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher">
+        <joint_name>arm_joint_1</joint_name>
+        <joint_name>arm_joint_2</joint_name>
+        <joint_name>arm_joint_3</joint_name>
+        <joint_name>arm_joint_4</joint_name>
+        <joint_name>arm_joint_5</joint_name>
+        <joint_name>gripper_left_joint</joint_name>
+        <joint_name>gripper_right_joint</joint_name>
+        <topic>/joint_states</topic>
+        <update_rate>50</update_rate>
+      </plugin>
+    </gazebo>
+
+  </xacro:macro>
+</robot>
