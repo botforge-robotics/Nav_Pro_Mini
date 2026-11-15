@@ -218,7 +218,7 @@ class ArmTeleopNode(Node):
         return CancelResponse.ACCEPT
 
     async def execute_trajectory_callback(self, goal_handle):
-        """Execute a planned trajectory from MoveIt 2 point-by-point in real time."""
+        """Execute a planned trajectory from MoveIt 2 smoothly interpolated at 50 Hz."""
         trajectory = goal_handle.request.trajectory
         joint_names = trajectory.joint_names
         points = trajectory.points
@@ -230,11 +230,25 @@ class ArmTeleopNode(Node):
             return result
 
         self.get_logger().info(
-            f'Executing MoveIt trajectory: {len(points)} waypoints across {joint_names}...'
+            f'Executing MoveIt trajectory: {len(points)} waypoints across {joint_names} with smooth 50Hz interpolation...'
         )
 
+        # Build trajectory time and position lists
+        times = [pt.time_from_start.sec + pt.time_from_start.nanosec * 1e-9 for pt in points]
+        positions_list = [list(pt.positions) for pt in points]
+
+        # Ensure trajectory starts at t = 0.0 using current positions
+        if times[0] > 1e-4:
+            times.insert(0, 0.0)
+            start_positions = [self.target_positions.get(name, points[0].positions[i]) for i, name in enumerate(joint_names)]
+            positions_list.insert(0, start_positions)
+
+        total_duration = times[-1]
         start_time = self.get_clock().now()
-        for idx, pt in enumerate(points):
+        dt = 0.02  # 50 Hz stream rate
+        curr_idx = 0
+
+        while rclpy.ok():
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
                 result = FollowJointTrajectory.Result()
@@ -242,24 +256,46 @@ class ArmTeleopNode(Node):
                 self.get_logger().warn('Trajectory execution canceled.')
                 return result
 
-            # Target timestamp relative to trajectory start
-            target_time = pt.time_from_start.sec + pt.time_from_start.nanosec * 1e-9
             elapsed = (self.get_clock().now() - start_time).nanoseconds * 1e-9
-            sleep_duration = target_time - elapsed
-            if sleep_duration > 0.001:
-                time.sleep(sleep_duration)
 
-            for name, pos in zip(joint_names, pt.positions):
+            if elapsed >= total_duration:
+                # Reached end: publish final target
+                final_positions = positions_list[-1]
+                for name, pos in zip(joint_names, final_positions):
+                    if name in self.joint_pubs:
+                        msg = Float64()
+                        msg.data = float(pos)
+                        self.joint_pubs[name].publish(msg)
+                        self.target_positions[name] = float(pos)
+                break
+
+            # Find active segment [curr_idx, curr_idx+1]
+            while curr_idx < len(times) - 2 and elapsed > times[curr_idx + 1]:
+                curr_idx += 1
+
+            t0 = times[curr_idx]
+            t1 = times[curr_idx + 1]
+            seg_duration = t1 - t0
+            alpha = (elapsed - t0) / seg_duration if seg_duration > 1e-6 else 1.0
+            alpha = min(max(alpha, 0.0), 1.0)
+
+            # Smoothly interpolate position for each joint in trajectory
+            p0 = positions_list[curr_idx]
+            p1 = positions_list[curr_idx + 1]
+            for i, name in enumerate(joint_names):
                 if name in self.joint_pubs:
+                    q = p0[i] + alpha * (p1[i] - p0[i])
                     msg = Float64()
-                    msg.data = float(pos)
+                    msg.data = float(q)
                     self.joint_pubs[name].publish(msg)
-                    self.target_positions[name] = float(pos)
+                    self.target_positions[name] = float(q)
+
+            time.sleep(dt)
 
         goal_handle.succeed()
         result = FollowJointTrajectory.Result()
         result.error_code = FollowJointTrajectory.Result.SUCCESSFUL
-        self.get_logger().info('MoveIt trajectory executed successfully.')
+        self.get_logger().info('MoveIt trajectory executed smoothly.')
         return result
 
 

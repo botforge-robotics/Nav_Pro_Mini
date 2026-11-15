@@ -1,8 +1,8 @@
 # joint_limits.yaml - Calibrated to Waveshare 30kg Serial Bus Servo (ST3215 / STS3215)
 # Specs: Stall Torque = 30 kg·cm (2.94 N·m @ 12V), No-load Speed = 45 RPM (0.222s/60° ≈ 4.71 rad/s)
 
-default_velocity_scaling_factor: 0.5
-default_acceleration_scaling_factor: 0.5
+default_velocity_scaling_factor: 1.0
+default_acceleration_scaling_factor: 1.0
 
 joint_limits:
   shoulder_pan:
