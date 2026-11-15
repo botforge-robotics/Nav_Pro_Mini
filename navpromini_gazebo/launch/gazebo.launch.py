@@ -48,19 +48,24 @@ def _setup(context, *args, **kwargs):
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
-    x = LaunchConfiguration('x').perform(context)
-    y = LaunchConfiguration('y').perform(context)
-    z = LaunchConfiguration('z').perform(context)
-    yaw = LaunchConfiguration('yaw').perform(context)
+    x = LaunchConfiguration('x').perform(context).strip()
+    y = LaunchConfiguration('y').perform(context).strip()
+    z = LaunchConfiguration('z').perform(context).strip()
+    yaw = LaunchConfiguration('yaw').perform(context).strip()
 
-    # Dynamic spawn: apply world defaults when user left launch defaults
-    defaults_used = (x == '0.0' and y == '0.0' and z == '0.05')
-    if defaults_used:
-        spawn = WORLD_SPAWNS[world_name]
-        x, y, z = spawn['x'], spawn['y'], spawn['z']
-    elif world_name == 'cafe' and abs(float(z) - 0.05) < 1e-6:
-        # Even if x/y overridden, keep robot above cafe floor
-        z = WORLD_SPAWNS['cafe']['z']
+    # Dynamic spawn: apply world defaults when not specified by user
+    spawn = WORLD_SPAWNS[world_name]
+    if not x:
+        x = spawn['x']
+    if not y:
+        y = spawn['y']
+    if not z:
+        z = spawn['z']
+    elif world_name == 'cafe' and float(z) < 0.24:
+        # Keep robot above cafe floor slab (0.19m + 0.05m margin)
+        z = spawn['z']
+    if not yaw:
+        yaw = '0.0'
 
     xacro_file = os.path.join(pkg_desc, 'urdf', 'navpromini.xacro')
 
@@ -179,9 +184,9 @@ def generate_launch_description():
             description='Launch Gazebo companion RViz (default: false). '
                         'Use use_rviz:=true to enable.',
         ),
-        DeclareLaunchArgument('x', default_value='0.0'),
-        DeclareLaunchArgument('y', default_value='0.0'),
-        DeclareLaunchArgument('z', default_value='0.05'),
+        DeclareLaunchArgument('x', default_value=''),
+        DeclareLaunchArgument('y', default_value=''),
+        DeclareLaunchArgument('z', default_value=''),
         DeclareLaunchArgument('yaw', default_value='0.0'),
         DeclareLaunchArgument(
             'use_arm',

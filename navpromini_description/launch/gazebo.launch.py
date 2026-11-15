@@ -29,9 +29,9 @@ def generate_launch_description():
             default_value='false',
             description='Launch RViz2 for visualization',
         ),
-        DeclareLaunchArgument('x', default_value='0.0', description='Initial X position'),
-        DeclareLaunchArgument('y', default_value='0.0', description='Initial Y position'),
-        DeclareLaunchArgument('z', default_value='0.05', description='Initial Z position'),
+        DeclareLaunchArgument('x', default_value='', description='Initial X position (empty for world default)'),
+        DeclareLaunchArgument('y', default_value='', description='Initial Y position (empty for world default)'),
+        DeclareLaunchArgument('z', default_value='', description='Initial Z position (empty for world default)'),
         DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw angle'),
         DeclareLaunchArgument(
             'use_arm',
