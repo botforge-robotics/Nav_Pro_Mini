@@ -94,30 +94,30 @@
     <child link="case"/>
   </joint>
 
-  <!-- Battery ballast: 8x8x8 cm cube, 1.0 kg, shifted back by 10 cm inside chassis -->
+  <!-- Battery ballast: 7x7x7 cm cube, 1.0 kg, shifted back by 9 cm inside chassis -->
   <link name="battery">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="1.0"/>
-      <inertia ixx="0.001067" iyy="0.001067" izz="0.001067" ixy="0.0" iyz="0.0" ixz="0.0"/>
+      <inertia ixx="0.000817" iyy="0.000817" izz="0.000817" ixy="0.0" iyz="0.0" ixz="0.0"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.08 0.08 0.08"/>
+        <box size="0.07 0.07 0.07"/>
       </geometry>
       <material name="dark_grey"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.08 0.08 0.08"/>
+        <box size="0.07 0.07 0.07"/>
       </geometry>
     </collision>
   </link>
 
   <joint name="battery_joint" type="fixed">
-    <origin xyz="-0.10 0.0 0.052655" rpy="0 0 0"/>
+    <origin xyz="-0.09 0.0 0.047655" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="battery"/>
   </joint>
