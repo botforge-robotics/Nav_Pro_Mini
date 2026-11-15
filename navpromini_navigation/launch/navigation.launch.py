@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Nav2 bringup for NavProMini (localization + navigation).
+"""Nav2 bringup for NavProMini (localization + navigation + optional MoveIt 2 integration).
 
 Pass only the map name (no path / extension). Full path is built from
 the SLAM save directory: <ws>/src/navpromini_mapping/maps/<map_name>.yaml
+
+When use_arm:=true:
+  - Launches MoveIt 2 move_group node
+  - Launches a unified RViz window with both Nav2 displays (map, costmaps, plans)
+    and MoveIt MotionPlanning tools (arm interactive marker, trajectory preview, joints)
 """
 
 import os
@@ -19,6 +24,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from nav2_common.launch import RewrittenYaml
 
 # Prefer NAVPRO_MAPS_DIR (production), then legacy workspace path.
 MAPS_DIR = os.environ.get(
@@ -31,6 +37,12 @@ MAPS_DIR = os.environ.get(
         'maps',
     ),
 )
+
+DEFAULT_INITIAL_POSES = {
+    'cafe': {'x': '0.0', 'y': '-3.0', 'yaw': '0.0'},
+    'office': {'x': '0.0', 'y': '-6.5', 'yaw': '0.0'},
+    't202': {'x': '-0.13', 'y': '0.0', 'yaw': '0.0'},
+}
 
 
 def resolve_map_yaml(map_name: str) -> str:
@@ -69,13 +81,41 @@ def _setup(context, *args, **kwargs):
     pkg = get_package_share_directory('navpromini_navigation')
     bringup_dir = get_package_share_directory('nav2_bringup')
 
-    map_name = LaunchConfiguration('map_name').perform(context)
+    map_name = LaunchConfiguration('map_name').perform(context).strip()
     map_yaml = resolve_map_yaml(map_name)
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    params_file = LaunchConfiguration('params_file')
+    params_file = LaunchConfiguration('params_file').perform(context)
     use_rviz = LaunchConfiguration('use_rviz')
     autostart = LaunchConfiguration('autostart')
+    use_arm = LaunchConfiguration('use_arm').perform(context).strip().lower() in ('true', '1')
+
+    # Resolve initial pose if specified or auto-set from known maps (e.g. cafe)
+    init_x = LaunchConfiguration('initial_pose_x').perform(context).strip()
+    init_y = LaunchConfiguration('initial_pose_y').perform(context).strip()
+    init_yaw = LaunchConfiguration('initial_pose_yaw').perform(context).strip()
+
+    map_base = os.path.splitext(os.path.basename(map_yaml))[0].lower()
+    if not init_x and map_base in DEFAULT_INITIAL_POSES:
+        init_x = DEFAULT_INITIAL_POSES[map_base]['x']
+        init_y = DEFAULT_INITIAL_POSES[map_base]['y']
+        init_yaw = DEFAULT_INITIAL_POSES[map_base]['yaw']
+
+    param_rewrites = {}
+    if init_x:
+        param_rewrites['initial_pose.x'] = str(init_x)
+        param_rewrites['initial_pose.y'] = str(init_y)
+        param_rewrites['initial_pose.yaw'] = str(init_yaw)
+        param_rewrites['set_initial_pose'] = 'true'
+
+    if param_rewrites:
+        configured_params = RewrittenYaml(
+            source_file=params_file,
+            param_rewrites=param_rewrites,
+            convert_types=True,
+        )
+    else:
+        configured_params = params_file
 
     bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -85,39 +125,88 @@ def _setup(context, *args, **kwargs):
             'slam': 'False',
             'map': map_yaml,
             'use_sim_time': use_sim_time,
-            'params_file': params_file,
+            'params_file': configured_params,
             'autostart': autostart,
             'use_composition': 'False',
             'use_localization': 'True',
         }.items(),
     )
 
-    rviz = Node(
+    actions = [
+        LogInfo(msg=[
+            f'NavProMini Nav2 — map_name={map_name} → {map_yaml} '
+            f'(use_arm={use_arm}, sim_time={use_sim_time.perform(context)})'
+        ]),
+        bringup,
+    ]
+
+    # Setup MoveIt 2 integration if use_arm is true
+    if use_arm:
+        from moveit_configs_utils import MoveItConfigsBuilder
+
+        moveit_config = (
+            MoveItConfigsBuilder('NavProMini', package_name='navpromini_moveit_config')
+            .robot_description(file_path='config/NavProMini.urdf.xacro')
+            .trajectory_execution(file_path='config/moveit_controllers.yaml')
+            .planning_pipelines(pipelines=['ompl'])
+            .to_moveit_configs()
+        )
+
+        move_group_node = Node(
+            package='moveit_ros_move_group',
+            executable='move_group',
+            output='screen',
+            parameters=[
+                moveit_config.to_dict(),
+                {'use_sim_time': use_sim_time},
+            ],
+        )
+        actions.append(move_group_node)
+
+        rviz_config_file = os.path.join(pkg, 'rviz', 'navigation_moveit.rviz')
+        rviz_parameters = [
+            moveit_config.robot_description,
+            moveit_config.robot_description_semantic,
+            moveit_config.planning_pipelines,
+            moveit_config.robot_description_kinematics,
+            {'use_sim_time': use_sim_time},
+        ]
+    else:
+        rviz_config_file = os.path.join(pkg, 'rviz', 'navigation.rviz')
+        rviz_parameters = [{'use_sim_time': use_sim_time}]
+
+    rviz_node = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
-        arguments=['-d', os.path.join(pkg, 'rviz', 'navigation.rviz')],
-        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=['-d', rviz_config_file],
+        parameters=rviz_parameters,
         condition=IfCondition(use_rviz),
         output='screen',
     )
+    actions.append(rviz_node)
 
-    return [
-        LogInfo(msg=[f'NavProMini Nav2 — map_name={map_name} → {map_yaml}']),
-        bringup,
-        rviz,
-    ]
+    return actions
 
 
 def generate_launch_description():
     pkg = get_package_share_directory('navpromini_navigation')
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('autostart', default_value='true'),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulation (Gazebo) clock if true',
+        ),
+        DeclareLaunchArgument(
+            'autostart',
+            default_value='true',
+            description='Automatically startup Nav2 stack',
+        ),
         DeclareLaunchArgument(
             'params_file',
             default_value=os.path.join(pkg, 'config', 'nav2_params.yaml'),
+            description='Full path to the ROS2 parameters file to use for all launched nodes',
         ),
         DeclareLaunchArgument(
             'map_name',
@@ -130,8 +219,27 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_rviz',
             default_value='true',
-            description='Launch Nav2 RViz with map, costmaps, and plans '
-                        '(default: true). Use use_rviz:=false to disable.',
+            description='Launch Nav2 RViz (default: true). Use use_rviz:=false to disable.',
+        ),
+        DeclareLaunchArgument(
+            'use_arm',
+            default_value='false',
+            description='Enable MoveIt 2 integration (launches move_group and loads unified Nav2+MoveIt RViz)',
+        ),
+        DeclareLaunchArgument(
+            'initial_pose_x',
+            default_value='',
+            description='Initial robot X position on the map (defaults to map-specific spawn, e.g. 0.0 for cafe)',
+        ),
+        DeclareLaunchArgument(
+            'initial_pose_y',
+            default_value='',
+            description='Initial robot Y position on the map (defaults to map-specific spawn, e.g. -3.0 for cafe)',
+        ),
+        DeclareLaunchArgument(
+            'initial_pose_yaw',
+            default_value='',
+            description='Initial robot heading yaw on the map (radians)',
         ),
         OpaqueFunction(function=_setup),
     ])
