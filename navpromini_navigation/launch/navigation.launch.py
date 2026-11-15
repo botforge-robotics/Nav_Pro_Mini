@@ -143,6 +143,11 @@ def _setup(context, *args, **kwargs):
     # Auto-start scan filter in simulation to produce /scan_filtered from Gazebo /scan
     start_scan_filter = LaunchConfiguration('start_scan_filter').perform(context).strip().lower() in ('true', '1')
     if start_scan_filter:
+        filter_params = os.path.join(
+            get_package_share_directory('navpromini_controller'),
+            'config',
+            'scan_filter.yaml',
+        )
         scan_filter = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(
@@ -151,7 +156,10 @@ def _setup(context, *args, **kwargs):
                     'laser_scan_filter.launch.py',
                 )
             ),
-            launch_arguments={'use_sim_time': use_sim_time}.items(),
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'params_file': filter_params,
+            }.items(),
         )
         actions.append(scan_filter)
 

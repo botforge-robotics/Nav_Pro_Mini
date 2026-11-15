@@ -20,16 +20,16 @@ scan_to_scan_filter_chain:
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: base_link
-        min_x: -0.12
-        max_x: 0.14
+        min_x: -0.16
+        max_x: 0.16
         min_y: -0.16
         max_y: 0.16
         min_z: -0.15
-        max_z: 0.35
+        max_z: 0.45
         invert: false
     filter2:
       name: inscribed_footprint
       type: laser_filters/LaserScanFootprintFilter
       params:
-        # Match Nav2 robot_radius (0.125 = 25 cm dia) with small margin for pillar legs
-        inscribed_radius: 0.13
+        # Match Nav2 robot_radius (0.16 = 32 cm dia) with small margin for pillar legs
+        inscribed_radius: 0.16
