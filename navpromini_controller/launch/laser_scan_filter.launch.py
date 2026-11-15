@@ -33,6 +33,11 @@ def generate_launch_description():
             default_value=params_file,
             description='laser_filters scan_to_scan_filter_chain params',
         ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulation (Gazebo) clock if true',
+        ),
         LogInfo(msg=[
             'laser_filters: ', scan_in, ' → ', scan_out,
             ' (body box + footprint filter)',
@@ -42,7 +47,10 @@ def generate_launch_description():
             executable='scan_to_scan_filter_chain',
             name='scan_to_scan_filter_chain',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[
+                LaunchConfiguration('params_file'),
+                {'use_sim_time': LaunchConfiguration('use_sim_time')},
+            ],
             remappings=[
                 ('scan', scan_in),
                 ('scan_filtered', scan_out),

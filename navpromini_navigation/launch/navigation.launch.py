@@ -103,10 +103,10 @@ def _setup(context, *args, **kwargs):
 
     param_rewrites = {}
     if init_x:
-        param_rewrites['initial_pose.x'] = str(init_x)
-        param_rewrites['initial_pose.y'] = str(init_y)
-        param_rewrites['initial_pose.yaw'] = str(init_yaw)
-        param_rewrites['set_initial_pose'] = 'true'
+        param_rewrites['amcl.ros__parameters.initial_pose.x'] = str(init_x)
+        param_rewrites['amcl.ros__parameters.initial_pose.y'] = str(init_y)
+        param_rewrites['amcl.ros__parameters.initial_pose.yaw'] = str(init_yaw)
+        param_rewrites['amcl.ros__parameters.set_initial_pose'] = 'true'
 
     if param_rewrites:
         configured_params = RewrittenYaml(
@@ -139,6 +139,21 @@ def _setup(context, *args, **kwargs):
         ]),
         bringup,
     ]
+
+    # Auto-start scan filter in simulation to produce /scan_filtered from Gazebo /scan
+    start_scan_filter = LaunchConfiguration('start_scan_filter').perform(context).strip().lower() in ('true', '1')
+    if start_scan_filter:
+        scan_filter = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory('navpromini_controller'),
+                    'launch',
+                    'laser_scan_filter.launch.py',
+                )
+            ),
+            launch_arguments={'use_sim_time': use_sim_time}.items(),
+        )
+        actions.append(scan_filter)
 
     # Setup MoveIt 2 integration if use_arm is true
     if use_arm:
@@ -225,6 +240,11 @@ def generate_launch_description():
             'use_arm',
             default_value='false',
             description='Enable MoveIt 2 integration (launches move_group and loads unified Nav2+MoveIt RViz)',
+        ),
+        DeclareLaunchArgument(
+            'start_scan_filter',
+            default_value=LaunchConfiguration('use_sim_time'),
+            description='Launch laser_scan_filter to produce /scan_filtered (default: matches use_sim_time)',
         ),
         DeclareLaunchArgument(
             'initial_pose_x',
