@@ -291,9 +291,9 @@
       <material name="white"/>
     </visual>
     <collision>
-      <origin xyz="0.089967 0.012308 -0.033655" rpy="0 0 0"/>
+      <origin xyz="-0.00271 0 -0.01756" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/bc.stl" scale="0.001 0.001 0.001"/>
+        <sphere radius="0.01756"/>
       </geometry>
     </collision>
   </link>
@@ -319,9 +319,9 @@
       <material name="white"/>
     </visual>
     <collision>
-      <origin xyz="-0.077608 0.070308 -0.033269" rpy="0 0 0"/>
+      <origin xyz="-0.00271 0 -0.01756" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/fcr.stl" scale="0.001 0.001 0.001"/>
+        <sphere radius="0.01756"/>
       </geometry>
     </collision>
   </link>
@@ -347,9 +347,9 @@
       <material name="white"/>
     </visual>
     <collision>
-      <origin xyz="-0.077608 -0.045692 -0.033655" rpy="0 0 0"/>
+      <origin xyz="-0.00271 0 -0.01756" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://navpromini_description/meshes/fcl.stl" scale="0.001 0.001 0.001"/>
+        <sphere radius="0.01756"/>
       </geometry>
     </collision>
   </link>

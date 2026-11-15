@@ -104,9 +104,9 @@
     <mu1>1.5</mu1>
     <mu2>1.5</mu2>
     <kp>1e6</kp>
-    <kd>1.0</kd>
+    <kd>100.0</kd>
     <minDepth>0.001</minDepth>
-    <maxContacts>8</maxContacts>
+    <maxContacts>4</maxContacts>
     <self_collide>false</self_collide>
   </gazebo>
 
@@ -121,13 +121,13 @@
     <mu1>1.5</mu1>
     <mu2>1.5</mu2>
     <kp>1e6</kp>
-    <kd>1.0</kd>
+    <kd>100.0</kd>
     <minDepth>0.001</minDepth>
-    <maxContacts>8</maxContacts>
+    <maxContacts>4</maxContacts>
     <self_collide>false</self_collide>
   </gazebo>
 
-  <!-- Slippery caster wheels: support robot weight but do not fight diff-drive -->
+  <!-- Slippery spherical caster wheels: support robot weight but do not fight diff-drive -->
   <gazebo reference="bc">
     <material>Gazebo/White</material>
     <visual>
@@ -141,10 +141,10 @@
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
     <slip2>1.0</slip2>
-    <kp>1e6</kp>
-    <kd>1.0</kd>
+    <kp>1e5</kp>
+    <kd>100.0</kd>
     <minDepth>0.001</minDepth>
-    <maxContacts>4</maxContacts>
+    <maxContacts>1</maxContacts>
     <self_collide>false</self_collide>
   </gazebo>
 
@@ -161,10 +161,10 @@
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
     <slip2>1.0</slip2>
-    <kp>1e6</kp>
-    <kd>1.0</kd>
+    <kp>1e5</kp>
+    <kd>100.0</kd>
     <minDepth>0.001</minDepth>
-    <maxContacts>4</maxContacts>
+    <maxContacts>1</maxContacts>
     <self_collide>false</self_collide>
   </gazebo>
 
@@ -181,10 +181,10 @@
     <mu2>0.01</mu2>
     <slip1>1.0</slip1>
     <slip2>1.0</slip2>
-    <kp>1e6</kp>
-    <kd>1.0</kd>
+    <kp>1e5</kp>
+    <kd>100.0</kd>
     <minDepth>0.001</minDepth>
-    <maxContacts>4</maxContacts>
+    <maxContacts>1</maxContacts>
     <self_collide>false</self_collide>
   </gazebo>
 
