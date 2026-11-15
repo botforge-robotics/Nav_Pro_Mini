@@ -70,6 +70,25 @@
     <disable_collisions link1="arm_base_link" link2="rightWheel" reason="Never"/>
     <disable_collisions link1="arm_base_link" link2="shoulder_link" reason="Adjacent"/>
     <disable_collisions link1="arm_base_link" link2="upper_arm_link" reason="Never"/>
+    <disable_collisions link1="base_link" link2="battery" reason="Adjacent"/>
+    <disable_collisions link1="battery" link2="case" reason="Adjacent"/>
+    <disable_collisions link1="battery" link2="cheeseplate" reason="Never"/>
+    <disable_collisions link1="battery" link2="arm_base_link" reason="Never"/>
+    <disable_collisions link1="battery" link2="shoulder_link" reason="Never"/>
+    <disable_collisions link1="battery" link2="upper_arm_link" reason="Never"/>
+    <disable_collisions link1="battery" link2="lower_arm_link" reason="Never"/>
+    <disable_collisions link1="battery" link2="wrist_link" reason="Never"/>
+    <disable_collisions link1="battery" link2="gripper_link" reason="Never"/>
+    <disable_collisions link1="battery" link2="leftWheel" reason="Never"/>
+    <disable_collisions link1="battery" link2="rightWheel" reason="Never"/>
+    <disable_collisions link1="battery" link2="bc" reason="Never"/>
+    <disable_collisions link1="battery" link2="blc" reason="Never"/>
+    <disable_collisions link1="battery" link2="fcl" reason="Never"/>
+    <disable_collisions link1="battery" link2="fcr" reason="Never"/>
+    <disable_collisions link1="battery" link2="flcl" reason="Never"/>
+    <disable_collisions link1="battery" link2="flcr" reason="Never"/>
+    <disable_collisions link1="battery" link2="lidar" reason="Never"/>
+    <disable_collisions link1="battery" link2="camera_link" reason="Never"/>
     <disable_collisions link1="base_link" link2="bc" reason="Adjacent"/>
     <disable_collisions link1="base_link" link2="blc" reason="Never"/>
     <disable_collisions link1="base_link" link2="camera_link" reason="Never"/>

@@ -37,6 +37,19 @@
     <self_collide>false</self_collide>
   </gazebo>
 
+  <gazebo reference="battery">
+    <visual>
+      <material>
+        <ambient>0.15 0.15 0.15 1.0</ambient>
+        <diffuse>0.15 0.15 0.15 1.0</diffuse>
+        <specular>0.2 0.2 0.2 1.0</specular>
+      </material>
+    </visual>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <self_collide>false</self_collide>
+  </gazebo>
+
   <gazebo reference="cheeseplate">
     <material>Gazebo/FlatBlack</material>
     <visual>

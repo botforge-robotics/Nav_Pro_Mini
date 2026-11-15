@@ -70,8 +70,8 @@
   <link name="case">
     <inertial>
       <origin xyz="0.004156414740166747 -0.0022009986117417 0.08252041846336843" rpy="0 0 0"/>
-      <mass value="2.012182"/>
-      <inertia ixx="0.023496" iyy="0.018188" izz="0.035214" ixy="-0.000049" iyz="0.000167" ixz="-0.000173"/>
+      <mass value="1.012182"/>
+      <inertia ixx="0.011819" iyy="0.009149" izz="0.017714" ixy="-0.000025" iyz="0.000084" ixz="-0.000087"/>
     </inertial>
     <visual>
       <origin xyz="-0.001649 0.012278 -0.012655" rpy="0 0 0"/>
@@ -92,6 +92,34 @@
     <origin xyz="0.001649 -0.012278 0.012655" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="case"/>
+  </joint>
+
+  <!-- Battery ballast: 8x8x8 cm cube, 1.0 kg, shifted back by 10 cm inside chassis -->
+  <link name="battery">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.001067" iyy="0.001067" izz="0.001067" ixy="0.0" iyz="0.0" ixz="0.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.08 0.08"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.08 0.08"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="battery_joint" type="fixed">
+    <origin xyz="-0.10 0.0 0.052655" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="battery"/>
   </joint>
 
   <!-- Backward-compatibility alias: chassis frame from old URDF -->
