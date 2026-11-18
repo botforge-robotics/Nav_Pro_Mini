@@ -28,6 +28,7 @@ twist_mux:
         # Safety interlock: locks all topics with priority < 55 (teleop 50, navigation 10)
         # whenever the robot is inside the dock zone bounding box or at the dock.
         # Only docking (priority 60) can drive in this zone to execute safe undock/docking.
+        # Timeout 1.0s ensures lock releases automatically if dock_manager_node stops or dies.
         topic: navpro/dock_zone_lock
-        timeout: 0.0
+        timeout: 1.0
         priority: 55

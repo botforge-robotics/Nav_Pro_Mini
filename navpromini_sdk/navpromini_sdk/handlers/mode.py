@@ -304,7 +304,10 @@ def reconcile_mode(bridge, state) -> None:
         # stale pose_map/dock_status left behind reads as confidently
         # correct instead of unknown.
         bridge.invalidate('pose_map', 'dock_status')
-    if observed == 'navigation':
+        bridge.clear_dock_zone_lock()
+    elif observed == 'mapping':
+        bridge.clear_dock_zone_lock()
+    elif observed == 'navigation':
         _seed_pose_from_dock(bridge, state)
         _resolve_active_map_name(bridge, state)
 
@@ -349,6 +352,7 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         bridge.emit_event('mode.changed', {'mode': 'idle', 'map': None})
         opts['client_hold'].release()
         bridge.invalidate('pose_map', 'dock_status', 'map_msg', 'dock_pose', 'plan', 'dock_tag')
+        bridge.clear_dock_zone_lock()
 
         # Clean up any lingering or orphaned nav2/amcl/slam processes that may
         # have survived StopLaunch, preventing zombie nodes from blocking lifecycle transitions.
@@ -398,6 +402,8 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
         bridge.publish_mode(mode, map_name)
         bridge.emit_event(f'{mode}.started', {'map': map_name})
         bridge.emit_event('mode.changed', {'mode': mode, 'map': map_name})
+        if mode == 'mapping':
+            bridge.clear_dock_zone_lock()
         if mode == 'navigation':
             if map_name:
                 store = opts.get('store')

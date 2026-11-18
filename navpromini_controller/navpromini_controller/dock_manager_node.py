@@ -239,6 +239,9 @@ class DockManagerNode(Node):
                 f'(teleop {"LOCKED" if in_zone else "UNLOCKED"})')
             self._dock_zone_lock_pub.publish(Bool(data=in_zone))
             self._in_dock_zone_pub.publish(Bool(data=in_zone))
+        elif in_zone:
+            # Refresh lock while in dock zone so twist_mux timeout: 1.0 does not expire
+            self._dock_zone_lock_pub.publish(Bool(data=True))
 
     def _on_teleop_cmd(self, msg: Twist) -> None:
         if self._is_in_dock_zone():
@@ -1543,6 +1546,14 @@ class DockManagerNode(Node):
         self._dock_pose = msg
         self._saved_standoff_pose = self._staging_pose_for(msg)
         self._persist_dock_pose(msg)
+
+    def destroy_node(self) -> bool:
+        try:
+            self._dock_zone_lock_pub.publish(Bool(data=False))
+            self._in_dock_zone_pub.publish(Bool(data=False))
+        except Exception:
+            pass
+        return super().destroy_node()
 
 
 def main(args: Optional[list] = None) -> None:

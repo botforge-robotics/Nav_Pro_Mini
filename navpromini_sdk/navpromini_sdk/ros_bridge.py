@@ -174,6 +174,8 @@ class RosBridge(Node):
         self._pub_display_state = self.create_publisher(String, 'navpro/display_state', 10)
         self._pub_plan = self.create_publisher(Path, 'plan', 10)
         self._pub_speed_limit = self.create_publisher(SpeedLimit, '/speed_limit', 10)
+        self._pub_dock_zone_lock = self.create_publisher(Bool, 'navpro/dock_zone_lock', LATCHED_QOS)
+        self._pub_in_dock_zone = self.create_publisher(Bool, 'dock/in_dock_zone', LATCHED_QOS)
 
         # --- service clients (launch_manager) ------------------------------
         self.cli_launch = self.create_client(LaunchWithArgs, 'launch_with_args',
@@ -518,12 +520,23 @@ class RosBridge(Node):
     @property
     def is_in_dock_zone(self) -> bool:
         """True if the robot is inside the dock zone or parked at the dock."""
+        # Mapping mode never has a dock zone safety lock (robot must be driven to map).
+        if self.get('mode') == 'mapping':
+            return False
         if self.get('in_dock_zone') is True:
             return True
         st = self.get('dock_status')
         if st in ('docked', 'charging', 'full', 'docking', 'undocking'):
             return True
         return False
+
+    def clear_dock_zone_lock(self) -> None:
+        """Clear dock zone safety lock in twist_mux and SDK state."""
+        b = Bool()
+        b.data = False
+        self._pub_dock_zone_lock.publish(b)
+        self._pub_in_dock_zone.publish(b)
+        self._put('in_dock_zone', False)
 
     def _on_dock_pose(self, m: PoseStamped) -> None:
         p = m.pose.position
