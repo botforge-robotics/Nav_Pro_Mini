@@ -1428,6 +1428,7 @@ class DockManagerNode(Node):
                 row = cur.fetchone()
                 current_map = row[0] if row else None
                 if current_map:
+                    self._current_map = current_map
                     cur.execute("SELECT data FROM waypoints WHERE map = ? AND name = 'Charging Dock'", (current_map,))
                     wp_row = cur.fetchone()
                     if not wp_row:
@@ -1457,11 +1458,19 @@ class DockManagerNode(Node):
                 self.get_logger().debug(f'SQLite dock lookup: {exc}')
 
         # 2. Check persistent dock pose JSON files
-        candidate_files = [
+        candidate_files = []
+        cur_map = getattr(self, '_current_map', None)
+        if cur_map:
+            candidate_files.extend([
+                f'/home/navpromini/.navpromini_dock_pose_{cur_map}.json',
+                f'/root/.navpromini_dock_pose_{cur_map}.json',
+                os.path.expanduser(f'~/.navpromini_dock_pose_{cur_map}.json'),
+            ])
+        candidate_files.extend([
             DOCK_POSE_FILE,
             '/home/navpromini/.navpromini_dock_pose.json',
             '/root/.navpromini_dock_pose.json',
-        ]
+        ])
         existing = [p for p in candidate_files if os.path.isfile(p)]
         if not existing:
             return None
@@ -1471,6 +1480,8 @@ class DockManagerNode(Node):
             try:
                 with open(file_path, 'r') as f:
                     d = json.load(f)
+                if cur_map and d.get('map') and d.get('map') != cur_map:
+                    continue
                 pose = PoseStamped()
                 pose.header.frame_id = d.get('frame_id', 'map') or 'map'
                 pose.pose.position = Point(x=float(d['x']), y=float(d['y']), z=float(d.get('z', 0.0)))
@@ -1510,12 +1521,21 @@ class DockManagerNode(Node):
             'standoff_y': st_y,
             'standoff_theta': yaw,
         }
+        cur_map = getattr(self, '_current_map', None)
+        if cur_map:
+            d['map'] = cur_map
         pid = os.getpid()
         target_files = [
             DOCK_POSE_FILE,
             '/home/navpromini/.navpromini_dock_pose.json',
             '/root/.navpromini_dock_pose.json',
         ]
+        if cur_map:
+            target_files.extend([
+                f'/home/navpromini/.navpromini_dock_pose_{cur_map}.json',
+                f'/root/.navpromini_dock_pose_{cur_map}.json',
+                os.path.expanduser(f'~/.navpromini_dock_pose_{cur_map}.json'),
+            ])
         for file_path in target_files:
             dir_name = os.path.dirname(file_path)
             if not os.path.isdir(dir_name):

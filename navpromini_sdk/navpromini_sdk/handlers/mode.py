@@ -410,6 +410,36 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
                 if store:
                     store.set_current_map(map_name)
                     dock_wp = store.get_waypoint('Charging Dock', map_name)
+                    if not dock_wp:
+                        for wp in store.list_waypoints(map_name):
+                            if wp.get('type') == 'dock' and 'standoff' not in wp.get('name', '').lower():
+                                dock_wp = wp
+                                break
+
+                    # Check per-map file if not in SQLite store
+                    if not dock_wp:
+                        for p in (
+                            f'/home/navpromini/.navpromini_dock_pose_{map_name}.json',
+                            f'/root/.navpromini_dock_pose_{map_name}.json',
+                            os.path.expanduser(f'~/.navpromini_dock_pose_{map_name}.json'),
+                        ):
+                            if os.path.isfile(p):
+                                try:
+                                    with open(p, 'r') as f:
+                                        d = json.load(f)
+                                    if 'x' in d and 'y' in d:
+                                        dock_wp = {
+                                            'name': 'Charging Dock',
+                                            'type': 'dock',
+                                            'x': float(d['x']),
+                                            'y': float(d['y']),
+                                            'theta': float(d.get('theta', 0.0)),
+                                        }
+                                        store.put_waypoint(dock_wp, map_name)
+                                        break
+                                except Exception:
+                                    pass
+
                     if dock_wp and 'x' in dock_wp and 'y' in dock_wp:
                         x = float(dock_wp['x'])
                         y = float(dock_wp['y'])
@@ -430,6 +460,37 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
                                 dock_data,
                                 bridge.get_clock().now().nanoseconds / 1e9,
                             )
+                        # Persist to disk for this active map so dock_manager_node reads matching coordinates
+                        dock_dict = {
+                            'frame_id': 'map',
+                            'x': x, 'y': y, 'z': 0.0,
+                            'qx': 0.0, 'qy': 0.0,
+                            'qz': math.sin(theta / 2.0),
+                            'qw': math.cos(theta / 2.0),
+                            'theta': theta,
+                            'standoff_x': st_x,
+                            'standoff_y': st_y,
+                            'standoff_theta': theta,
+                            'map': map_name,
+                        }
+                        for p in (
+                            '/home/navpromini/.navpromini_dock_pose.json',
+                            f'/home/navpromini/.navpromini_dock_pose_{map_name}.json',
+                            '/root/.navpromini_dock_pose.json',
+                            f'/root/.navpromini_dock_pose_{map_name}.json',
+                        ):
+                            if os.path.isdir(os.path.dirname(p)):
+                                try:
+                                    tmp_p = f'{p}.tmp.{os.getpid()}'
+                                    with open(tmp_p, 'w') as f:
+                                        json.dump(dock_dict, f, indent=2)
+                                    try:
+                                        os.chmod(tmp_p, 0o666)
+                                    except OSError:
+                                        pass
+                                    os.replace(tmp_p, p)
+                                except Exception:
+                                    pass
                         if 'dock_pose_pub' in opts:
                             msg = PoseStamped()
                             msg.header.frame_id = 'map'
@@ -439,6 +500,8 @@ async def switch_mode(opts: dict, bridge, mode: str, map_name: str | None) -> di
                             msg.pose.orientation.z = math.sin(theta / 2.0)
                             msg.pose.orientation.w = math.cos(theta / 2.0)
                             opts['dock_pose_pub'].publish(msg)
+                    else:
+                        bridge.invalidate('dock_pose')
                 bridge.emit_event('map.loaded', {'name': map_name})
                 try:
                     from .road_network import load_route_graph_into_route_server
@@ -504,5 +567,18 @@ class FinishMappingHandler(BaseHandler):
             self.bridge.emit_event('mapping.failed', {'name': name, 'message': exc.message})
             raise
         self.bridge.emit_event('mapping.completed', {'name': name})
+
+        # If client passes dock_pose in finish request, save it directly for this new map
+        dock_pose = data.get('dock_pose')
+        if dock_pose and isinstance(dock_pose, dict) and 'x' in dock_pose and 'y' in dock_pose:
+            store = self.opts['store']
+            dx = float(dock_pose['x'])
+            dy = float(dock_pose['y'])
+            dth = float(dock_pose.get('theta', 0.0))
+            st_x = float(dock_pose.get('standoff_x', dx + 0.70 * math.cos(dth)))
+            st_y = float(dock_pose.get('standoff_y', dy + 0.70 * math.sin(dth)))
+            store.put_waypoint({'name': 'Charging Dock', 'type': 'dock', 'x': dx, 'y': dy, 'theta': dth}, name)
+            store.put_waypoint({'name': 'Dock Standoff', 'type': 'dock', 'x': st_x, 'y': st_y, 'theta': dth}, name)
+
         result = await switch_mode(self.opts, self.bridge, 'navigation', name)
         self.send(result, status=202)

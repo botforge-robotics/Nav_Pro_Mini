@@ -330,9 +330,21 @@ class DockStatusHandler(BaseHandler):
 class DockPoseHandler(BaseHandler):
     """Read or set where the robot believes its dock is."""
 
-    def _dock_files(self) -> list[str]:
-        files = [os.path.expanduser('~/.navpromini_dock_pose.json')]
-        for candidate in ('/home/navpromini/.navpromini_dock_pose.json', '/root/.navpromini_dock_pose.json'):
+    def _dock_files(self, map_name: str | None = None) -> list[str]:
+        files = []
+        if map_name:
+            for candidate in (
+                os.path.expanduser(f'~/.navpromini_dock_pose_{map_name}.json'),
+                f'/home/navpromini/.navpromini_dock_pose_{map_name}.json',
+                f'/root/.navpromini_dock_pose_{map_name}.json',
+            ):
+                if candidate not in files and os.path.isdir(os.path.dirname(candidate)):
+                    files.append(candidate)
+        for candidate in (
+            os.path.expanduser('~/.navpromini_dock_pose.json'),
+            '/home/navpromini/.navpromini_dock_pose.json',
+            '/root/.navpromini_dock_pose.json',
+        ):
             if candidate not in files and os.path.isdir(os.path.dirname(candidate)):
                 files.append(candidate)
         return files
@@ -350,11 +362,18 @@ class DockPoseHandler(BaseHandler):
                 return
             raise ApiError(404, 'no_dock_pose', 'No dock pose in active mapping session')
 
-        # 1. Authoritative check: active map's 'Charging Dock' waypoint from SQLite store
         store = self.opts.get('store')
-        current_map = store.current_map() if store else None
-        if store and current_map:
-            dock_wp = store.get_waypoint('Charging Dock', current_map)
+        requested_map = self.get_argument('map', None)
+        target_map = requested_map or (store.current_map() if store else None)
+
+        # 1. Authoritative check: target map's 'Charging Dock' waypoint from SQLite store
+        if store and target_map:
+            dock_wp = store.get_waypoint('Charging Dock', target_map)
+            if not dock_wp:
+                for wp in store.list_waypoints(target_map):
+                    if wp.get('type') == 'dock' and 'standoff' not in wp.get('name', '').lower():
+                        dock_wp = wp
+                        break
             if dock_wp and 'x' in dock_wp and 'y' in dock_wp:
                 x = float(dock_wp['x'])
                 y = float(dock_wp['y'])
@@ -370,14 +389,15 @@ class DockPoseHandler(BaseHandler):
                 }
                 age = 0.0
 
-        # 2. Check persistent files (sorted by freshest mtime)
-        if value is None:
-            existing = [p for p in self._dock_files() if os.path.isfile(p)]
-            existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        # 2. Check per-map persistent files
+        if value is None and target_map:
+            existing = [p for p in self._dock_files(target_map) if os.path.isfile(p)]
             for dock_file in existing:
                 try:
                     with open(dock_file, 'r') as f:
                         d = json.load(f)
+                    if d.get('map') and d.get('map') != target_map:
+                        continue
                     theta = d.get('theta')
                     if theta is None:
                         qz = d.get('qz', 0.0)
@@ -402,8 +422,8 @@ class DockPoseHandler(BaseHandler):
                 except Exception:
                     pass
 
-        # 3. Fall back to ROS topic cache
-        if value is None:
+        # 3. Fall back to ROS topic cache (only if querying current active map)
+        if value is None and (not requested_map or requested_map == (store.current_map() if store else None)):
             cached, topic_age = self.bridge.get_with_age('dock_pose')
             if cached is not None:
                 x = float(cached['x'])
@@ -422,7 +442,7 @@ class DockPoseHandler(BaseHandler):
 
         if value is None:
             raise ApiError(404, 'no_dock_pose',
-                           'No dock pose is known. Set one, or map the area with '
+                           f'No dock pose is known for map {target_map!r}. Set one, or map the area with '
                            'the robot docked so the map origin defines it.')
         self.send({'data': value, 'age_sec': age})
 
@@ -435,14 +455,9 @@ class DockPoseHandler(BaseHandler):
         standoff_y = y + standoff_dist * math.sin(theta)
         standoff_theta = theta
 
-        msg = PoseStamped()
-        msg.header.frame_id = 'map'
-        msg.header.stamp = self.bridge.get_clock().now().to_msg()
-        msg.pose.position.x = x
-        msg.pose.position.y = y
-        msg.pose.orientation.z = math.sin(theta / 2.0)
-        msg.pose.orientation.w = math.cos(theta / 2.0)
-        self.opts['dock_pose_pub'].publish(msg)
+        store = self.opts.get('store')
+        target_map = data.get('map') or (store.current_map() if store else None)
+        is_active_map = (not target_map) or (store and target_map == store.current_map())
 
         dock_data = {
             'x': x,
@@ -454,11 +469,22 @@ class DockPoseHandler(BaseHandler):
             'standoff_theta': standoff_theta,
         }
 
-        with self.bridge._lock:
-            self.bridge._cache['dock_pose'] = (
-                dock_data,
-                self.bridge.get_clock().now().nanoseconds / 1e9,
-            )
+        if is_active_map:
+            msg = PoseStamped()
+            msg.header.frame_id = 'map'
+            msg.header.stamp = self.bridge.get_clock().now().to_msg()
+            msg.pose.position.x = x
+            msg.pose.position.y = y
+            msg.pose.orientation.z = math.sin(theta / 2.0)
+            msg.pose.orientation.w = math.cos(theta / 2.0)
+            if 'dock_pose_pub' in self.opts:
+                self.opts['dock_pose_pub'].publish(msg)
+
+            with self.bridge._lock:
+                self.bridge._cache['dock_pose'] = (
+                    dock_data,
+                    self.bridge.get_clock().now().nanoseconds / 1e9,
+                )
 
         dock_dict = {
             'frame_id': 'map',
@@ -473,9 +499,15 @@ class DockPoseHandler(BaseHandler):
             'standoff_x': standoff_x,
             'standoff_y': standoff_y,
             'standoff_theta': standoff_theta,
+            'map': target_map,
         }
         pid = os.getpid()
-        for dock_file in self._dock_files():
+        target_files = self._dock_files(target_map)
+        # If not active map, only save per-map files, don't overwrite generic active ~/.navpromini_dock_pose.json
+        if not is_active_map:
+            target_files = [f for f in target_files if target_map and target_map in f]
+
+        for dock_file in target_files:
             dir_name = os.path.dirname(dock_file)
             if not os.path.isdir(dir_name):
                 continue
@@ -492,28 +524,25 @@ class DockPoseHandler(BaseHandler):
                 self.bridge.get_logger().warn(
                     f"Failed to persist dock pose to {dock_file}: {exc}")
 
-        # Sync to SQLite store for current map
-        store = self.opts.get('store')
-        if store:
-            current_map = store.current_map()
-            if current_map:
-                try:
-                    store.put_waypoint({
-                        'name': 'Charging Dock',
-                        'type': 'dock',
-                        'x': x,
-                        'y': y,
-                        'theta': theta,
-                    }, current_map)
-                    store.put_waypoint({
-                        'name': 'Dock Standoff',
-                        'type': 'dock',
-                        'x': standoff_x,
-                        'y': standoff_y,
-                        'theta': standoff_theta,
-                    }, current_map)
-                except Exception as exc:
-                    self.bridge.get_logger().warn(f"Failed to sync dock to waypoints store: {exc}")
+        # Sync to SQLite store for target_map
+        if store and target_map:
+            try:
+                store.put_waypoint({
+                    'name': 'Charging Dock',
+                    'type': 'dock',
+                    'x': x,
+                    'y': y,
+                    'theta': theta,
+                }, target_map)
+                store.put_waypoint({
+                    'name': 'Dock Standoff',
+                    'type': 'dock',
+                    'x': standoff_x,
+                    'y': standoff_y,
+                    'theta': standoff_theta,
+                }, target_map)
+            except Exception as exc:
+                self.bridge.get_logger().warn(f"Failed to sync dock to waypoints store: {exc}")
 
         self.send(dock_data)
 

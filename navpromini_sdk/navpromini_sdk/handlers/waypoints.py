@@ -109,9 +109,22 @@ class WaypointsHandler(BaseHandler):
                 'standoff_theta': standoff_theta,
             }
             pid = os.getpid()
-            for dock_file in [os.path.expanduser('~/.navpromini_dock_pose.json'),
-                              '/home/navpromini/.navpromini_dock_pose.json',
-                              '/root/.navpromini_dock_pose.json']:
+            target_map = req_map or store.current_map()
+            dock_dict['map'] = target_map
+            candidate_files = []
+            if target_map:
+                candidate_files.extend([
+                    os.path.expanduser(f'~/.navpromini_dock_pose_{target_map}.json'),
+                    f'/home/navpromini/.navpromini_dock_pose_{target_map}.json',
+                    f'/root/.navpromini_dock_pose_{target_map}.json',
+                ])
+            if not req_map or req_map == store.current_map():
+                candidate_files.extend([
+                    os.path.expanduser('~/.navpromini_dock_pose.json'),
+                    '/home/navpromini/.navpromini_dock_pose.json',
+                    '/root/.navpromini_dock_pose.json',
+                ])
+            for dock_file in candidate_files:
                 dir_name = os.path.dirname(dock_file)
                 if not os.path.isdir(dir_name):
                     continue
