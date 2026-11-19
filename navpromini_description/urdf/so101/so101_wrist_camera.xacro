@@ -56,6 +56,38 @@
       <parent link="wrist_camera_mount_link"/>
       <child link="wrist_camera_link"/>
     </joint>
+
+    <!-- Standard ROS REP-103 Camera Optical Frame (Z forward, X right, Y down) -->
+    <link name="wrist_camera_optical_frame"/>
+    <joint name="wrist_camera_optical_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="-1.5707963 0 -1.5707963"/>
+      <parent link="wrist_camera_link"/>
+      <child link="wrist_camera_optical_frame"/>
+    </joint>
+
+    <!-- Gazebo Sim Sensor: SO101 Wrist Camera on Gripper -->
+    <gazebo reference="wrist_camera_link">
+      <sensor name="so101_wrist_camera" type="camera">
+        <always_on>true</always_on>
+        <visualize>true</visualize>
+        <update_rate>30.0</update_rate>
+        <topic>arm/wrist_camera/image_raw</topic>
+        <gz_frame_id>wrist_camera_optical_frame</gz_frame_id>
+        <camera>
+          <camera_info_topic>arm/wrist_camera/camera_info</camera_info_topic>
+          <horizontal_fov>1.396</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.02</near>
+            <far>5.0</far>
+          </clip>
+        </camera>
+      </sensor>
+    </gazebo>
   </xacro:macro>
 
 </robot>

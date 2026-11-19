@@ -253,6 +253,9 @@
     </sensor>
   </gazebo>
   <!-- RPLIDAR A1M8 -->
+  <gazebo reference="LidarJoint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
   <gazebo reference="lidar">
     <visual>
       <material>
@@ -958,7 +961,7 @@
     <parent link="base_link"/>
     <child link="case"/>
   </joint>
-  <!-- Battery ballast: 7x7x7 cm cube, 1.0 kg, shifted back by 9 cm inside chassis -->
+  <!-- Battery ballast: 7x7x7 cm cube, 1.0 kg, shifted to x=-8cm, z=+11.8cm inside chassis -->
   <link name="battery">
     <inertial>
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -980,7 +983,7 @@
     </collision>
   </link>
   <joint name="battery_joint" type="fixed">
-    <origin rpy="0 0 0" xyz="-0.09 0.0 0.047655"/>
+    <origin rpy="0 0 0" xyz="-0.08 0.0 0.117655"/>
     <parent link="base_link"/>
     <child link="battery"/>
   </joint>

@@ -1,0 +1,63 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <model name="navpromini_dock">
+    <static>true</static>
+    <link name="dock_link">
+      <!-- Physical Dock Base & Tower from CAD dock.stl -->
+      <visual name="dock_structure">
+        <pose>0.136675 0.0 0.0003 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://navpromini_dock/meshes/dock.stl</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.9 0.9 0.9 1.0</ambient>
+          <diffuse>0.9 0.9 0.9 1.0</diffuse>
+          <specular>0.2 0.2 0.2 1.0</specular>
+        </material>
+      </visual>
+
+      <collision name="dock_collision">
+        <pose>0.136675 0.0 0.0003 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://navpromini_dock/meshes/dock.stl</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </collision>
+
+      <!--
+        ========================================================================
+        AprilTag 36h11 (ID 0) Visual Marker:
+        Active marker size: 8cm x 8cm (0.08m x 0.08m) from april_36h11-0.svg
+        Surrounded by a 1cm white quiet zone (total visual quad 10cm x 10cm).
+        TUNABLE: Modify the Z coordinate in <pose> below to fine-tune tag height.
+        ========================================================================
+      -->
+      <visual name="dock_tag">
+        <pose>-0.012 -0.0122 0.14 0 0 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <mesh>
+            <uri>model://navpromini_dock/meshes/marker.obj</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>1.0 1.0 1.0 1.0</ambient>
+          <diffuse>1.0 1.0 1.0 1.0</diffuse>
+          <specular>0.0 0.0 0.0 1.0</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://navpromini_dock/materials/textures/tag36_11_00000_bordered.png</albedo_map>
+              <roughness>1.0</roughness>
+              <metalness>0.0</metalness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

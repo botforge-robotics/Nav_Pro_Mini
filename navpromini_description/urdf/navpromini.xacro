@@ -29,10 +29,11 @@
   <!-- Direct child of base_link for clean mobile manipulation IK/FK, sitting on top of lidar -->
   <xacro:arg name="use_arm" default="false"/>
   <xacro:arg name="arm_z" default="0.05"/>
+  <xacro:arg name="use_wrist_camera" default="true"/>
   <xacro:if value="$(arg use_arm)">
     <xacro:include filename="$(find navpromini_description)/urdf/so101/so101.xacro" />
     <xacro:property name="computed_arm_z" value="${0.170655 + float('$(arg arm_z)') if float('$(arg arm_z)') &lt; 0.15 else float('$(arg arm_z)')}"/>
-    <xacro:so101_arm parent="base_link" arm_x="0.057764" arm_y="-0.012279" arm_z="${computed_arm_z}"/>
+    <xacro:so101_arm parent="base_link" arm_x="0.057764" arm_y="-0.012279" arm_z="${computed_arm_z}" use_wrist_camera="$(arg use_wrist_camera)"/>
   </xacro:if>
 
   <!-- Dummy root link to satisfy KDL parser (eliminates KDL root link inertia warning) -->
@@ -94,7 +95,7 @@
     <child link="case"/>
   </joint>
 
-  <!-- Battery ballast: 7x7x7 cm cube, 1.0 kg, shifted back by 9 cm inside chassis -->
+  <!-- Battery ballast: 7x7x7 cm cube, 1.0 kg, shifted to x=-8cm, z=+11.8cm inside chassis -->
   <link name="battery">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -117,7 +118,7 @@
   </link>
 
   <joint name="battery_joint" type="fixed">
-    <origin xyz="-0.09 0.0 0.047655" rpy="0 0 0"/>
+    <origin xyz="-0.08 0.0 0.117655" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="battery"/>
   </joint>

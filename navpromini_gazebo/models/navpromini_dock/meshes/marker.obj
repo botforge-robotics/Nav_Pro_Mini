@@ -1,0 +1,16 @@
+# OBJ mesh for AprilTag marker (total 10cm x 10cm, inner tag 8cm x 8cm)
+mtllib marker.mtl
+o AprilTagMarker
+v 0.000000 -0.050000 -0.050000
+v 0.000000 0.050000 -0.050000
+v 0.000000 0.050000 0.050000
+v 0.000000 -0.050000 0.050000
+vt 0.000000 0.000000
+vt 1.000000 0.000000
+vt 1.000000 1.000000
+vt 0.000000 1.000000
+vn 1.000000 0.000000 0.000000
+usemtl TagMaterial
+s off
+f 1/1/1 2/2/1 3/3/1
+f 1/1/1 3/3/1 4/4/1

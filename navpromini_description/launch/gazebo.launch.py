@@ -17,7 +17,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'world_name',
             default_value='empty',
-            description='World to load: empty, office, cafe',
+            description='World to load: empty, office, cafe, playground',
         ),
         DeclareLaunchArgument(
             'use_sim_time',

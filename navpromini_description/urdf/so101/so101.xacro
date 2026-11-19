@@ -16,7 +16,7 @@
   <xacro:include filename="$(find navpromini_description)/urdf/so101/so101.gazebo" />
   <xacro:include filename="$(find navpromini_description)/urdf/so101/so101_wrist_camera.xacro" />
 
-  <xacro:macro name="so101_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 use_wrist_camera:=false">
+  <xacro:macro name="so101_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 use_wrist_camera:=true">
     <!-- Arm Kinematics & Frames -->
     <xacro:so101_arm_kinematics parent="${parent}" arm_x="${arm_x}" arm_y="${arm_y}" arm_z="${arm_z}"/>
 
@@ -26,14 +26,14 @@
     <!-- Gazebo Sim Plugins, Controllers & Materials -->
     <xacro:so101_arm_gazebo/>
 
-    <!-- Optional Wrist Camera -->
+    <!-- Wrist Camera (Enabled by default) -->
     <xacro:if value="${use_wrist_camera}">
       <xacro:so101_wrist_camera parent="gripper_link"/>
     </xacro:if>
   </xacro:macro>
 
   <!-- Backward-compatibility alias macro -->
-  <xacro:macro name="navpromini_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 z_offset:=0.220655 use_wrist_camera:=false">
+  <xacro:macro name="navpromini_arm" params="parent:=base_link arm_x:=0.057764 arm_y:=-0.012279 arm_z:=0.220655 z_offset:=0.220655 use_wrist_camera:=true">
     <xacro:so101_arm parent="${parent}" arm_x="${arm_x}" arm_y="${arm_y}" arm_z="${arm_z}" use_wrist_camera="${use_wrist_camera}"/>
   </xacro:macro>
 

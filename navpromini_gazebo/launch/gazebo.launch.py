@@ -21,13 +21,14 @@ from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-AVAILABLE_WORLDS = ('empty', 'office', 'cafe')
+AVAILABLE_WORLDS = ('empty', 'office', 'cafe', 'playground')
 
-# Cafe Fuel model floor top ≈ 0.0948 + 0.19/2 = 0.19 m (5cm above floor = 0.24m)
+# Default spawns placed in docked position on the charging dock (dock x=-0.7 -> robot x=-0.52)
 WORLD_SPAWNS = {
-    'empty':  {'x': '0.0', 'y': '0.0',  'z': '0.05'},
-    'office': {'x': '0.0', 'y': '-6.5', 'z': '0.05'},   # lobby
-    'cafe':   {'x': '0.0', 'y': '-3.0', 'z': '0.24'},   # on cafe floor (5cm above ground)
+    'empty':      {'x': '-0.52',  'y': '0.0',  'z': '0.02', 'yaw': '0.0'},
+    'office':     {'x': '-0.52',  'y': '-6.5', 'z': '0.02', 'yaw': '0.0'},   # lobby dock
+    'cafe':       {'x': '-4.67',  'y': '-1.0', 'z': '0.21', 'yaw': '0.0'},   # on cafe floor dock resting against west wall (floor slab top = 0.19m)
+    'playground': {'x': '-10.57', 'y': '-5.0', 'z': '0.02', 'yaw': '0.0'},   # playground home dock resting against west wall (dock x=-10.75 -> robot x=-10.57, identical to cafe spacing)
 }
 
 
@@ -61,11 +62,11 @@ def _setup(context, *args, **kwargs):
         y = spawn['y']
     if not z:
         z = spawn['z']
-    elif world_name == 'cafe' and float(z) < 0.24:
-        # Keep robot above cafe floor slab (0.19m + 0.05m margin)
+    elif world_name == 'cafe' and float(z) < 0.20:
+        # Keep robot above cafe floor slab (0.19m + 0.01m margin)
         z = spawn['z']
     if not yaw:
-        yaw = '0.0'
+        yaw = spawn.get('yaw', '0.0')
 
     xacro_file = os.path.join(pkg_desc, 'urdf', 'navpromini.xacro')
 
@@ -84,6 +85,13 @@ def _setup(context, *args, **kwargs):
     resource_paths = [
         str(Path(pkg_desc).parent.resolve()),
         str(Path(pkg_gazebo).parent.resolve()),
+        os.path.join(pkg_gazebo, 'models'),
+        str(Path(__file__).resolve().parent.parent / 'models'),
+    ]
+
+    gui_plugin_paths = [
+        os.path.join(pkg_gazebo, 'plugins'),
+        str(Path(__file__).resolve().parent.parent / 'plugins'),
     ]
 
     return [
@@ -95,6 +103,10 @@ def _setup(context, *args, **kwargs):
         AppendEnvironmentVariable(
             'GZ_SIM_RESOURCE_PATH',
             os.pathsep.join(resource_paths),
+        ),
+        AppendEnvironmentVariable(
+            'GZ_GUI_PLUGIN_PATH',
+            os.pathsep.join(gui_plugin_paths),
         ),
         SetEnvironmentVariable(
             name='GZ_SIM_SYSTEM_PLUGIN_PATH',
@@ -125,6 +137,7 @@ def _setup(context, *args, **kwargs):
             executable='create',
             output='screen',
             arguments=[
+                '-world', world_name,
                 '-name', 'NavProMini',
                 '-topic', 'robot_description',
                 '-x', x,
@@ -143,6 +156,21 @@ def _setup(context, *args, **kwargs):
                     ),
                     'use_sim_time': use_sim_time,
                 }
+            ],
+            output='screen',
+        ),
+        Node(
+            package='image_transport',
+            executable='republish',
+            name='camera_image_republisher',
+            parameters=[{
+                'in_transport': 'raw',
+                'out_transport': 'compressed',
+                'use_sim_time': use_sim_time,
+            }],
+            remappings=[
+                ('in', '/camera/image_raw'),
+                ('out/compressed', '/camera/image_raw/compressed'),
             ],
             output='screen',
         ),

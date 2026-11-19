@@ -1,0 +1,8 @@
+# Material for AprilTag 36h11 (ID 0)
+newmtl TagMaterial
+Ka 1.000000 1.000000 1.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+d 1.0
+illum 1
+map_Kd ../materials/textures/tag36_11_00000_bordered.png

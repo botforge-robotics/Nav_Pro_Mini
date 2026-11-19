@@ -1,0 +1,5 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/LidarTopicBridge">
+  <file>LidarTopicBridge.qml</file>
+</qresource>
+</RCC>

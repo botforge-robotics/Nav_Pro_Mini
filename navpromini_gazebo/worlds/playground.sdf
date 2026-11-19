@@ -1,0 +1,895 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <!-- NavProMini Playground Arena: Medium-complexity modular playground designed
+       specifically for mobile manipulation, SLAM, Nav2 navigation, and autonomous docking.
+       Arena dimensions: 22m x 22m enclosed industrial proving ground with 5 specialized sectors:
+         - Sector A (SW): Autonomous Docking Bay & Logistics Staging
+         - Sector B (NW): Mobile Manipulation Workcell (Pick & Place, Sorting Trays, Stepped Pedestal)
+         - Sector C (NE): Warehouse Storage Aisles (Pallet Racks, Shelves, Crates & Drums)
+         - Sector D (SE): Agility & Terrain Challenge Course (Slalom Bollards, Blind Corner, Ramp Platform, Choke Point)
+         - Sector E (Center): Grand Plaza & 4-Way Loop-Closure Roundabout
+  -->
+  <world name="playground">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gui fullscreen="0">
+      <!-- 3D Scene View with Overview Isometric Angle -->
+      <plugin filename="MinimalScene" name="3D View">
+        <gz-gui>
+          <title>3D View</title>
+          <property type="bool" key="showTitleBar">false</property>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <engine>ogre2</engine>
+        <scene>scene</scene>
+        <ambient_light>0.45 0.45 0.48</ambient_light>
+        <background_color>0.72 0.76 0.80</background_color>
+        <camera_pose>0 -14 9 0 0.55 1.5708</camera_pose>
+      </plugin>
+
+      <!-- Plugins that add functionality to the scene -->
+      <plugin filename="EntityContextMenuPlugin" name="Entity context menu">
+        <gz-gui>
+          <property key="state" type="string">floating</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+          <property key="showTitleBar" type="bool">false</property>
+        </gz-gui>
+      </plugin>
+
+      <plugin filename="GzSceneManager" name="Scene Manager">
+        <gz-gui>
+          <property key="resizable" type="bool">false</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+        </gz-gui>
+      </plugin>
+
+      <plugin filename="InteractiveViewControl" name="Interactive view control">
+        <gz-gui>
+          <property key="resizable" type="bool">false</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+        </gz-gui>
+      </plugin>
+
+      <plugin filename="CameraTracking" name="Camera Tracking">
+        <gz-gui>
+          <property key="resizable" type="bool">false</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+        </gz-gui>
+      </plugin>
+
+      <!-- World control (Play / Pause / Step) -->
+      <plugin filename="WorldControl" name="World control">
+        <gz-gui>
+          <title>World control</title>
+          <property type="bool" key="showTitleBar">false</property>
+          <property type="bool" key="resizable">false</property>
+          <property type="double" key="height">72</property>
+          <property type="double" key="z">1</property>
+          <property type="string" key="state">floating</property>
+          <anchors target="3D View">
+            <line own="left" target="left"/>
+            <line own="bottom" target="bottom"/>
+          </anchors>
+        </gz-gui>
+        <play_pause>true</play_pause>
+        <step>true</step>
+        <start_paused>false</start_paused>
+        <use_event>true</use_event>
+      </plugin>
+
+      <!-- World statistics -->
+      <plugin filename="WorldStats" name="World stats">
+        <gz-gui>
+          <title>World stats</title>
+          <property type="bool" key="showTitleBar">false</property>
+          <property type="bool" key="resizable">false</property>
+          <property type="double" key="height">110</property>
+          <property type="double" key="width">290</property>
+          <property type="double" key="z">1</property>
+          <property type="string" key="state">floating</property>
+          <anchors target="3D View">
+            <line own="right" target="right"/>
+            <line own="bottom" target="bottom"/>
+          </anchors>
+        </gz-gui>
+        <sim_time>true</sim_time>
+        <real_time>true</real_time>
+        <real_time_factor>true</real_time_factor>
+        <iterations>true</iterations>
+      </plugin>
+
+      <!-- Teleop Plugin in Gazebo GUI Panel -->
+      <plugin filename="Teleop" name="Teleop">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <topic>/cmd_vel</topic>
+      </plugin>
+
+      <!-- Camera Image Display Plugin in Gazebo GUI Panel -->
+      <plugin filename="ImageDisplay" name="Rear Camera">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <topic>camera/image_raw</topic>
+      </plugin>
+
+      <!-- Lidar Topic Bridge GUI Plugin -->
+      <plugin filename="LidarTopicBridge" name="gz::sim::LidarTopicBridge">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <sensor_name>rplidar_a1m8</sensor_name>
+        <topic>scan</topic>
+      </plugin>
+
+      <!-- Visualize Lidar Plugin in Gazebo GUI Panel -->
+      <plugin filename="VisualizeLidar" name="Visualize Lidar">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <topic>scan</topic>
+      </plugin>
+
+      <!-- Component Inspector -->
+      <plugin filename="ComponentInspector" name="Component inspector">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+      </plugin>
+
+      <!-- Entity tree -->
+      <plugin filename="EntityTree" name="Entity tree">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+      </plugin>
+    </gui>
+
+    <!-- Illumination: Sun + 4 Area Spotlights over Workspaces -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 14 0 0 0</pose>
+      <diffuse>0.88 0.88 0.86 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.4 0.2 -0.9</direction>
+    </light>
+
+    <light type="point" name="light_manipulation_cell">
+      <pose>-6.0 5.5 3.5 0 0 0</pose>
+      <diffuse>0.95 0.95 0.92 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.25</constant>
+        <linear>0.06</linear>
+        <quadratic>0.015</quadratic>
+      </attenuation>
+    </light>
+
+    <light type="point" name="light_docking_bay">
+      <pose>-8.0 -5.0 3.5 0 0 0</pose>
+      <diffuse>0.92 0.90 0.85 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.25</constant>
+        <linear>0.06</linear>
+        <quadratic>0.015</quadratic>
+      </attenuation>
+    </light>
+
+    <light type="point" name="light_warehouse">
+      <pose>5.5 5.5 3.5 0 0 0</pose>
+      <diffuse>0.95 0.95 0.95 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.25</constant>
+        <linear>0.06</linear>
+        <quadratic>0.015</quadratic>
+      </attenuation>
+    </light>
+
+    <light type="point" name="light_agility">
+      <pose>5.5 -5.0 3.5 0 0 0</pose>
+      <diffuse>0.95 0.90 0.85 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.25</constant>
+        <linear>0.06</linear>
+        <quadratic>0.015</quadratic>
+      </attenuation>
+    </light>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <ambient>0.48 0.48 0.50 1</ambient>
+      <background>0.72 0.76 0.80 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <!-- ========================================== -->
+    <!-- 1. ARENA GROUND PLANE & MAIN FLOOR         -->
+    <!-- ========================================== -->
+    <model name="arena_ground">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>60 60</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="ground_base">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>60 60</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.62 0.64 0.66 1</ambient>
+            <diffuse>0.62 0.64 0.66 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Floor Sector Visual Inlays -->
+    <!-- Manipulation Zone Floor Pad (NW) -->
+    <model name="floor_pad_manipulation">
+      <static>true</static>
+      <pose>-5.5 5.5 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>9.0 9.0 0.002</size></box></geometry>
+          <material><ambient>0.50 0.54 0.58 1</ambient><diffuse>0.50 0.54 0.58 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Docking Bay Floor Pad (SW) -->
+    <model name="floor_pad_docking">
+      <static>true</static>
+      <pose>-5.5 -5.5 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>9.0 9.0 0.002</size></box></geometry>
+          <material><ambient>0.48 0.50 0.52 1</ambient><diffuse>0.48 0.50 0.52 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Warehouse Floor Pad (NE) -->
+    <model name="floor_pad_warehouse">
+      <static>true</static>
+      <pose>5.5 5.5 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>9.0 9.0 0.002</size></box></geometry>
+          <material><ambient>0.55 0.52 0.48 1</ambient><diffuse>0.55 0.52 0.48 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Agility Course Floor Pad (SE) -->
+    <model name="floor_pad_agility">
+      <static>true</static>
+      <pose>5.5 -5.5 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="v">
+          <geometry><box><size>9.0 9.0 0.002</size></box></geometry>
+          <material><ambient>0.52 0.55 0.52 1</ambient><diffuse>0.52 0.55 0.52 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========================================== -->
+    <!-- 2. PERIMETER BOUNDARY WALLS & TOWERS       -->
+    <!-- ========================================== -->
+    <!-- 22m x 22m Outer Enclosure with sleek safety finish -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -11.0 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>22.4 0.25 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>22.4 0.25 1.2</size></box></geometry>
+          <material><ambient>0.28 0.32 0.38 1</ambient><diffuse>0.28 0.32 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 11.0 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>22.4 0.25 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>22.4 0.25 1.2</size></box></geometry>
+          <material><ambient>0.28 0.32 0.38 1</ambient><diffuse>0.28 0.32 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-11.0 0 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.25 22.0 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.25 22.0 1.2</size></box></geometry>
+          <material><ambient>0.28 0.32 0.38 1</ambient><diffuse>0.28 0.32 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>11.0 0 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.25 22.0 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.25 22.0 1.2</size></box></geometry>
+          <material><ambient>0.28 0.32 0.38 1</ambient><diffuse>0.28 0.32 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 4 Corner Towers (High-visibility architectural beacons) -->
+    <model name="tower_sw"><static>true</static><pose>-11.0 -11.0 0.9 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.6 0.6 1.8</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 1.8</size></box></geometry>
+          <material><ambient>0.85 0.55 0.1 1</ambient><diffuse>0.85 0.55 0.1 1</diffuse></material></visual></link></model>
+    <model name="tower_nw"><static>true</static><pose>-11.0 11.0 0.9 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.6 0.6 1.8</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 1.8</size></box></geometry>
+          <material><ambient>0.85 0.55 0.1 1</ambient><diffuse>0.85 0.55 0.1 1</diffuse></material></visual></link></model>
+    <model name="tower_ne"><static>true</static><pose>11.0 11.0 0.9 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.6 0.6 1.8</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 1.8</size></box></geometry>
+          <material><ambient>0.85 0.55 0.1 1</ambient><diffuse>0.85 0.55 0.1 1</diffuse></material></visual></link></model>
+    <model name="tower_se"><static>true</static><pose>11.0 -11.0 0.9 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>0.6 0.6 1.8</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 1.8</size></box></geometry>
+          <material><ambient>0.85 0.55 0.1 1</ambient><diffuse>0.85 0.55 0.1 1</diffuse></material></visual></link></model>
+
+    <!-- Sector Internal Partitions with Doorways -->
+    <!-- West Partition (separating Docking Bay from Manipulation Cell) with Doorway at x=-6.0 -->
+    <model name="part_w_left"><static>true</static><pose>-8.8 0 0.6 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>4.0 0.2 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.0 0.2 1.2</size></box></geometry>
+          <material><ambient>0.35 0.38 0.44 1</ambient><diffuse>0.35 0.38 0.44 1</diffuse></material></visual></link></model>
+    <model name="part_w_right"><static>true</static><pose>-3.5 0 0.6 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>3.0 0.2 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>3.0 0.2 1.2</size></box></geometry>
+          <material><ambient>0.35 0.38 0.44 1</ambient><diffuse>0.35 0.38 0.44 1</diffuse></material></visual></link></model>
+
+    <!-- East Partition (separating Warehouse from Agility Course) with Doorway at x=6.0 -->
+    <model name="part_e_left"><static>true</static><pose>3.5 0 0.6 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>3.0 0.2 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>3.0 0.2 1.2</size></box></geometry>
+          <material><ambient>0.35 0.38 0.44 1</ambient><diffuse>0.35 0.38 0.44 1</diffuse></material></visual></link></model>
+    <model name="part_e_right"><static>true</static><pose>8.8 0 0.6 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry><box><size>4.0 0.2 1.2</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.0 0.2 1.2</size></box></geometry>
+          <material><ambient>0.35 0.38 0.44 1</ambient><diffuse>0.35 0.38 0.44 1</diffuse></material></visual></link></model>
+
+    <!-- ========================================== -->
+    <!-- 3. SECTOR E: GRAND CENTRAL PLAZA           -->
+    <!-- ========================================== -->
+    <!-- Central Octagonal Loop-Closure Hub & Landmark -->
+    <model name="central_hub">
+      <static>true</static>
+      <pose>0 0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="c">
+          <geometry><cylinder><radius>1.0</radius><length>0.3</length></cylinder></geometry>
+        </collision>
+        <visual name="hub_base">
+          <geometry><cylinder><radius>1.0</radius><length>0.3</length></cylinder></geometry>
+          <material><ambient>0.22 0.25 0.30 1</ambient><diffuse>0.22 0.25 0.30 1</diffuse></material>
+        </visual>
+        <!-- Center beacon tower for SLAM lidar feature matching -->
+        <visual name="hub_tower">
+          <pose>0 0 0.65 0 0 0</pose>
+          <geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+          <material><ambient>0.2 0.65 0.85 1</ambient><diffuse>0.2 0.65 0.85 1</diffuse></material>
+        </visual>
+        <collision name="c_tower">
+          <pose>0 0 0.65 0 0 0</pose>
+          <geometry><box><size>0.4 0.4 1.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ========================================== -->
+    <!-- 4. SECTOR A: DOCKING BAY & LOGISTICS       -->
+    <!-- ========================================== -->
+    <!-- NavProMini Charging Dock with 8cm x 8cm AprilTag 36h11 (ID 0) -->
+    <!-- Positioned against west wall (inner face x=-10.875) matching cafe spacing exactly -->
+    <!-- Dock map pose: x=-10.75, y=-5.0, yaw=0.0 -> Robot spawn: x=-10.57, y=-5.0 -> Standoff at x=-9.85, y=-5.0 -->
+    <include>
+      <name>dock</name>
+      <pose>-10.75 -5.0 0.0 0 0 0</pose>
+      <uri>model://navpromini_dock</uri>
+    </include>
+
+    <!-- Docking Visual Approach Floor Stripes -->
+    <model name="dock_approach_stripes">
+      <static>true</static>
+      <pose>-9.35 -5.0 0.002 0 0 0</pose>
+      <link name="link">
+        <visual name="stripe_left">
+          <pose>0 0.45 0 0 0 0</pose>
+          <geometry><box><size>2.2 0.06 0.002</size></box></geometry>
+          <material><ambient>0.95 0.75 0.05 1</ambient><diffuse>0.95 0.75 0.05 1</diffuse></material>
+        </visual>
+        <visual name="stripe_right">
+          <pose>0 -0.45 0 0 0 0</pose>
+          <geometry><box><size>2.2 0.06 0.002</size></box></geometry>
+          <material><ambient>0.95 0.75 0.05 1</ambient><diffuse>0.95 0.75 0.05 1</diffuse></material>
+        </visual>
+        <!-- Standoff Stop Line -->
+        <visual name="stripe_stop">
+          <pose>0.45 0 0 0 0 0</pose>
+          <geometry><box><size>0.08 0.96 0.002</size></box></geometry>
+          <material><ambient>0.95 0.20 0.15 1</ambient><diffuse>0.95 0.20 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Maintenance Workbench in Docking Bay -->
+    <model name="dock_workbench">
+      <static>true</static>
+      <pose>-7.0 -9.8 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>2.2 0.7 0.9</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>2.2 0.7 0.9</size></box></geometry>
+          <material><ambient>0.3 0.35 0.4 1</ambient><diffuse>0.3 0.35 0.4 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Logistics Wooden Pallet with Cargo Box -->
+    <model name="staging_pallet">
+      <static>true</static>
+      <pose>-4.5 -6.0 0.07 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.2 0.8 0.14</size></box></geometry></collision>
+        <visual name="pallet_vis"><geometry><box><size>1.2 0.8 0.14</size></box></geometry>
+          <material><ambient>0.72 0.55 0.35 1</ambient><diffuse>0.72 0.55 0.35 1</diffuse></material></visual>
+        <!-- Cargo box on pallet -->
+        <collision name="c_crate"><pose>0 0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.36</size></box></geometry></collision>
+        <visual name="crate_vis"><pose>0 0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.36</size></box></geometry>
+          <material><ambient>0.58 0.42 0.28 1</ambient><diffuse>0.58 0.42 0.28 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- ========================================== -->
+    <!-- 5. SECTOR B: MOBILE MANIPULATION WORKCELL  -->
+    <!-- ========================================== -->
+    <!--
+      SO101 Kinematic Reference:
+      Mobile base deck sits at z≈0.05m, lidar at z≈0.20m, arm shoulder at z≈0.27m.
+      Forward horizontal grasp reach: z = 0.22m to 0.36m.
+      Tabletops in this cell are precision-set to z = 0.28m & 0.26m for direct SO101 grasp!
+    -->
+
+    <!-- Workstation 1: Precision Pick Table (z_surface = 0.28m) -->
+    <model name="manip_pick_table">
+      <static>true</static>
+      <pose>-8.0 5.0 0.14 0 0 0</pose>
+      <link name="link">
+        <!-- Table body: 1.2m long x 0.6m wide x 0.28m tall -->
+        <collision name="c"><geometry><box><size>1.2 0.6 0.28</size></box></geometry></collision>
+        <visual name="v_base"><geometry><box><size>1.16 0.56 0.26</size></box></geometry>
+          <material><ambient>0.25 0.28 0.32 1</ambient><diffuse>0.25 0.28 0.32 1</diffuse></material></visual>
+        <!-- High-contrast white matte top plate for vision algorithms -->
+        <visual name="v_top"><pose>0 0 0.135 0 0 0</pose><geometry><box><size>1.2 0.6 0.01</size></box></geometry>
+          <material><ambient>0.92 0.92 0.95 1</ambient><diffuse>0.92 0.92 0.95 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Graspable Target Objects on Pick Table (z_bottom = 0.28m) -->
+    <!-- 1. Red Target Cube (4cm x 4cm x 4cm, mass 0.05kg) -->
+    <model name="target_cube_red">
+      <pose>-7.8 4.80 0.305 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.05</mass>
+          <inertia>
+            <ixx>1.33e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>1.33e-5</iyy><iyz>0</iyz><izz>1.33e-5</izz>
+          </inertia>
+        </inertial>
+        <collision name="c">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <surface>
+            <friction><ode><mu>1.2</mu><mu2>1.2</mu2></ode></friction>
+            <bounce><restitution_coefficient>0.01</restitution_coefficient></bounce>
+          </surface>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <material><ambient>0.9 0.1 0.1 1</ambient><diffuse>0.9 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 2. Green Target Cylinder (4cm dia x 5cm tall, mass 0.05kg) -->
+    <model name="target_cylinder_green">
+      <pose>-7.9 4.88 0.31 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.05</mass>
+          <inertia>
+            <ixx>1.54e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>1.54e-5</iyy><iyz>0</iyz><izz>1.0e-5</izz>
+          </inertia>
+        </inertial>
+        <collision name="c">
+          <geometry><cylinder><radius>0.02</radius><length>0.05</length></cylinder></geometry>
+          <surface>
+            <friction><ode><mu>1.2</mu><mu2>1.2</mu2></ode></friction>
+            <bounce><restitution_coefficient>0.01</restitution_coefficient></bounce>
+          </surface>
+        </collision>
+        <visual name="v">
+          <geometry><cylinder><radius>0.02</radius><length>0.05</length></cylinder></geometry>
+          <material><ambient>0.1 0.85 0.15 1</ambient><diffuse>0.1 0.85 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 3. Blue Target Box (4cm x 4cm x 4cm, mass 0.05kg) -->
+    <model name="target_box_blue">
+      <pose>-8.1 4.80 0.305 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.05</mass>
+          <inertia>
+            <ixx>1.33e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>1.33e-5</iyy><iyz>0</iyz><izz>1.33e-5</izz>
+          </inertia>
+        </inertial>
+        <collision name="c">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <surface>
+            <friction><ode><mu>1.2</mu><mu2>1.2</mu2></ode></friction>
+            <bounce><restitution_coefficient>0.01</restitution_coefficient></bounce>
+          </surface>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <material><ambient>0.1 0.3 0.95 1</ambient><diffuse>0.1 0.3 0.95 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 4. Yellow Target Cylinder (4cm dia x 5cm tall, mass 0.05kg) -->
+    <model name="target_cylinder_yellow">
+      <pose>-8.2 4.88 0.31 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.05</mass>
+          <inertia>
+            <ixx>1.54e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>1.54e-5</iyy><iyz>0</iyz><izz>1.0e-5</izz>
+          </inertia>
+        </inertial>
+        <collision name="c">
+          <geometry><cylinder><radius>0.02</radius><length>0.05</length></cylinder></geometry>
+          <surface>
+            <friction><ode><mu>1.2</mu><mu2>1.2</mu2></ode></friction>
+            <bounce><restitution_coefficient>0.01</restitution_coefficient></bounce>
+          </surface>
+        </collision>
+        <visual name="v">
+          <geometry><cylinder><radius>0.02</radius><length>0.05</length></cylinder></geometry>
+          <material><ambient>0.95 0.85 0.1 1</ambient><diffuse>0.95 0.85 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Workstation 2: Drop & Sorting Trays (z_surface = 0.26m) -->
+    <model name="manip_sort_table">
+      <static>true</static>
+      <pose>-5.2 5.0 0.13 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.2 0.6 0.26</size></box></geometry></collision>
+        <visual name="v_base"><geometry><box><size>1.2 0.6 0.26</size></box></geometry>
+          <material><ambient>0.28 0.30 0.35 1</ambient><diffuse>0.28 0.30 0.35 1</diffuse></material></visual>
+        <!-- Tray 1: Red Receptacle Border (Left) -->
+        <visual name="tray_red_rim">
+          <pose>-0.3 -0.08 0.14 0 0 0</pose>
+          <geometry><box><size>0.3 0.3 0.03</size></box></geometry>
+          <material><ambient>0.9 0.2 0.2 1</ambient><diffuse>0.9 0.2 0.2 1</diffuse></material>
+        </visual>
+        <!-- Tray 2: Blue Receptacle Border (Right) -->
+        <visual name="tray_blue_rim">
+          <pose>0.3 -0.08 0.14 0 0 0</pose>
+          <geometry><box><size>0.3 0.3 0.03</size></box></geometry>
+          <material><ambient>0.15 0.35 0.9 1</ambient><diffuse>0.15 0.35 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Multi-Level Stepped Inspection Pedestal (Kinematic Vertical Reach Testing) -->
+    <model name="stepped_pedestal">
+      <static>true</static>
+      <pose>-6.5 8.2 0 0 0 0</pose>
+      <link name="link">
+        <!-- Step 1: 0.15m height -->
+        <collision name="c_s1"><pose>-0.5 0 0.075 0 0 0</pose><geometry><box><size>0.5 0.6 0.15</size></box></geometry></collision>
+        <visual name="v_s1"><pose>-0.5 0 0.075 0 0 0</pose><geometry><box><size>0.5 0.6 0.15</size></box></geometry>
+          <material><ambient>0.4 0.45 0.5 1</ambient><diffuse>0.4 0.45 0.5 1</diffuse></material></visual>
+        <!-- Step 2: 0.25m height -->
+        <collision name="c_s2"><pose>0 0 0.125 0 0 0</pose><geometry><box><size>0.5 0.6 0.25</size></box></geometry></collision>
+        <visual name="v_s2"><pose>0 0 0.125 0 0 0</pose><geometry><box><size>0.5 0.6 0.25</size></box></geometry>
+          <material><ambient>0.48 0.52 0.58 1</ambient><diffuse>0.48 0.52 0.58 1</diffuse></material></visual>
+        <!-- Step 3: 0.35m height -->
+        <collision name="c_s3"><pose>0.5 0 0.175 0 0 0</pose><geometry><box><size>0.5 0.6 0.35</size></box></geometry></collision>
+        <visual name="v_s3"><pose>0.5 0 0.175 0 0 0</pose><geometry><box><size>0.5 0.6 0.35</size></box></geometry>
+          <material><ambient>0.55 0.60 0.66 1</ambient><diffuse>0.55 0.60 0.66 1</diffuse></material></visual>
+        <!-- Test Target Puck on Step 2 (z=0.25m + 0.025m) -->
+        <visual name="v_puck"><pose>0 0 0.27 0 0 0</pose><geometry><cylinder><radius>0.03</radius><length>0.04</length></cylinder></geometry>
+          <material><ambient>0.95 0.5 0.1 1</ambient><diffuse>0.95 0.5 0.1 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Industrial Conveyor Line Mockup -->
+    <model name="conveyor_mockup">
+      <static>true</static>
+      <pose>-3.5 8.2 0.14 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.6 0.5 0.28</size></box></geometry></collision>
+        <visual name="v_frame"><geometry><box><size>1.6 0.5 0.26</size></box></geometry>
+          <material><ambient>0.25 0.25 0.28 1</ambient><diffuse>0.25 0.25 0.28 1</diffuse></material></visual>
+        <visual name="v_belt"><pose>0 0 0.135 0 0 0</pose><geometry><box><size>1.56 0.44 0.01</size></box></geometry>
+          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- ========================================== -->
+    <!-- 6. SECTOR C: WAREHOUSE & PALLET RACKING    -->
+    <!-- ========================================== -->
+    <!-- Storage Rack 1 (North Rack: 4.8m long x 0.8m wide x 1.8m tall) -->
+    <model name="storage_rack_north">
+      <static>true</static>
+      <pose>6.0 7.8 0 0 0 0</pose>
+      <link name="link">
+        <!-- Upright Corner Columns -->
+        <collision name="c_col1"><pose>-2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col1"><pose>-2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col2"><pose>-2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col2"><pose>-2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col3"><pose>2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col3"><pose>2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col4"><pose>2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col4"><pose>2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col5"><pose>0 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col5"><pose>0 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col6"><pose>0 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col6"><pose>0 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+
+        <!-- Lower Shelf Beam (Accessible for manipulation! z=0.28m) -->
+        <collision name="c_shelf_low"><pose>0 0 0.28 0 0 0</pose><geometry><box><size>4.7 0.8 0.05</size></box></geometry></collision>
+        <visual name="v_shelf_low"><pose>0 0 0.28 0 0 0</pose><geometry><box><size>4.7 0.8 0.05</size></box></geometry>
+          <material><ambient>0.9 0.45 0.05 1</ambient><diffuse>0.9 0.45 0.05 1</diffuse></material></visual>
+
+        <!-- Upper Shelf Beam (z=0.95m) -->
+        <collision name="c_shelf_high"><pose>0 0 0.95 0 0 0</pose><geometry><box><size>4.7 0.8 0.05</size></box></geometry></collision>
+        <visual name="v_shelf_high"><pose>0 0 0.95 0 0 0</pose><geometry><box><size>4.7 0.8 0.05</size></box></geometry>
+          <material><ambient>0.9 0.45 0.05 1</ambient><diffuse>0.9 0.45 0.05 1</diffuse></material></visual>
+
+        <!-- Cargo Boxes on Lower Shelf (Reachable by Arm) -->
+        <visual name="v_box1"><pose>-1.2 0 0.43 0 0 0</pose><geometry><box><size>0.35 0.35 0.25</size></box></geometry>
+          <material><ambient>0.65 0.5 0.35 1</ambient><diffuse>0.65 0.5 0.35 1</diffuse></material></visual>
+        <collision name="c_box1"><pose>-1.2 0 0.43 0 0 0</pose><geometry><box><size>0.35 0.35 0.25</size></box></geometry></collision>
+
+        <visual name="v_box2"><pose>1.2 0 0.43 0 0 0</pose><geometry><box><size>0.4 0.35 0.25</size></box></geometry>
+          <material><ambient>0.65 0.5 0.35 1</ambient><diffuse>0.65 0.5 0.35 1</diffuse></material></visual>
+        <collision name="c_box2"><pose>1.2 0 0.43 0 0 0</pose><geometry><box><size>0.4 0.35 0.25</size></box></geometry></collision>
+      </link>
+    </model>
+
+    <!-- Storage Rack 2 (South Rack in Warehouse, forms a 2.4m aisle with North Rack) -->
+    <model name="storage_rack_south">
+      <static>true</static>
+      <pose>6.0 4.2 0 0 0 0</pose>
+      <link name="link">
+        <collision name="c_col1"><pose>-2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col1"><pose>-2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col2"><pose>-2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col2"><pose>-2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col3"><pose>2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col3"><pose>2.3 -0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+        <collision name="c_col4"><pose>2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry></collision>
+        <visual name="v_col4"><pose>2.3 0.35 0.9 0 0 0</pose><geometry><box><size>0.1 0.1 1.8</size></box></geometry>
+          <material><ambient>0.2 0.4 0.8 1</ambient><diffuse>0.2 0.4 0.8 1</diffuse></material></visual>
+
+        <!-- Lower Shelf Beam -->
+        <collision name="c_shelf_low"><pose>0 0 0.28 0 0 0</pose><geometry><box><size>4.7 0.8 0.05</size></box></geometry></collision>
+        <visual name="v_shelf_low"><pose>0 0 0.28 0 0 0</pose><geometry><box><size>4.7 0.8 0.05</size></box></geometry>
+          <material><ambient>0.9 0.45 0.05 1</ambient><diffuse>0.9 0.45 0.05 1</diffuse></material></visual>
+
+        <!-- Industrial Storage Drums on Bottom Shelf -->
+        <visual name="v_drum1"><pose>-1.0 0 0.65 0 0 0</pose><geometry><cylinder><radius>0.25</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.15 0.3 0.7 1</ambient><diffuse>0.15 0.3 0.7 1</diffuse></material></visual>
+        <collision name="c_drum1"><pose>-1.0 0 0.65 0 0 0</pose><geometry><cylinder><radius>0.25</radius><length>0.7</length></cylinder></geometry></collision>
+
+        <visual name="v_drum2"><pose>1.0 0 0.65 0 0 0</pose><geometry><cylinder><radius>0.25</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.85 0.7 0.1 1</ambient><diffuse>0.85 0.7 0.1 1</diffuse></material></visual>
+        <collision name="c_drum2"><pose>1.0 0 0.65 0 0 0</pose><geometry><cylinder><radius>0.25</radius><length>0.7</length></cylinder></geometry></collision>
+      </link>
+    </model>
+
+    <!-- Warehouse Logistics Pallets Stack -->
+    <model name="warehouse_pallets">
+      <static>true</static>
+      <pose>9.2 6.0 0.14 0 0 1.5708</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.2 0.8 0.28</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.2 0.8 0.28</size></box></geometry>
+          <material><ambient>0.68 0.5 0.3 1</ambient><diffuse>0.68 0.5 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- ========================================== -->
+    <!-- 7. SECTOR D: AGILITY & TERRAIN CHALLENGE   -->
+    <!-- ========================================== -->
+    <!-- 4 Staggered Slalom Bollards for Precision Path Tracking & Trajectory Planners -->
+    <model name="slalom_bollard_1">
+      <static>true</static><pose>4.2 -7.5 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.95 0.45 0.05 1</ambient><diffuse>0.95 0.45 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="slalom_bollard_2">
+      <static>true</static><pose>5.8 -5.5 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.95 0.45 0.05 1</ambient><diffuse>0.95 0.45 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="slalom_bollard_3">
+      <static>true</static><pose>7.4 -7.5 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.95 0.45 0.05 1</ambient><diffuse>0.95 0.45 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="slalom_bollard_4">
+      <static>true</static><pose>9.0 -5.5 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>0.95 0.45 0.05 1</ambient><diffuse>0.95 0.45 0.05 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- L-Shaped Blind Corner (Tests Nav2 local costmap inflation & blind-spot recovery) -->
+    <model name="blind_corner_wall">
+      <static>true</static>
+      <pose>4.5 -2.5 0.5 0 0 0</pose>
+      <link name="link">
+        <!-- Segment 1: East-West -->
+        <collision name="c1"><pose>0 0 0 0 0 0</pose><geometry><box><size>2.4 0.2 1.0</size></box></geometry></collision>
+        <visual name="v1"><pose>0 0 0 0 0 0</pose><geometry><box><size>2.4 0.2 1.0</size></box></geometry>
+          <material><ambient>0.4 0.42 0.48 1</ambient><diffuse>0.4 0.42 0.48 1</diffuse></material></visual>
+        <!-- Segment 2: North-South forming corner -->
+        <collision name="c2"><pose>1.1 -0.9 0 0 0 0</pose><geometry><box><size>0.2 1.8 1.0</size></box></geometry></collision>
+        <visual name="v2"><pose>1.1 -0.9 0 0 0 0</pose><geometry><box><size>0.2 1.8 1.0</size></box></geometry>
+          <material><ambient>0.4 0.42 0.48 1</ambient><diffuse>0.4 0.42 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Narrow Gateway Choke Point (0.85m doorway width to test footprint margin) -->
+    <model name="choke_post_left">
+      <static>true</static><pose>7.2 -2.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.25 0.25 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.25 0.25 1.0</size></box></geometry>
+          <material><ambient>0.85 0.25 0.2 1</ambient><diffuse>0.85 0.25 0.2 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="choke_post_right">
+      <static>true</static><pose>8.05 -2.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.25 0.25 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.25 0.25 1.0</size></box></geometry>
+          <material><ambient>0.85 0.25 0.2 1</ambient><diffuse>0.85 0.25 0.2 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Gentle Terrain Incline Platform (Ramp Up, Flat Top, Ramp Down) -->
+    <!--
+      Length: 3.0m total (1.0m incline, 1.0m plateau at h=0.06m, 1.0m decline)
+      Gentle slope ~3.4 deg, perfectly climbable by differential drive robot
+    -->
+    <model name="terrain_ramp">
+      <static>true</static>
+      <pose>8.0 -8.5 0 0 0 0</pose>
+      <link name="link">
+        <!-- Incline wedge -->
+        <collision name="c_ramp_up">
+          <pose>-1.0 0 0.03 0 0.06 0</pose>
+          <geometry><box><size>1.0 1.2 0.06</size></box></geometry>
+        </collision>
+        <visual name="v_ramp_up">
+          <pose>-1.0 0 0.03 0 0.06 0</pose>
+          <geometry><box><size>1.0 1.2 0.06</size></box></geometry>
+          <material><ambient>0.35 0.45 0.4 1</ambient><diffuse>0.35 0.45 0.4 1</diffuse></material>
+        </visual>
+        <!-- Plateau -->
+        <collision name="c_plateau">
+          <pose>0 0 0.03 0 0 0</pose>
+          <geometry><box><size>1.0 1.2 0.06</size></box></geometry>
+        </collision>
+        <visual name="v_plateau">
+          <pose>0 0 0.03 0 0 0</pose>
+          <geometry><box><size>1.0 1.2 0.06</size></box></geometry>
+          <material><ambient>0.4 0.5 0.45 1</ambient><diffuse>0.4 0.5 0.45 1</diffuse></material>
+        </visual>
+        <!-- Decline wedge -->
+        <collision name="c_ramp_down">
+          <pose>1.0 0 0.03 0 -0.06 0</pose>
+          <geometry><box><size>1.0 1.2 0.06</size></box></geometry>
+        </collision>
+        <visual name="v_ramp_down">
+          <pose>1.0 0 0.03 0 -0.06 0</pose>
+          <geometry><box><size>1.0 1.2 0.06</size></box></geometry>
+          <material><ambient>0.35 0.45 0.4 1</ambient><diffuse>0.35 0.45 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

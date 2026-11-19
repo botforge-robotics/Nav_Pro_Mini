@@ -16,6 +16,10 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*')),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*')),
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
+        (os.path.join('lib', package_name), [
+            'scripts/serialize_posegraph',
+            'scripts/sdf_map_generator',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,9 +28,4 @@ setup(
     description='SLAM Toolbox mapping for NavProMini',
     license='Apache-2.0',
     tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'serialize_posegraph = navpromini_mapping.serialize_posegraph:main',
-        ],
-    },
 )

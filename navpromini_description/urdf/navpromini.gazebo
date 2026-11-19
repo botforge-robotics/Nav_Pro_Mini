@@ -239,6 +239,9 @@
   </gazebo>
 
   <!-- RPLIDAR A1M8 -->
+  <gazebo reference="LidarJoint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
   <gazebo reference="lidar">
     <visual>
       <material>

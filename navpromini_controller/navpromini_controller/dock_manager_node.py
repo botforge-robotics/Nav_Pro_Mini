@@ -27,6 +27,8 @@ from rclpy.task import Future
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Float32MultiArray, String
 from std_srvs.srv import SetBool
+from visualization_msgs.msg import Marker, MarkerArray
+from rcl_interfaces.msg import ParameterDescriptor
 
 DOCK_POSE_FILE = os.path.expanduser('~/.navpromini_dock_pose.json')
 _TICK = 0.1
@@ -92,6 +94,12 @@ class DockManagerNode(Node):
         p('marker_wait_timeout', 0.4)
         p('max_run_timeout', 600.0)
         p('settle_sec', 0.4)
+        p('require_charge_sense', True)
+        p('start_docked', False)
+        _dyn = ParameterDescriptor(dynamic_typing=True)
+        p('dock_x', '', _dyn)
+        p('dock_y', '', _dyn)
+        p('dock_yaw', '', _dyn)
 
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self._w_rate = float(g('angular_rate'))
@@ -130,21 +138,29 @@ class DockManagerNode(Node):
         self._marker_timeout = float(g('marker_wait_timeout'))
         self._max_run = float(g('max_run_timeout'))
         self._settle = float(g('settle_sec'))
+        self._require_charge = bool(g('require_charge_sense'))
 
         cb = ReentrantCallbackGroup()
+        start_docked = bool(g('start_docked'))
         self._busy = False
-        self._docked = False
-        self._docked_state_known = False
-        self._status = 'undocked'
+        self._docked = start_docked
+        self._docked_state_known = start_docked
+        self._status = 'docked' if start_docked else 'undocked'
+        self._power = (BatteryState.POWER_SUPPLY_STATUS_CHARGING
+                       if start_docked else BatteryState.POWER_SUPPLY_STATUS_DISCHARGING)
         self._tag: Optional[list] = None
         self._tag_stamp = 0.0
-        self._power: Optional[int] = None
         self._odom: Optional[Odometry] = None
 
         self._cmd = self.create_publisher(Twist, 'cmd_vel_dock', 10)
         self._status_pub = self.create_publisher(String, 'dock_status', _LATCHED_QOS)
+        self._status_pub.publish(String(data=self._status))
         self._dock_pose_pub = self.create_publisher(
             PoseStamped, 'dock_pose', _LATCHED_QOS)
+        self._staging_pose_pub = self.create_publisher(
+            PoseStamped, 'dock_staging_pose', _LATCHED_QOS)
+        self._dock_visual_pub = self.create_publisher(
+            MarkerArray, 'dock_visual', _LATCHED_QOS)
         self.create_subscription(PoseStamped, 'dock_pose',
                                  self._on_dock_pose_set, _VOLATILE_QOS,
                                  callback_group=cb)
@@ -160,13 +176,39 @@ class DockManagerNode(Node):
         self._nav_client = ActionClient(
             self, NavigateToPose, 'navigate_to_pose', callback_group=cb)
 
-        self._dock_pose: Optional[PoseStamped] = self._load_dock_pose()
+        raw_x = g('dock_x')
+        raw_y = g('dock_y')
+        raw_yaw = g('dock_yaw')
+
+        has_x = raw_x is not None and str(raw_x).strip() != ''
+        has_y = raw_y is not None and str(raw_y).strip() != ''
+
+        if has_x and has_y:
+            try:
+                dx = float(raw_x)
+                dy = float(raw_y)
+                dyaw = float(raw_yaw) if (raw_yaw is not None and str(raw_yaw).strip() != '') else 0.0
+                pose = PoseStamped()
+                pose.header.frame_id = 'map'
+                pose.header.stamp = self.get_clock().now().to_msg()
+                pose.pose.position = Point(x=dx, y=dy, z=0.0)
+                pose.pose.orientation = Quaternion(
+                    x=0.0, y=0.0, z=math.sin(dyaw / 2.0), w=math.cos(dyaw / 2.0)
+                )
+                self._dock_pose = pose
+                self.get_logger().info(f'Initialized dock pose from parameter: ({dx:.2f}, {dy:.2f}, yaw={dyaw:.2f})')
+            except ValueError:
+                self._dock_pose = self._load_dock_pose()
+        else:
+            self._dock_pose = self._load_dock_pose()
+
         if self._dock_pose is None:
             self._dock_pose = self._dock_pose_at_map_origin()
             self.get_logger().info(
                 f'No saved dock pose — assuming dock at map origin ({-self._dock_origin_offset:+.2f}m x, yaw 0)')
-        if self._dock_pose is not None:
-            self._dock_pose_pub.publish(self._dock_pose)
+
+        self._publish_dock_visual()
+        self._visual_timer = self.create_timer(1.0, self._publish_dock_visual)
 
         ActionServer(self, DockRobot, 'dock',
                      execute_callback=self._execute_dock,
@@ -230,14 +272,24 @@ class DockManagerNode(Node):
             if msg.power_supply_status in (BatteryState.POWER_SUPPLY_STATUS_DISCHARGING,
                                            BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING):
                 self._docked = False
+                self._power = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
                 self._set_status('undocked')
                 self.get_logger().info('Battery not charging — robot removed from dock.')
         self._docked_state_known = True
 
     def _on_odom(self, msg: Odometry) -> None:
         self._odom = msg
+        if not self._require_charge and self._docked and not self._busy:
+            speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
+            if speed > 0.05:
+                self._docked = False
+                self._power = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+                self._set_status('undocked')
+                self.get_logger().info('Robot moved in simulation — marked undocked.')
 
     def _charging(self) -> bool:
+        if not self._require_charge:
+            return self._docked
         if self._power == BatteryState.POWER_SUPPLY_STATUS_CHARGING:
             return True
         if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL and self._docked:
@@ -342,6 +394,10 @@ class DockManagerNode(Node):
         """Give the battery controller's charging status time to catch up
         with real physical contact before reporting failure — contact can
         precede the status update by several seconds."""
+        if not self._require_charge:
+            self._docked = True
+            self._power = BatteryState.POWER_SUPPLY_STATUS_CHARGING
+            return True
         end = time.monotonic() + self._settle + self._stall_charge_wait
         while time.monotonic() < end:
             if self._charging():
@@ -496,7 +552,8 @@ class DockManagerNode(Node):
         return True
 
     async def _set_camera(self, active: bool) -> None:
-        if not self._camera_client.wait_for_service(timeout_sec=3.0):
+        timeout = 0.5 if not self._require_charge else 3.0
+        if not self._camera_client.wait_for_service(timeout_sec=timeout):
             self.get_logger().warn('camera/set_active unavailable')
             return
         req = SetBool.Request()
@@ -591,9 +648,11 @@ class DockManagerNode(Node):
                 self._set_status('undocking')
                 await self._drive_straight(self._undock_distance, speed=self._undock_speed)
                 self._docked = False
+                self._power = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
                 self._set_status('undocked')
             else:
                 self._docked = False
+                self._power = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
 
             # Navigate to the staging standoff pose in front of the dock via Nav2
             if dock_pose is not None:
@@ -643,6 +702,7 @@ class DockManagerNode(Node):
                 if self._charging():
                     self._stop()
                     self._docked = True
+                    self._power = BatteryState.POWER_SUPPLY_STATUS_CHARGING
                     self._set_status(
                         'full' if self._power == BatteryState.POWER_SUPPLY_STATUS_FULL
                         else 'charging')
@@ -841,6 +901,7 @@ class DockManagerNode(Node):
                     goal_handle.abort()
                     return NavigateToPose.Result()
                 self._docked = False
+                self._power = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
                 self._set_status('undocked')
 
             # If no destination pose was provided (pure 'Undock' button press), finish here
@@ -926,6 +987,8 @@ class DockManagerNode(Node):
             self._busy = False
 
     def _load_dock_pose(self) -> Optional[PoseStamped]:
+        if bool(self.get_parameter('use_sim_time').value):
+            return None
         if not os.path.exists(DOCK_POSE_FILE):
             return None
         try:
@@ -943,6 +1006,9 @@ class DockManagerNode(Node):
             return None
 
     def _persist_dock_pose(self, pose: PoseStamped) -> None:
+        # Never overwrite the physical robot's saved dock pose when running in simulation
+        if bool(self.get_parameter('use_sim_time').value):
+            return
         d = {
             'frame_id': pose.header.frame_id,
             'x': pose.pose.position.x,
@@ -963,8 +1029,145 @@ class DockManagerNode(Node):
                 f'Failed to persist dock pose to {DOCK_POSE_FILE}: {exc}')
 
     def _on_dock_pose_set(self, msg: PoseStamped) -> None:
+        if self._dock_pose is not None:
+            p1 = self._dock_pose.pose.position
+            p2 = msg.pose.position
+            if abs(p1.x - p2.x) < 1e-4 and abs(p1.y - p2.y) < 1e-4:
+                return
         self._dock_pose = msg
         self._persist_dock_pose(msg)
+        self._publish_dock_visual()
+
+    def _publish_dock_visual(self) -> None:
+        if self._dock_pose is None:
+            return
+        self._dock_pose_pub.publish(self._dock_pose)
+        staging = self._staging_pose_for(self._dock_pose)
+        staging.header.stamp = self.get_clock().now().to_msg()
+        self._staging_pose_pub.publish(staging)
+
+        # 3D visualization markers for RViz
+        arr = MarkerArray()
+        frame_id = self._dock_pose.header.frame_id or 'map'
+        now = self.get_clock().now().to_msg()
+        dx = self._dock_pose.pose.position.x
+        dy = self._dock_pose.pose.position.y
+        dz = self._dock_pose.pose.position.z
+        q = self._dock_pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+
+        # 1. Dock STL 3D Mesh
+        m_mesh = Marker()
+        m_mesh.header.frame_id = frame_id
+        m_mesh.header.stamp = now
+        m_mesh.ns = 'dock'
+        m_mesh.id = 0
+        m_mesh.type = Marker.MESH_RESOURCE
+        m_mesh.action = Marker.ADD
+        m_mesh.mesh_resource = 'package://navpromini_description/meshes/dock.stl'
+        m_mesh.mesh_use_embedded_materials = False
+        ox, oy = 0.136675, 0.0
+        m_mesh.pose.position.x = dx + ox * cos_yaw - oy * sin_yaw
+        m_mesh.pose.position.y = dy + ox * sin_yaw + oy * cos_yaw
+        m_mesh.pose.position.z = dz
+        m_mesh.pose.orientation = q
+        m_mesh.scale.x = 0.001
+        m_mesh.scale.y = 0.001
+        m_mesh.scale.z = 0.001
+        m_mesh.color.r = 0.95
+        m_mesh.color.g = 0.95
+        m_mesh.color.b = 0.95
+        m_mesh.color.a = 1.0
+        arr.markers.append(m_mesh)
+
+        # 2. AprilTag marker (10cm x 10cm) on dock front face
+        m_tag = Marker()
+        m_tag.header.frame_id = frame_id
+        m_tag.header.stamp = now
+        m_tag.ns = 'dock'
+        m_tag.id = 1
+        m_tag.type = Marker.CUBE
+        m_tag.action = Marker.ADD
+        tx = -0.012
+        ty = -0.0122
+        m_tag.pose.position.x = dx + tx * cos_yaw - ty * sin_yaw
+        m_tag.pose.position.y = dy + tx * sin_yaw + ty * cos_yaw
+        m_tag.pose.position.z = dz + 0.14
+        m_tag.pose.orientation = q
+        m_tag.scale.x = 0.005
+        m_tag.scale.y = 0.10
+        m_tag.scale.z = 0.10
+        m_tag.color.r = 0.12
+        m_tag.color.g = 0.12
+        m_tag.color.b = 0.12
+        m_tag.color.a = 0.95
+        arr.markers.append(m_tag)
+
+        # 3. Dock Text Label
+        m_text = Marker()
+        m_text.header.frame_id = frame_id
+        m_text.header.stamp = now
+        m_text.ns = 'dock'
+        m_text.id = 2
+        m_text.type = Marker.TEXT_VIEW_FACING
+        m_text.action = Marker.ADD
+        m_text.pose.position.x = dx
+        m_text.pose.position.y = dy
+        m_text.pose.position.z = dz + 0.35
+        m_text.scale.z = 0.12
+        m_text.color.r = 0.2
+        m_text.color.g = 0.9
+        m_text.color.b = 1.0
+        m_text.color.a = 1.0
+        m_text.text = 'CHARGING DOCK (ID 0)'
+        arr.markers.append(m_text)
+
+        # 4. Staging Standoff Arrow
+        m_arrow = Marker()
+        m_arrow.header.frame_id = frame_id
+        m_arrow.header.stamp = now
+        m_arrow.ns = 'dock'
+        m_arrow.id = 3
+        m_arrow.type = Marker.ARROW
+        m_arrow.action = Marker.ADD
+        sx = dx + self._standoff * cos_yaw
+        sy = dy + self._standoff * sin_yaw
+        m_arrow.pose.position.x = sx
+        m_arrow.pose.position.y = sy
+        m_arrow.pose.position.z = dz + 0.05
+        m_arrow.pose.orientation = q
+        m_arrow.scale.x = 0.35
+        m_arrow.scale.y = 0.06
+        m_arrow.scale.z = 0.06
+        m_arrow.color.r = 1.0
+        m_arrow.color.g = 0.7
+        m_arrow.color.b = 0.0
+        m_arrow.color.a = 0.9
+        arr.markers.append(m_arrow)
+
+        # 5. Staging Text Label
+        m_st_text = Marker()
+        m_st_text.header.frame_id = frame_id
+        m_st_text.header.stamp = now
+        m_st_text.ns = 'dock'
+        m_st_text.id = 4
+        m_st_text.type = Marker.TEXT_VIEW_FACING
+        m_st_text.action = Marker.ADD
+        m_st_text.pose.position.x = sx
+        m_st_text.pose.position.y = sy
+        m_st_text.pose.position.z = dz + 0.25
+        m_st_text.scale.z = 0.10
+        m_st_text.color.r = 1.0
+        m_st_text.color.g = 0.8
+        m_st_text.color.b = 0.0
+        m_st_text.color.a = 1.0
+        m_st_text.text = f'STANDOFF ({self._standoff:.2f}m)'
+        arr.markers.append(m_st_text)
+
+        self._dock_visual_pub.publish(arr)
 
 
 def main(args: Optional[list] = None) -> None:

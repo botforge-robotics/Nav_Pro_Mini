@@ -15,6 +15,7 @@ ROS 2 **Jazzy** + Gazebo **Harmonic** workspace for the NavProMini differential-
 | `navpromini_navigation`       | Nav2 localization + navigation                                           |
 | `navpromini_controller`       | **Real robot:** micro-ROS agent, RPLidar, wheel odom, bringup            |
 | `navpromini_setup`            | Pi install, Wi‑Fi portal, systemd (robot / display / mission planner)    |
+| `navpromini_manipulation`     | Coordinated mobile manipulation, pick-and-place pipeline & CLI client    |
 | `navpromini_mission_planner`  | Launch wrappers for Mission Planner (`map` → `map_name`)                 |
 | `nav2_mission_planner`        | Companion services (`launch_with_args`, map list/delete, save map)       |
 | `nav2_mission_planner_interfaces` | Custom srv/action types for Mission Planner                          |
@@ -146,7 +147,7 @@ ros2 topic echo /battery/info --once
 
 | Argument          | Default      | Description                                             |
 | ----------------- | ------------ | ------------------------------------------------------- |
-| `world_name`      | `empty`      | `empty`, `office`, `cafe`                               |
+| `world_name`      | `empty`      | `empty`, `office`, `cafe`, `playground`                 |
 | `use_sim_time`    | `true`       | Use `/clock` from Gazebo                                |
 | `use_rviz`        | `false`      | Optional companion RViz (`navpromini_sim.rviz`)         |
 | `x` `y` `z` `yaw` | `0 0 0.05 0` | Spawn pose (world defaults applied if left at defaults) |
@@ -157,9 +158,10 @@ ros2 topic echo /battery/info --once
 
 | World    | x   | y    | z                           |
 | -------- | --- | ---- | --------------------------- |
-| `empty`  | 0.0 | 0.0  | 0.06                        |
-| `office` | 0.0 | -6.5 | 0.06                        |
-| `cafe`   | 0.0 | -3.0 | **0.28** (above cafe floor) |
+| `empty`      | 0.0    | 0.0  | 0.06                             |
+| `office`     | 0.0    | -6.5 | 0.06                             |
+| `cafe`       | 0.0    | -3.0 | **0.28** (above cafe floor)      |
+| `playground` | -10.57 | -5.0 | **0.02** (docked at charging dock against west wall) |
 
 **Nodes / includes**
 
@@ -177,6 +179,9 @@ ros2 launch navpromini_gazebo gazebo.launch.py world_name:=cafe
 
 # With Gazebo RViz
 ros2 launch navpromini_gazebo gazebo.launch.py world_name:=cafe use_rviz:=true
+
+# Mobile Manipulator Playground Arena (with SO101 Arm and RViz)
+ros2 launch navpromini_gazebo gazebo.launch.py world_name:=playground use_arm:=true use_rviz:=true
 ```
 
 ---
@@ -350,6 +355,59 @@ ros2 launch navpromini_navigation localization.launch.py map_name:=cafe
 
 ---
 
+### 9. `navpromini_manipulation` → `manipulation.launch.py`
+
+**Purpose:** Coordinated mobile base navigation and SO101 6-DOF arm object manipulation (pick-and-place, wrist camera verification, and sorting).
+
+| Argument           | Default      | Description                                                        |
+| ------------------ | ------------ | ------------------------------------------------------------------ |
+| `use_sim_time`     | `true`       | Use simulation clock from Gazebo                                   |
+| `step_delay_sec`   | `1.6`        | Time interval between arm trajectory keypoints                     |
+| `enable_vision`    | `true`       | Enable gripper wrist camera perception & color verification        |
+| `start_navigation` | `false`      | Optionally bring up Nav2 stack automatically                       |
+| `map_name`         | `playground` | Occupancy grid map name to load in Nav2                            |
+
+```bash
+# 1. Launch Playground Arena with arm enabled
+ros2 launch navpromini_gazebo gazebo.launch.py world_name:=playground use_arm:=true use_rviz:=true
+
+# 2. Launch Navigation & Manipulation Executive
+# Option A: All-in-one (Nav2 stack + manipulation executive):
+ros2 launch navpromini_manipulation manipulation.launch.py use_sim_time:=true start_navigation:=true
+
+# Option B: Separate terminals:
+# Terminal 2 (Nav2):
+ros2 launch navpromini_navigation navigation.launch.py map_name:=playground use_sim_time:=true
+# Terminal 3 (Manipulation):
+ros2 launch navpromini_manipulation manipulation.launch.py use_sim_time:=true
+
+# 3. Trigger tasks via CLI client
+# Full Mobile Pick-and-Place (undock -> pick red cube -> place red tray -> return to dock):
+ros2 run navpromini_manipulation manipulation_client --action pick_and_place --target red_cube --destination red_tray
+
+# Sort green cylinder into blue tray:
+ros2 run navpromini_manipulation manipulation_client --action pick_and_place --target green_cylinder --destination blue_tray
+
+# Arm poses:
+ros2 run navpromini_manipulation manipulation_client --action home
+```
+
+---
+
+### 10. Direct Gazebo SDF Map Generator (`sdf_map_generator`)
+
+**Purpose:** Generate 2D Occupancy Grid Maps (`.pgm` + `.yaml`) directly from any Gazebo SDF world file without needing to manually drive the robot with SLAM.
+
+```bash
+# Generate map for playground world (saves to navpromini_navigation and mapping maps dirs)
+ros2 run navpromini_mapping sdf_map_generator --world playground
+
+# Or specify direct file and custom parameters:
+ros2 run navpromini_mapping sdf_map_generator --world cafe --resolution 0.05 --z-min 0.05 --z-max 0.45
+```
+
+---
+
 ## Topics (main)
 
 ### Simulation bridge (`ros_gz_bridge.yaml`)
@@ -429,6 +487,44 @@ ros2 launch navpromini_teleop joystick.launch.py
 ros2 launch navpromini_mapping slam.launch.py
 # drive around …
 ros2 launch navpromini_mapping map_saver.launch.py map_name:=cafe
+```
+
+### B2) Direct Gazebo World to Occupancy Grid Map Generator (Instant)
+
+Generate high-precision `.pgm` and `.yaml` maps directly from the Gazebo SDF collision geometry (no driving needed):
+
+```bash
+# Generate map directly from playground arena world
+ros2 run navpromini_mapping sdf_map_generator --world playground
+
+# Or for cafe / office:
+ros2 run navpromini_mapping sdf_map_generator --world cafe
+ros2 run navpromini_mapping sdf_map_generator --world office
+```
+
+### B3) Mobile Manipulation & Pick-and-Place (`navpromini_manipulation`)
+
+Autonomous mobile manipulation combining base navigation and SO101 6-DOF arm control:
+- **Mobile Navigation**: Automatically undocks, traverses doorways, and navigates between the charging dock, pick workcell, and sorting trays (using Nav2 if running, or autonomous odometry waypoint tracking).
+- **Perception**: Uses the gripper wrist camera (`/arm/wrist_camera/image_raw`) to visually verify target object presence and color.
+- **Manipulation**: Reaches, grasps, lifts, carries in transit, and places into target trays.
+
+```bash
+# Terminal 1: Launch Playground Arena with Mobile Manipulator (Arm + Wrist Camera)
+ros2 launch navpromini_gazebo gazebo.launch.py world_name:=playground use_arm:=true use_rviz:=true
+
+# Terminal 2: Start Mobile Manipulation Executive
+ros2 launch navpromini_manipulation manipulation.launch.py use_sim_time:=true
+
+# Terminal 3: Command End-to-End Task (Drives from dock -> picks red cube -> drives to red tray -> deposits -> returns home):
+ros2 run navpromini_manipulation manipulation_client --action pick_and_place --target red_cube --destination red_tray
+
+# Or other targets & trays:
+ros2 run navpromini_manipulation manipulation_client --action pick_and_place --target green_cylinder --destination blue_tray
+ros2 run navpromini_manipulation manipulation_client --action pick --target red_cube
+ros2 run navpromini_manipulation manipulation_client --action place --destination red_tray
+ros2 run navpromini_manipulation manipulation_client --action inspect --target red_cube
+ros2 run navpromini_manipulation manipulation_client --action home
 ```
 
 ### C) Navigate on a map

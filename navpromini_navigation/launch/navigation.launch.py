@@ -39,9 +39,18 @@ MAPS_DIR = os.environ.get(
 )
 
 DEFAULT_INITIAL_POSES = {
-    'cafe': {'x': '0.0', 'y': '-3.0', 'yaw': '0.0'},
-    'office': {'x': '0.0', 'y': '-6.5', 'yaw': '0.0'},
+    'cafe': {'x': '-4.67', 'y': '-1.0', 'yaw': '0.0'},
+    'office': {'x': '-0.52', 'y': '-6.5', 'yaw': '0.0'},
+    'empty': {'x': '-0.52', 'y': '0.0', 'yaw': '0.0'},
+    'playground': {'x': '-10.57', 'y': '-5.0', 'yaw': '0.0'},
     't202': {'x': '-0.13', 'y': '0.0', 'yaw': '0.0'},
+}
+
+DEFAULT_DOCK_POSES = {
+    'cafe': {'x': '-4.85', 'y': '-1.0', 'yaw': '0.0'},
+    'office': {'x': '-0.7', 'y': '-6.5', 'yaw': '0.0'},
+    'empty': {'x': '-0.7', 'y': '0.0', 'yaw': '0.0'},
+    'playground': {'x': '-10.75', 'y': '-5.0', 'yaw': '0.0'},
 }
 
 
@@ -163,6 +172,30 @@ def _setup(context, *args, **kwargs):
         )
         actions.append(scan_filter)
 
+    # Auto-start docking server and detector
+    start_docking = LaunchConfiguration('start_docking').perform(context).strip().lower() in ('true', '1')
+    if start_docking:
+        dock_args = {
+            'use_sim_time': use_sim_time,
+        }
+        sim_val = use_sim_time.perform(context).strip().lower() in ('true', '1')
+        if sim_val and map_base in DEFAULT_DOCK_POSES:
+            dock_args['dock_x'] = DEFAULT_DOCK_POSES[map_base]['x']
+            dock_args['dock_y'] = DEFAULT_DOCK_POSES[map_base]['y']
+            dock_args['dock_yaw'] = DEFAULT_DOCK_POSES[map_base]['yaw']
+
+        docking_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory('navpromini_controller'),
+                    'launch',
+                    'docking.launch.py',
+                )
+            ),
+            launch_arguments=dock_args.items(),
+        )
+        actions.append(docking_launch)
+
     # Setup MoveIt 2 integration if use_arm is true
     if use_arm:
         from moveit_configs_utils import MoveItConfigsBuilder
@@ -253,6 +286,11 @@ def generate_launch_description():
             'start_scan_filter',
             default_value=LaunchConfiguration('use_sim_time'),
             description='Launch laser_scan_filter to produce /scan_filtered (default: matches use_sim_time)',
+        ),
+        DeclareLaunchArgument(
+            'start_docking',
+            default_value='true',
+            description='Launch docking action server and visual detector (docking.launch.py)',
         ),
         DeclareLaunchArgument(
             'initial_pose_x',

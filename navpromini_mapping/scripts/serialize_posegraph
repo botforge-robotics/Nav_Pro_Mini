@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+# Ensure site-packages and src are discoverable even if user did not re-source setup.bash
+script_dir = os.path.dirname(os.path.realpath(__file__))
+ws_install = os.path.abspath(os.path.join(script_dir, '..', '..'))
+py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+site_pkg = os.path.join(ws_install, 'lib', py_ver, 'site-packages')
+if os.path.isdir(site_pkg) and site_pkg not in sys.path:
+    sys.path.insert(0, site_pkg)
+
+src_dir = os.path.abspath(os.path.join(script_dir, '..', '..', '..', 'src', 'navpromini_mapping'))
+if os.path.isdir(src_dir) and src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+
+from navpromini_mapping.serialize_posegraph import main
+
+if __name__ == '__main__':
+    sys.exit(main())

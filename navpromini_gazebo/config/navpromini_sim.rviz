@@ -56,6 +56,19 @@ Visualization Manager:
       Topic:
         Value: /odom
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: ChargingDock
+      Namespaces:
+        dock: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /dock_visual
+      Value: true
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: odom

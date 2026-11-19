@@ -31,3 +31,11 @@ without docking first — but then the dock must be re-placed after every re-map
 which is the situation this default exists to avoid.
 
 Set `assume_dock_at_map_origin:=false` if a map is deliberately made elsewhere.
+
+## Direct Gazebo World Map Generation (Simulation)
+
+To generate a 2D occupancy grid directly from a Gazebo SDF world without running SLAM:
+```bash
+ros2 run navpromini_mapping sdf_map_generator --world playground
+```
+This slices the 3D collision geometries at LiDAR scan height and outputs `.pgm` and `.yaml` directly into this directory.

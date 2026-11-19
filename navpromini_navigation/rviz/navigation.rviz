@@ -158,6 +158,35 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /local_costmap/published_footprint
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: ChargingDock
+      Namespaces:
+        dock: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /dock_visual
+      Value: true
+    - Class: rviz_default_plugins/Pose
+      Color: 255; 180; 0
+      Enabled: true
+      Head Length: 0.2
+      Head Radius: 0.1
+      Name: DockStandoff
+      Shaft Length: 0.35
+      Shaft Radius: 0.05
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /dock_staging_pose
+      Value: true
 
   Global Options:
     Fixed Frame: map

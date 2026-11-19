@@ -127,6 +127,15 @@
         <topic>camera/image_raw</topic>
       </plugin>
 
+      <!-- Lidar Topic Bridge GUI Plugin (resolves sensor entity for VisualizeLidar in GUI ECM) -->
+      <plugin filename="LidarTopicBridge" name="gz::sim::LidarTopicBridge">
+        <gz-gui>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <sensor_name>rplidar_a1m8</sensor_name>
+        <topic>scan</topic>
+      </plugin>
+
       <!-- Visualize Lidar Plugin in Gazebo GUI Panel -->
       <plugin filename="VisualizeLidar" name="Visualize Lidar">
         <gz-gui>
@@ -348,5 +357,12 @@
       <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Table</uri></include>
     <include><name>break_ch3</name><pose>7.5 0.1 0 0 0 3.14</pose>
       <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri></include>
+
+    <!-- NavProMini Charging Dock with 8cm x 8cm AprilTag 36h11 (ID 0) -->
+    <include>
+      <name>dock</name>
+      <pose>-0.7 -6.5 0.0 0 0 0</pose>
+      <uri>model://navpromini_dock</uri>
+    </include>
   </world>
 </sdf>

@@ -50,6 +50,7 @@ class DockMarkerNode(Node):
         p('marker_id', 0)
         p('marker_size_m', 0.08)
         p('image_topic', 'camera/image_raw/compressed')
+        p('raw_image_topic', 'camera/image_raw')
         p('camera_info_topic', 'camera/camera_info')
         p('max_rate_hz', 15.0)
 
@@ -85,8 +86,14 @@ class DockMarkerNode(Node):
                                  self._on_info, 10)
         self.create_subscription(CompressedImage, str(g('image_topic')),
                                  self._on_image, _SENSOR_QOS)
+        self.create_subscription(Image, str(g('raw_image_topic')),
+                                 self._on_raw_image, _SENSOR_QOS)
         self.create_subscription(String, 'dock_status', self._on_dock_status, 10)
         self.create_service(SetBool, 'dock_marker/set_active', self._on_set_active)
+        try:
+            self.create_service(SetBool, 'camera/set_active', self._on_set_active)
+        except Exception:
+            pass
 
         # Load calibration fallback immediately so camera frames can be processed even before camera_info arrives
         import yaml, os
@@ -170,6 +177,33 @@ class DockMarkerNode(Node):
         raw = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_UNCHANGED)
         if raw is None:
             return
+        self._process_frame(raw, msg.header, now)
+
+    def _on_raw_image(self, msg: Image) -> None:
+        if not self._is_detection_active():
+            return
+
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self._last_stamp < self._min_period:
+            return
+        self._last_stamp = now
+
+        enc = msg.encoding.lower()
+        if enc in ('bgr8', 'rgb8'):
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 3))
+            if enc == 'rgb8':
+                raw = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+        elif enc in ('mono8', '8uc1'):
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width))
+        elif enc in ('bgra8', 'rgba8'):
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, 4))
+            raw = cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR if enc == 'rgba8' else cv2.COLOR_BGRA2BGR)
+        else:
+            return
+
+        self._process_frame(raw, msg.header, now)
+
+    def _process_frame(self, raw: np.ndarray, header, now: float) -> None:
         if self._k is None:
             h_img, w_img = raw.shape[:2]
             self._init_default_k(w_img, h_img)
@@ -189,13 +223,13 @@ class DockMarkerNode(Node):
             cv2.putText(bgr, f'SEARCHING DOCK MARKER (ID {self._marker_id})', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
             _, enc = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
             dbg_msg = CompressedImage()
-            dbg_msg.header = msg.header
+            dbg_msg.header = header
             dbg_msg.format = 'jpeg'
             dbg_msg.data = bytes(enc)
             self._pub_debug_img.publish(dbg_msg)
             if self._pub_debug_raw.get_subscription_count() > 0:
                 raw_msg = Image()
-                raw_msg.header = msg.header
+                raw_msg.header = header
                 raw_msg.height, raw_msg.width = bgr.shape[:2]
                 raw_msg.encoding = 'bgr8'
                 raw_msg.is_bigendian = False
@@ -243,8 +277,8 @@ class DockMarkerNode(Node):
         z = float(tvec[2][0])
 
         pose = PoseStamped()
-        pose.header.stamp = msg.header.stamp
-        pose.header.frame_id = msg.header.frame_id
+        pose.header.stamp = header.stamp
+        pose.header.frame_id = header.frame_id
         pose.pose.position.x = x
         pose.pose.position.y = y
         pose.pose.position.z = z
@@ -283,13 +317,13 @@ class DockMarkerNode(Node):
 
         _, enc = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
         dbg_msg = CompressedImage()
-        dbg_msg.header = msg.header
+        dbg_msg.header = header
         dbg_msg.format = 'jpeg'
         dbg_msg.data = bytes(enc)
         self._pub_debug_img.publish(dbg_msg)
         if self._pub_debug_raw.get_subscription_count() > 0:
             raw_msg = Image()
-            raw_msg.header = msg.header
+            raw_msg.header = header
             raw_msg.height, raw_msg.width = bgr.shape[:2]
             raw_msg.encoding = 'bgr8'
             raw_msg.is_bigendian = False
