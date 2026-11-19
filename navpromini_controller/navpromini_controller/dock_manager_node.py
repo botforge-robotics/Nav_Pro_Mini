@@ -615,8 +615,6 @@ class DockManagerNode(Node):
     async def _settle_and_check_charging(self, maintain_push: bool = False, push_lin: float = 0.0) -> bool:
         """Give the battery controller's charging status time to catch up
         with real physical contact before reporting failure — contact can
-        """Give the battery controller's charging status time to catch up
-        with real physical contact before reporting failure — contact can
         precede the status update by several seconds.
         If maintain_push is True, keeps gentle contact pressure so spring-loaded
         dock electrodes do not push the AMR away and break electrical connection."""
@@ -1537,7 +1535,6 @@ class DockManagerNode(Node):
         ])
         existing = [p for p in candidate_files if os.path.isfile(p)]
         if not existing:
->>>>>>> origin/dev
             return None
         # Sort by mtime descending to load the freshest saved dock pose
         existing.sort(key=lambda p: os.path.getmtime(p), reverse=True)
