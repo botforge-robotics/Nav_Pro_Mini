@@ -74,6 +74,8 @@ async def send_dock_goal(bridge, navigate_to_staging: bool = True):
             bridge.release_video_stream()
         if hasattr(bridge, 'publish_display_state'):
             bridge.publish_display_state('ready')
+        if hasattr(bridge, 'publish_empty_plan'):
+            bridge.publish_empty_plan()
         raise
 
 
@@ -84,19 +86,35 @@ async def await_dock_result(bridge, handle, timeout: float = 600.0) -> dict:
         result = getattr(wrapped, 'result', None)
         ok = bool(getattr(result, 'success', False))
         message = getattr(result, 'error_msg', '') or ''
-        TRACKER.finish('docked' if ok else 'failed', message)
-        bridge.emit_event('dock.completed' if ok else 'dock.failed',
-                          {'message': message} if not ok else {})
+        is_current = (TRACKER.handle is handle)
+        if is_current:
+            TRACKER.finish('docked' if ok else 'failed', message)
+            bridge.emit_event('dock.completed' if ok else 'dock.failed',
+                              {'message': message} if not ok else {})
+            if ok:
+                if hasattr(bridge, 'publish_led_command'):
+                    bridge.publish_led_command('breathe,0,255,0,1500')
+                try:
+                    from .navigation import relocalize_at_dock
+                    await relocalize_at_dock(bridge)
+                except Exception as e:
+                    bridge.get_logger().warn(f'Post-dock relocalize note: {e}')
+        else:
+            bridge.get_logger().info('Superseded dock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        TRACKER.finish('failed', str(exc))
-        bridge.emit_event('dock.failed', {'message': str(exc)})
+        if TRACKER.handle is handle:
+            TRACKER.finish('failed', str(exc))
+            bridge.emit_event('dock.failed', {'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
     finally:
-        if hasattr(bridge, 'release_video_stream'):
-            bridge.release_video_stream()
-        if hasattr(bridge, 'publish_display_state'):
-            bridge.publish_display_state('ready')
+        if TRACKER.handle is handle:
+            if hasattr(bridge, 'release_video_stream'):
+                bridge.release_video_stream()
+            if hasattr(bridge, 'publish_display_state'):
+                bridge.publish_display_state('ready')
+            if hasattr(bridge, 'publish_led_command'):
+                bridge.publish_led_command('breathe,0,255,0,1500' if TRACKER.state == 'docked' else 'solid,0,200,40')
 
 
 async def dock_robot(bridge, navigate_to_staging: bool = True, timeout: float = 600.0) -> dict:
@@ -128,6 +146,26 @@ async def send_undock_goal(bridge):
     TRACKER.begin(None, 'undocking')
     bridge.emit_event('dock.started', {'operation': 'undock'})
 
+    # If physically sitting on the charger contacts, seed exact dock pose BEFORE rolling off,
+    # but ONLY IF AMCL is not already converged near the dock (to avoid resetting existing particles).
+    battery = bridge.get('battery')
+    is_charging = bool(battery and battery.get('charging'))
+    dock_status = str(bridge.get('dock_status') or '').lower()
+    if is_charging or dock_status in ('docked', 'charging', 'full'):
+        dock = bridge.get('dock_pose')
+        if dock and 'x' in dock and 'y' in dock:
+            pose_map = bridge.get('pose_map')
+            rx = float(pose_map['x']) if pose_map and 'x' in pose_map else None
+            ry = float(pose_map['y']) if pose_map and 'y' in pose_map else None
+            amcl_needs_seed = True
+            if rx is not None and ry is not None:
+                if math.hypot(rx - float(dock['x']), ry - float(dock['y'])) < 0.30:
+                    amcl_needs_seed = False
+            if amcl_needs_seed:
+                bridge.get_logger().info('send_undock_goal: robot docked on contacts; seeding dock pose before undocking...')
+                bridge.publish_initial_pose(dock['x'], dock['y'], dock.get('theta', 0.0), dock.get('frame', 'map'))
+                await asyncio.sleep(0.3)
+
     goal = NavigateToPose.Goal()
     goal.pose = PoseStamped()   # empty frame_id + zero quaternion = undock only
 
@@ -147,15 +185,27 @@ async def await_undock_result(bridge, handle, timeout: float = 180.0) -> dict:
         status = getattr(wrapped, 'status', None)
         ok = status == 4
         message = '' if ok else f'ended with status {status}'
-        TRACKER.finish('undocked' if ok else 'failed', message)
-        bridge.emit_event('dock.completed' if ok else 'dock.failed',
-                          {'operation': 'undock',
-                           **({'message': message} if not ok else {})})
+        is_current = (TRACKER.handle is handle)
+        if is_current:
+            TRACKER.finish('undocked' if ok else 'failed', message)
+            bridge.emit_event('dock.completed' if ok else 'dock.failed',
+                              {'operation': 'undock',
+                               **({'message': message} if not ok else {})})
+            # Note: Do NOT re-seed pose or relocalize after undocking; AMCL odometry smoothly tracks the roll-off!
+        else:
+            bridge.get_logger().info('Superseded undock goal ended; ignoring result.')
         return {'ok': ok, 'message': message}
     except Exception as exc:  # noqa: BLE001
-        TRACKER.finish('failed', str(exc))
-        bridge.emit_event('dock.failed', {'operation': 'undock', 'message': str(exc)})
+        if TRACKER.handle is handle:
+            TRACKER.finish('failed', str(exc))
+            bridge.emit_event('dock.failed', {'operation': 'undock', 'message': str(exc)})
         return {'ok': False, 'message': str(exc)}
+    finally:
+        if TRACKER.handle is handle:
+            if hasattr(bridge, 'publish_display_state'):
+                bridge.publish_display_state('ready')
+            if hasattr(bridge, 'publish_led_command'):
+                bridge.publish_led_command('solid,0,200,40')
 
 
 async def undock_robot(bridge, timeout: float = 180.0) -> dict:
@@ -210,13 +260,14 @@ class UndockHandler(BaseHandler):
 
 
 async def cancel_active_dock(bridge, reason: str = 'canceled') -> bool:
-    if TRACKER.state not in ('docking', 'undocking') or TRACKER.handle is None:
+    if TRACKER.state not in ('docking', 'undocking'):
         return False
-    try:
-        await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
-    except Exception:
-        pass
-    TRACKER.finish('failed', reason)
+    if TRACKER.handle is not None:
+        try:
+            await ros_future(TRACKER.handle.cancel_goal_async(), timeout=5.0)
+        except Exception:
+            pass
+    TRACKER.finish('canceled', reason)
     if hasattr(bridge, 'release_video_stream'):
         bridge.release_video_stream()
     if hasattr(bridge, 'publish_display_state'):
@@ -248,11 +299,19 @@ class DockStatusHandler(BaseHandler):
     """
 
     def get(self) -> None:
-        battery = self.bridge.get('battery') or {}
+        battery_data, bat_age = self.bridge.get_with_age('battery')
+        battery = battery_data or {}
         tag = self.bridge.get('dock_tag')
         dock_status, age = self.bridge.get_with_age('dock_status')
-        is_charging = bool(battery.get('charging'))
+        battery_fresh = (battery_data is not None) and (bat_age < 5.0)
+        is_charging = bool(battery.get('charging')) and battery_fresh
         effective_state = dock_status or 'unknown'
+        if is_charging and TRACKER.state == 'docking':
+            TRACKER.finish('docked', 'Charging connection established')
+            if hasattr(self.bridge, 'publish_display_state'):
+                self.bridge.publish_display_state('ready')
+            if hasattr(self.bridge, 'publish_led_command'):
+                self.bridge.publish_led_command('breathe,0,255,0,1500')
         if not is_charging and effective_state in ('charging', 'full'):
             effective_state = 'undocked'
         elif is_charging and effective_state in ('undocked', 'unknown'):
@@ -271,26 +330,119 @@ class DockStatusHandler(BaseHandler):
 class DockPoseHandler(BaseHandler):
     """Read or set where the robot believes its dock is."""
 
+    def _dock_files(self, map_name: str | None = None) -> list[str]:
+        files = []
+        if map_name:
+            for candidate in (
+                os.path.expanduser(f'~/.navpromini_dock_pose_{map_name}.json'),
+                f'/home/navpromini/.navpromini_dock_pose_{map_name}.json',
+                f'/root/.navpromini_dock_pose_{map_name}.json',
+            ):
+                if candidate not in files and os.path.isdir(os.path.dirname(candidate)):
+                    files.append(candidate)
+        for candidate in (
+            os.path.expanduser('~/.navpromini_dock_pose.json'),
+            '/home/navpromini/.navpromini_dock_pose.json',
+            '/root/.navpromini_dock_pose.json',
+        ):
+            if candidate not in files and os.path.isdir(os.path.dirname(candidate)):
+                files.append(candidate)
+        return files
+
     def get(self) -> None:
-        value, age = self.bridge.get_with_age('dock_pose')
-        if value is None:
-            dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
-            if os.path.isfile(dock_file):
+        value = None
+        age = 0.0
+
+        # If currently creating a new map in mapping mode, old map dock poses are invalid!
+        mode_state = self.opts.get('mode_state')
+        if mode_state and mode_state.mode == 'mapping':
+            cached, topic_age = self.bridge.get_with_age('dock_pose')
+            if cached is not None and cached.get('frame') == 'map':
+                self.send(cached)
+                return
+            raise ApiError(404, 'no_dock_pose', 'No dock pose in active mapping session')
+
+        store = self.opts.get('store')
+        requested_map = self.get_argument('map', None)
+        target_map = requested_map or (store.current_map() if store else None)
+
+        # 1. Authoritative check: target map's 'Charging Dock' waypoint from SQLite store
+        if store and target_map:
+            dock_wp = store.get_waypoint('Charging Dock', target_map)
+            if not dock_wp:
+                for wp in store.list_waypoints(target_map):
+                    if wp.get('type') == 'dock' and 'standoff' not in wp.get('name', '').lower():
+                        dock_wp = wp
+                        break
+            if dock_wp and 'x' in dock_wp and 'y' in dock_wp:
+                x = float(dock_wp['x'])
+                y = float(dock_wp['y'])
+                theta = float(dock_wp.get('theta', 0.0))
+                value = {
+                    'x': x,
+                    'y': y,
+                    'theta': theta,
+                    'standoff_x': x + 0.70 * math.cos(theta),
+                    'standoff_y': y + 0.70 * math.sin(theta),
+                    'standoff_theta': theta,
+                    'frame': 'map',
+                }
+                age = 0.0
+
+        # 2. Check per-map persistent files
+        if value is None and target_map:
+            existing = [p for p in self._dock_files(target_map) if os.path.isfile(p)]
+            for dock_file in existing:
                 try:
                     with open(dock_file, 'r') as f:
                         d = json.load(f)
+                    if d.get('map') and d.get('map') != target_map:
+                        continue
                     theta = d.get('theta')
                     if theta is None:
                         qz = d.get('qz', 0.0)
                         qw = d.get('qw', 1.0)
                         theta = 2.0 * math.atan2(qz, qw)
-                    value = {'x': d['x'], 'y': d['y'], 'theta': theta}
+                    x = float(d['x'])
+                    y = float(d['y'])
+                    st_x = float(d.get('standoff_x', x + 0.70 * math.cos(theta)))
+                    st_y = float(d.get('standoff_y', y + 0.70 * math.sin(theta)))
+                    st_th = float(d.get('standoff_theta', theta))
+                    value = {
+                        'x': x,
+                        'y': y,
+                        'theta': theta,
+                        'standoff_x': st_x,
+                        'standoff_y': st_y,
+                        'standoff_theta': st_th,
+                        'frame': d.get('frame_id', 'map') or 'map',
+                    }
                     age = 0.0
+                    break
                 except Exception:
                     pass
+
+        # 3. Fall back to ROS topic cache (only if querying current active map)
+        if value is None and (not requested_map or requested_map == (store.current_map() if store else None)):
+            cached, topic_age = self.bridge.get_with_age('dock_pose')
+            if cached is not None:
+                x = float(cached['x'])
+                y = float(cached['y'])
+                theta = float(cached.get('theta', 0.0))
+                value = {
+                    'x': x,
+                    'y': y,
+                    'theta': theta,
+                    'standoff_x': float(cached.get('standoff_x', x + 0.70 * math.cos(theta))),
+                    'standoff_y': float(cached.get('standoff_y', y + 0.70 * math.sin(theta))),
+                    'standoff_theta': float(cached.get('standoff_theta', theta)),
+                    'frame': cached.get('frame', 'map'),
+                }
+                age = topic_age
+
         if value is None:
             raise ApiError(404, 'no_dock_pose',
-                           'No dock pose is known. Set one, or map the area with '
+                           f'No dock pose is known for map {target_map!r}. Set one, or map the area with '
                            'the robot docked so the map origin defines it.')
         self.send({'data': value, 'age_sec': age})
 
@@ -298,22 +450,42 @@ class DockPoseHandler(BaseHandler):
         data = self.body(('x', 'y'))
         x, y = float(data['x']), float(data['y'])
         theta = float(data.get('theta', 0.0))
-        msg = PoseStamped()
-        msg.header.frame_id = 'map'
-        msg.header.stamp = self.bridge.get_clock().now().to_msg()
-        msg.pose.position.x = x
-        msg.pose.position.y = y
-        msg.pose.orientation.z = math.sin(theta / 2.0)
-        msg.pose.orientation.w = math.cos(theta / 2.0)
-        self.opts['dock_pose_pub'].publish(msg)
+        standoff_dist = 0.70
+        standoff_x = x + standoff_dist * math.cos(theta)
+        standoff_y = y + standoff_dist * math.sin(theta)
+        standoff_theta = theta
 
-        with self.bridge._lock:
-            self.bridge._cache['dock_pose'] = (
-            {'x': x, 'y': y, 'theta': theta, 'frame_id': 'map'},
-            self.bridge.get_clock().now().nanoseconds / 1e9,
-        )
+        store = self.opts.get('store')
+        target_map = data.get('map') or (store.current_map() if store else None)
+        is_active_map = (not target_map) or (store and target_map == store.current_map())
 
-        dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
+        dock_data = {
+            'x': x,
+            'y': y,
+            'theta': theta,
+            'frame_id': 'map',
+            'standoff_x': standoff_x,
+            'standoff_y': standoff_y,
+            'standoff_theta': standoff_theta,
+        }
+
+        if is_active_map:
+            msg = PoseStamped()
+            msg.header.frame_id = 'map'
+            msg.header.stamp = self.bridge.get_clock().now().to_msg()
+            msg.pose.position.x = x
+            msg.pose.position.y = y
+            msg.pose.orientation.z = math.sin(theta / 2.0)
+            msg.pose.orientation.w = math.cos(theta / 2.0)
+            if 'dock_pose_pub' in self.opts:
+                self.opts['dock_pose_pub'].publish(msg)
+
+            with self.bridge._lock:
+                self.bridge._cache['dock_pose'] = (
+                    dock_data,
+                    self.bridge.get_clock().now().nanoseconds / 1e9,
+                )
+
         dock_dict = {
             'frame_id': 'map',
             'x': x,
@@ -324,25 +496,73 @@ class DockPoseHandler(BaseHandler):
             'qz': math.sin(theta / 2.0),
             'qw': math.cos(theta / 2.0),
             'theta': theta,
+            'standoff_x': standoff_x,
+            'standoff_y': standoff_y,
+            'standoff_theta': standoff_theta,
+            'map': target_map,
         }
-        try:
-            tmp_path = dock_file + '.tmp'
-            with open(tmp_path, 'w') as f:
-                json.dump(dock_dict, f, indent=2)
-            os.replace(tmp_path, dock_file)
-        except Exception as exc:
-            pass
+        pid = os.getpid()
+        target_files = self._dock_files(target_map)
+        # If not active map, only save per-map files, don't overwrite generic active ~/.navpromini_dock_pose.json
+        if not is_active_map:
+            target_files = [f for f in target_files if target_map and target_map in f]
 
-        self.send({'x': x, 'y': y, 'theta': theta})
+        for dock_file in target_files:
+            dir_name = os.path.dirname(dock_file)
+            if not os.path.isdir(dir_name):
+                continue
+            try:
+                tmp_path = f"{dock_file}.tmp.{pid}"
+                with open(tmp_path, 'w') as f:
+                    json.dump(dock_dict, f, indent=2)
+                try:
+                    os.chmod(tmp_path, 0o666)
+                except OSError:
+                    pass
+                os.replace(tmp_path, dock_file)
+            except Exception as exc:
+                self.bridge.get_logger().warn(
+                    f"Failed to persist dock pose to {dock_file}: {exc}")
+
+        # Sync to SQLite store for target_map
+        if store and target_map:
+            try:
+                store.put_waypoint({
+                    'name': 'Charging Dock',
+                    'type': 'dock',
+                    'x': x,
+                    'y': y,
+                    'theta': theta,
+                }, target_map)
+                store.put_waypoint({
+                    'name': 'Dock Standoff',
+                    'type': 'dock',
+                    'x': standoff_x,
+                    'y': standoff_y,
+                    'theta': standoff_theta,
+                }, target_map)
+            except Exception as exc:
+                self.bridge.get_logger().warn(f"Failed to sync dock to waypoints store: {exc}")
+
+        self.send(dock_data)
 
     def delete(self) -> None:
         self.bridge.invalidate('dock_pose')
-        dock_file = os.path.expanduser('~/.navpromini_dock_pose.json')
-        if os.path.isfile(dock_file):
-            try:
-                os.remove(dock_file)
-            except Exception:
-                pass
+        for dock_file in self._dock_files():
+            if os.path.isfile(dock_file):
+                try:
+                    os.remove(dock_file)
+                except Exception:
+                    pass
+        store = self.opts.get('store')
+        if store:
+            current_map = store.current_map()
+            if current_map:
+                try:
+                    store.delete_waypoint('Charging Dock', current_map)
+                    store.delete_waypoint('Dock Standoff', current_map)
+                except Exception:
+                    pass
         self.send({'deleted': True})
 
 

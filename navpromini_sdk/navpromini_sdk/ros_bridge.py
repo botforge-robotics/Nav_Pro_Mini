@@ -32,7 +32,19 @@ from typing import Any, Callable, Optional
 import rclpy
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from nav2_msgs.action import DockRobot, DriveOnHeading, NavigateToPose, Spin
+from nav2_msgs.action import (
+    ComputeAndTrackRoute,
+    ComputePathToPose,
+    ComputeRoute,
+    DockRobot,
+    DriveOnHeading,
+    FollowPath,
+    NavigateThroughPoses,
+    NavigateToPose,
+    Spin,
+)
+from nav2_msgs.msg import SpeedLimit
+from nav2_msgs.srv import DynamicEdges, SetRouteGraph
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
@@ -43,8 +55,8 @@ from rclpy.qos import (
     QoSReliabilityPolicy,
 )
 from sensor_msgs.msg import BatteryState, CompressedImage, Imu, LaserScan
-from std_msgs.msg import Float32, Float32MultiArray, String
-from std_srvs.srv import Empty
+from std_msgs.msg import Bool, Float32, Float32MultiArray, String
+from std_srvs.srv import Empty, Trigger
 
 from navpromini_launch_manager_interfaces.srv import (
     DeleteMap,
@@ -52,7 +64,7 @@ from navpromini_launch_manager_interfaces.srv import (
     LaunchWithArgs,
     StopLaunch,
 )
-from rcl_interfaces.srv import GetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 
 # battery.low fires once on crossing below this, not on every reading below
 # it — see _on_battery. A pack sitting right at the line would otherwise emit
@@ -126,7 +138,7 @@ class RosBridge(Node):
                                  callback_group=cb)
         self.create_subscription(Float32, 'system/cpu_temperature', self._on_cpu_temp, 10,
                                  callback_group=cb)
-        self.create_subscription(String, 'dock_status', self._on_dock_status, 10,
+        self.create_subscription(String, 'dock_status', self._on_dock_status, LATCHED_QOS,
                                  callback_group=cb)
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self._on_amcl, 10,
                                  callback_group=cb)
@@ -141,6 +153,8 @@ class RosBridge(Node):
                                  LATCHED_QOS, callback_group=cb)
         self.create_subscription(Float32MultiArray, 'dock_tag', self._on_dock_tag, 10,
                                  callback_group=cb)
+        self.create_subscription(Bool, 'dock/in_dock_zone', self._on_in_dock_zone,
+                                 LATCHED_QOS, callback_group=cb)
 
         # Video streams (camera & dock_debug) are subscribed on-demand when active
         # clients connect to avoid continuous 15/30 FPS JPEG processing when idle.
@@ -159,6 +173,9 @@ class RosBridge(Node):
         self._pub_mode = self.create_publisher(String, 'robot_mode', LATCHED_QOS)
         self._pub_display_state = self.create_publisher(String, 'navpro/display_state', 10)
         self._pub_plan = self.create_publisher(Path, 'plan', 10)
+        self._pub_speed_limit = self.create_publisher(SpeedLimit, '/speed_limit', 10)
+        self._pub_dock_zone_lock = self.create_publisher(Bool, 'navpro/dock_zone_lock', LATCHED_QOS)
+        self._pub_in_dock_zone = self.create_publisher(Bool, 'dock/in_dock_zone', LATCHED_QOS)
 
         # --- service clients (launch_manager) ------------------------------
         self.cli_launch = self.create_client(LaunchWithArgs, 'launch_with_args',
@@ -173,12 +190,27 @@ class RosBridge(Node):
         self.cli_map_server_param = self.create_client(
             GetParameters, '/map_server/get_parameters', callback_group=cb)
         self.cli_global_loc = self.create_client(Empty, '/reinitialize_global_localization', callback_group=cb)
+        self.cli_set_route_graph = self.create_client(
+            SetRouteGraph, '/route_server/set_route_graph', callback_group=cb)
+        self.cli_reroute = self.create_client(
+            Trigger, '/route_server/ReroutingService/reroute', callback_group=cb)
+        self.cli_dynamic_edges = self.create_client(
+            DynamicEdges, '/route_server/DynamicEdgesScorer/adjust_edges', callback_group=cb)
+        self.cli_dynamic_edges_alt = self.create_client(
+            DynamicEdges, '/route_server/dynamic_edges', callback_group=cb)
+        self.cli_route_server_param = self.create_client(
+            SetParameters, '/route_server/set_parameters', callback_group=cb)
 
         # --- action clients -------------------------------------------------
         # Navigation goes through dock_manager's `undock`, never bt_navigator
         # directly: it undocks first when docked, so a docked robot cannot be
         # told to drive off while still on the connector.
         self.act_navigate = ActionClient(self, NavigateToPose, 'undock', callback_group=cb)
+        self.act_nav_through_poses = ActionClient(self, NavigateThroughPoses, 'navigate_through_poses', callback_group=cb)
+        self.act_follow_path = ActionClient(self, FollowPath, 'follow_path', callback_group=cb)
+        self.act_compute_path_to_pose = ActionClient(self, ComputePathToPose, 'compute_path_to_pose', callback_group=cb)
+        self.act_route = ActionClient(self, ComputeAndTrackRoute, '/compute_and_track_route', callback_group=cb)
+        self.act_compute_route = ActionClient(self, ComputeRoute, '/compute_route', callback_group=cb)
         self.act_dock = ActionClient(self, DockRobot, 'dock', callback_group=cb)
         self.act_drive = ActionClient(self, DriveOnHeading, 'drive_on_heading',
                                       callback_group=cb)
@@ -191,11 +223,26 @@ class RosBridge(Node):
     def _put(self, key: str, value: Any) -> None:
         with self._lock:
             self._cache[key] = (value, time.time())
-        for fn in list(self._listeners):
-            try:
-                fn(key, value)
-            except Exception:  # noqa: BLE001 — a bad listener must not kill ROS
-                self.get_logger().warn(f'event listener raised on {key}', once=True)
+        if self._listeners:
+            for fn in list(self._listeners):
+                try:
+                    fn(key, value)
+                except Exception:  # noqa: BLE001 — a bad listener must not kill ROS
+                    self.get_logger().warn(f'event listener raised on {key}', once=True)
+
+    def _put_many(self, items: dict[str, Any]) -> None:
+        now = time.time()
+        with self._lock:
+            for k, v in items.items():
+                self._cache[k] = (v, now)
+        if self._listeners:
+            listeners = list(self._listeners)
+            for k, v in items.items():
+                for fn in listeners:
+                    try:
+                        fn(k, v)
+                    except Exception:
+                        self.get_logger().warn(f'event listener raised on {k}', once=True)
 
     def get(self, key: str) -> Optional[Any]:
         with self._lock:
@@ -237,6 +284,49 @@ class RosBridge(Node):
     def remove_listener(self, fn: Callable[[str, Any], None]) -> None:
         if fn in self._listeners:
             self._listeners.remove(fn)
+
+    def set_route_reroute_on_collision(self, enabled: bool):
+        """Dynamically toggle RouteServer's CollisionMonitor reroute behavior."""
+        from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+        from rcl_interfaces.srv import SetParameters
+        req = SetParameters.Request()
+        p = Parameter()
+        p.name = 'CollisionMonitor.reroute_on_collision'
+        p.value = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=bool(enabled))
+        req.parameters.append(p)
+        return self.cli_route_server_param.call_async(req)
+
+    def set_speed_limit(self, speed_mps: float | None = None) -> None:
+        """Publish speed limit to /speed_limit topic. Set 0.0 or None to reset / unlimit."""
+        try:
+            msg = SpeedLimit()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = 'map'
+            msg.percentage = False
+            msg.speed_limit = float(speed_mps) if (speed_mps is not None and speed_mps > 0.0) else 0.0
+            self._pub_speed_limit.publish(msg)
+        except Exception as exc:
+            self.get_logger().warn(f'Failed to publish speed limit: {exc}')
+
+    def reset_speed_limit(self) -> None:
+        self.set_speed_limit(0.0)
+
+    async def set_dynamic_edges(self, closed_edges: list[int] | None = None, opened_edges: list[int] | None = None) -> bool:
+        """Request RouteServer to dynamically close or reopen edges."""
+        from .handlers.roscall import ros_future
+        req = DynamicEdges.Request()
+        req.closed_edges = [int(e) for e in (closed_edges or [])]
+        req.opened_edges = [int(e) for e in (opened_edges or [])]
+        for cli, name in [(self.cli_dynamic_edges, 'DynamicEdgesScorer/adjust_edges'),
+                          (self.cli_dynamic_edges_alt, 'dynamic_edges')]:
+            try:
+                if cli.service_is_ready():
+                    fut = cli.call_async(req)
+                    resp = await ros_future(fut, timeout=5.0)
+                    return bool(resp and resp.success)
+            except Exception as exc:
+                self.get_logger().warn(f'Call to {name} failed: {exc}')
+        return False
 
     # -- semantic events ------------------------------------------------------
     #
@@ -303,14 +393,16 @@ class RosBridge(Node):
 
     def _on_odom(self, m: Odometry) -> None:
         p = m.pose.pose.position
-        self._put('pose_odom', {
-            'x': round(p.x, 4), 'y': round(p.y, 4),
-            'theta': round(yaw_of(m.pose.pose.orientation), 4),
-            'frame': m.header.frame_id or 'odom',
-        })
-        self._put('velocity', {
-            'linear': round(m.twist.twist.linear.x, 4),
-            'angular': round(m.twist.twist.angular.z, 4),
+        self._put_many({
+            'pose_odom': {
+                'x': round(p.x, 4), 'y': round(p.y, 4),
+                'theta': round(yaw_of(m.pose.pose.orientation), 4),
+                'frame': m.header.frame_id or 'odom',
+            },
+            'velocity': {
+                'linear': round(m.twist.twist.linear.x, 4),
+                'angular': round(m.twist.twist.angular.z, 4),
+            },
         })
 
     def _on_amcl(self, m: PoseWithCovarianceStamped) -> None:
@@ -392,8 +484,19 @@ class RosBridge(Node):
         })
 
     def _on_scan(self, m: LaserScan) -> None:
-        # Full 720-beam scans are large and most callers want a shape, not
-        # every beam; the raw arrays stay available over rosbridge.
+        now = time.monotonic()
+        # Rate limit scan deserialization to ~2.5 Hz (WebSocket throttles to 2.0 Hz anyway,
+        # and lifecycle freshness check only requires age < 3.0s).
+        if hasattr(self, '_last_scan_time') and (now - self._last_scan_time < 0.40):
+            # Touch cache timestamp so get_with_age('scan') stays fresh (<0.4s)
+            with self._lock:
+                entry = self._cache.get('scan')
+                if entry is not None:
+                    self._cache['scan'] = (entry[0], time.time())
+            return
+        self._last_scan_time = now
+
+        # Full scans are large; most callers want a shape, not every beam.
         self._put('scan', {
             'angle_min': round(m.angle_min, 5),
             'angle_max': round(m.angle_max, 5),
@@ -401,7 +504,7 @@ class RosBridge(Node):
             'range_min': round(m.range_min, 3),
             'range_max': round(m.range_max, 3),
             'count': len(m.ranges),
-            'ranges': [None if not math.isfinite(r) else round(float(r), 3)
+            'ranges': [round(r, 3) if math.isfinite(r) else None
                        for r in m.ranges],
         })
 
@@ -410,6 +513,30 @@ class RosBridge(Node):
 
     def _on_dock_status(self, m: String) -> None:
         self._put('dock_status', m.data)
+
+    def _on_in_dock_zone(self, m: Bool) -> None:
+        self._put('in_dock_zone', bool(m.data))
+
+    @property
+    def is_in_dock_zone(self) -> bool:
+        """True if the robot is inside the dock zone or parked at the dock."""
+        # Mapping mode never has a dock zone safety lock (robot must be driven to map).
+        if self.get('mode') == 'mapping':
+            return False
+        if self.get('in_dock_zone') is True:
+            return True
+        st = self.get('dock_status')
+        if st in ('docked', 'charging', 'full', 'docking', 'undocking'):
+            return True
+        return False
+
+    def clear_dock_zone_lock(self) -> None:
+        """Clear dock zone safety lock in twist_mux and SDK state."""
+        b = Bool()
+        b.data = False
+        self._pub_dock_zone_lock.publish(b)
+        self._pub_in_dock_zone.publish(b)
+        self._put('in_dock_zone', False)
 
     def _on_dock_pose(self, m: PoseStamped) -> None:
         p = m.pose.position
@@ -503,6 +630,11 @@ class RosBridge(Node):
     # -- outbound helpers ---------------------------------------------------
 
     def publish_cmd_vel(self, linear: float, angular: float) -> None:
+        if self.is_in_dock_zone and (abs(linear) > 0.001 or abs(angular) > 0.001):
+            self.get_logger().warn(
+                'SDK teleop blocked: Robot is in dock zone. Undock first before driving.',
+                throttle_duration_sec=2.0)
+            return
         t = Twist()
         t.linear.x = float(linear)
         t.angular.z = float(angular)
@@ -537,6 +669,20 @@ class RosBridge(Node):
             hint_path.write_text(f"{state}\n{name}\n")
         except Exception:
             pass
+
+    @property
+    def pub_plan(self):
+        return self._pub_plan
+
+    def publish_plan(self, path: Path) -> None:
+        """Publish a Path message to /plan and update cached plan."""
+        try:
+            self._pub_plan.publish(path)
+        except Exception as exc:
+            self.get_logger().warn(f'Failed to publish plan: {exc}')
+        self._put('plan', [{'x': round(p.pose.position.x, 3),
+                            'y': round(p.pose.position.y, 3)}
+                           for p in path.poses])
 
     def publish_empty_plan(self) -> None:
         """Publish an empty Path to /plan and clear the cache when navigation stops."""

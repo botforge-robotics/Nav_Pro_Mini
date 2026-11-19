@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS zones (
     data  TEXT NOT NULL,
     PRIMARY KEY (map, id)
 );
+CREATE TABLE IF NOT EXISTS road_networks (
+    map   TEXT PRIMARY KEY,
+    data  TEXT NOT NULL
+);
 """
 
 
@@ -134,6 +138,20 @@ class Store:
                 'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
                 ('current_map', name))
 
+    # -- kv store -------------------------------------------------------------
+
+    def get_kv(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                'SELECT value FROM kv WHERE key = ?', (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_kv(self, key: str, value: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
+                (key, str(value)))
+
     # -- waypoints ---------------------------------------------------------
 
     def list_waypoints(self, map_name: Optional[str] = None) -> list[dict]:
@@ -145,9 +163,19 @@ class Store:
 
     def get_waypoint(self, name: str, map_name: Optional[str] = None) -> Optional[dict]:
         m = map_name or self.current_map()
+        name_clean = str(name).strip()
         with self._lock:
+            # 1. Exact match
             row = self._conn.execute(
-                'SELECT data FROM waypoints WHERE map = ? AND name = ?', (m, name)).fetchone()
+                'SELECT data FROM waypoints WHERE map = ? AND name = ?', (m, name_clean)).fetchone()
+            # 2. Case-insensitive match
+            if not row:
+                row = self._conn.execute(
+                    'SELECT data FROM waypoints WHERE map = ? AND LOWER(name) = LOWER(?)', (m, name_clean)).fetchone()
+            # 3. Fuzzy substring match (e.g. "office" matching "Office Room")
+            if not row and len(name_clean) >= 3:
+                row = self._conn.execute(
+                    'SELECT data FROM waypoints WHERE map = ? AND LOWER(name) LIKE LOWER(?)', (m, f"%{name_clean}%")).fetchone()
         return json.loads(row[0]) if row else None
 
     def put_waypoint(self, wp: dict, map_name: Optional[str] = None) -> dict:
@@ -197,6 +225,30 @@ class Store:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 'DELETE FROM zones WHERE map = ? AND id = ?', (m, zone_id))
+        return cur.rowcount > 0
+
+    # -- road networks -----------------------------------------------------
+
+    def get_road_network(self, map_name: Optional[str] = None) -> Optional[dict]:
+        m = map_name or self.current_map()
+        with self._lock:
+            row = self._conn.execute(
+                'SELECT data FROM road_networks WHERE map = ?', (m,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put_road_network(self, data: dict, map_name: Optional[str] = None) -> dict:
+        m = map_name or self.current_map()
+        with self._lock, self._conn:
+            self._conn.execute(
+                'INSERT OR REPLACE INTO road_networks (map, data) VALUES (?, ?)',
+                (m, json.dumps(data)))
+        return data
+
+    def delete_road_network(self, map_name: Optional[str] = None) -> bool:
+        m = map_name or self.current_map()
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                'DELETE FROM road_networks WHERE map = ?', (m,))
         return cur.rowcount > 0
 
 
@@ -262,10 +314,12 @@ class Store:
         return cur.rowcount > 0
 
     def wipe_all(self) -> None:
-        """Clear all stored tables (kv, waypoints, missions, schedules)."""
+        """Clear all stored tables (kv, waypoints, missions, schedules, zones, road_networks)."""
         with self._lock, self._conn:
             self._conn.execute('DELETE FROM kv')
             self._conn.execute('DELETE FROM waypoints')
             self._conn.execute('DELETE FROM missions')
             self._conn.execute('DELETE FROM schedules')
+            self._conn.execute('DELETE FROM zones')
+            self._conn.execute('DELETE FROM road_networks')
 

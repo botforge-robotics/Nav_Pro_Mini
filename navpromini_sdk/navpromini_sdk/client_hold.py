@@ -95,6 +95,7 @@ class ModeState:
         import time
         self._time = time
         self.mode = 'idle'
+        self.target_mode: Optional[str] = None
         self.map_name: Optional[str] = None
         self.launch_id: Optional[str] = None
         self.busy = False
@@ -105,6 +106,7 @@ class ModeState:
 
     def set(self, mode: str, map_name: Optional[str], launch_id: Optional[str]) -> None:
         self.mode = mode
+        self.target_mode = None
         self.map_name = map_name
         self.launch_id = launch_id
         self._since = self._time.time()

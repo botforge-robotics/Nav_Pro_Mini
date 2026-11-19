@@ -16,13 +16,14 @@ import asyncio
 import os
 import signal
 import threading
+import time
 from typing import Any
 
 import rclpy
 import tornado.ioloop
 import tornado.web
 from geometry_msgs.msg import PoseStamped
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 
 from .client_hold import ClientHold, ModeState
 from .handlers import (
@@ -33,9 +34,12 @@ from .handlers import (
     mode,
     motion,
     navigation,
+    road_network,
     schedules,
     state,
     system,
+    voice,
+    head_unit,
     waypoints,
 )
 from .costmap_zones import CostmapZoneManager
@@ -86,9 +90,12 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/system/updates/apply', system.UpdateApplyHandler, opts),
         (rf'{API}/system/updates/status', system.UpdateStatusHandler, opts),
         (rf'{API}/system/keyboard/toggle', system.ToggleKeyboardHandler, opts),
+        (rf'{API}/system/screen', system.TouchscreenKioskHandler, opts),
         (rf'{API}/system/wifi/status', system.WifiStatusHandler, opts),
         (rf'{API}/system/wifi/scan', system.WifiScanHandler, opts),
         (rf'{API}/system/wifi/connect', system.WifiConnectHandler, opts),
+        (rf'{API}/system/setup/dismiss', system.SetupDismissHandler, opts),
+        (rf'{API}/system/setup', system.SetupHandler, opts),
         (rf'{API}/system/app/update/check', system.AppUpdateCheckHandler, opts),
         (rf'{API}/system/app/update/apply', system.AppUpdateApplyHandler, opts),
         (rf'{API}/system/app/update/status', system.AppUpdateStatusHandler, opts),
@@ -120,15 +127,20 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/maps/([^/]+)/activate', maps.ActivateMapHandler, opts),
         (rf'{API}/maps/([^/]+)/zones/([^/]+)', maps.MapZoneHandler, opts),
         (rf'{API}/maps/([^/]+)/zones', maps.MapZonesHandler, opts),
+        (rf'{API}/maps/([^/]+)/road_network', maps.MapRoadNetworkHandler, opts),
         (rf'{API}/maps/([^/]+)', maps.MapHandler, opts),
         # zones
         (rf'{API}/zones/([^/]+)', maps.ZoneHandler, opts),
         (rf'{API}/zones', maps.ZonesHandler, opts),
+        # road network
+        (rf'{API}/road_network/reroute', road_network.RerouteHandler, opts),
+        (rf'{API}/road_network', road_network.RoadNetworkHandler, opts),
         # waypoints
         (rf'{API}/waypoints', waypoints.WaypointsHandler, opts),
         (rf'{API}/waypoints/([^/]+)', waypoints.WaypointHandler, opts),
         # navigation
         (rf'{API}/navigation/goto', navigation.GotoHandler, opts),
+        (rf'{API}/navigation/route', navigation.RouteHandler, opts),
         (rf'{API}/navigation/status', navigation.StatusHandler, opts),
         (rf'{API}/navigation/goal', navigation.CancelHandler, opts),
         (rf'{API}/navigation/localize', navigation.LocalizeHandler, opts),
@@ -144,6 +156,9 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         (rf'{API}/dock/debug_image', docking.DockDebugImageHandler, opts),
         (rf'{API}/dock/stream.mjpg', docking.DockDebugStreamHandler, opts),
         # motion
+        (rf'{API}/motion/settings/set_as_default', motion.MotionSettingsSetDefaultHandler, opts),
+        (rf'{API}/motion/settings/restore_defaults', motion.MotionSettingsRestoreHandler, opts),
+        (rf'{API}/motion/settings', motion.MotionSettingsHandler, opts),
         (rf'{API}/motion/velocity', motion.VelocityHandler, opts),
         (rf'{API}/motion/stop', motion.StopHandler, opts),
         (rf'{API}/motion/move', motion.MoveHandler, opts),
@@ -164,6 +179,24 @@ def build_app(bridge: RosBridge, store: Store, opts: dict[str, Any]) -> tornado.
         # schedules
         (rf'{API}/schedules', schedules.SchedulesHandler, opts),
         (rf'{API}/schedules/([^/]+)', schedules.ScheduleHandler, opts),
+        # voice assistant
+        (rf'{API}/voice/listen', voice.VoiceListenHandler, opts),
+        (rf'{API}/voice/chat', voice.VoiceChatHandler, opts),
+        (rf'{API}/voice/dialog', voice.VoiceDialogHandler, opts),
+        (rf'{API}/voice/status', voice.VoiceStatusHandler, opts),
+        (rf'{API}/voice/mute', voice.VoiceMuteHandler, opts),
+        (rf'{API}/voice/interrupt', voice.VoiceInterruptHandler, opts),
+        (rf'{API}/voice/config', voice.VoiceConfigHandler, opts),
+        (rf'{API}/voice/live/toggle', voice.VoiceLiveToggleHandler, opts),
+        (rf'{API}/voice/live/status', voice.VoiceLiveStatusHandler, opts),
+        (rf'{API}/voice/live/start', voice.VoiceLiveStartHandler, opts),
+        (rf'{API}/voice/live/stop', voice.VoiceLiveStopHandler, opts),
+        # wireless head unit (top mic & camera)
+        (rf'{API}/head_unit/scan', head_unit.HeadUnitScanHandler, opts),
+        (rf'{API}/head_unit/pair', head_unit.HeadUnitPairHandler, opts),
+        (rf'{API}/head_unit/status', head_unit.HeadUnitStatusHandler, opts),
+        (rf'{API}/head_unit/wifi_info', head_unit.HeadUnitWifiInfoHandler, opts),
+        (rf'{API}/head_unit/wifi_scan', head_unit.HeadUnitWifiScanHandler, opts),
         # events
         (rf'{API}/events', EventSocket, opts),
         # media static files
@@ -287,19 +320,33 @@ def main(args=None) -> None:
     rosbridge_url = str(bridge.get_parameter('rosbridge_url').value)
 
     # Spin ROS on its own thread; tornado owns the main thread.
-    executor = MultiThreadedExecutor(num_threads=2)
+    executor = SingleThreadedExecutor()
     executor.add_node(bridge)
 
     def _spin_loop():
         while rclpy.ok():
             try:
-                executor.spin_once(timeout_sec=0.2)
-            except Exception as e:
+                executor.spin()
+            except BaseException as e:
+                if not rclpy.ok():
+                    break
                 bridge.get_logger().error(f"ROS executor error in spin loop (recovering): {e}")
-                time.sleep(0.05)
+                try:
+                    time.sleep(0.05)
+                except Exception:
+                    pass
 
     ros_thread = threading.Thread(target=_spin_loop, daemon=True)
     ros_thread.start()
+
+    def _check_ros_liveness():
+        nonlocal ros_thread
+        if not ros_thread.is_alive() and rclpy.ok():
+            bridge.get_logger().error("ROS spin thread died unexpectedly! Resurrecting executor thread...")
+            ros_thread = threading.Thread(target=_spin_loop, daemon=True)
+            ros_thread.start()
+
+    tornado.ioloop.PeriodicCallback(_check_ros_liveness, 2000).start()
 
     store = Store()
     loop = tornado.ioloop.IOLoop.current()

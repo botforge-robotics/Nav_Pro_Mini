@@ -105,6 +105,13 @@ JS_QOS = QoSProfile(
     durability=DurabilityPolicy.VOLATILE,
 )
 
+LATCHED_STR_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
+
 
 class StatusDisplayNode(Node):
     def __init__(self) -> None:
@@ -124,7 +131,7 @@ class StatusDisplayNode(Node):
         # Liveness-only (see _hardware_ready) — not processed for anything
         # else, so best-effort/shallow queue is fine, same as joint_states.
         self.create_subscription(LaserScan, 'scan', self._on_scan, JS_QOS)
-        self.create_subscription(String, 'dock_status', self._on_dock_status, 10)
+        self.create_subscription(String, 'dock_status', self._on_dock_status, LATCHED_STR_QOS)
         self._dock_status: Optional[str] = None
         # What the battery currently says, and what we have committed to
         # showing — separated so the debounce can hold the LED steady while
@@ -193,6 +200,9 @@ class StatusDisplayNode(Node):
         if status != self._dock_status:
             self._dock_status = status
             self.get_logger().info(f'dock_status topic → {status}')
+            if status in ('charging', 'full', 'undocked') and self._state == 'docking':
+                self.get_logger().info(f'docking finished (dock_status={status}) — display state docking → ready')
+                self._state = 'ready'
             self._note_state_composed()
             self._compose_pending(self._state)
 
@@ -495,7 +505,7 @@ class StatusDisplayNode(Node):
         # method's already-intricate hint/mtime race handling untouched.
         display_state = 'boot' if state == 'ready' and not self._hardware_ready() else state
         text, led = STATE_FX.get(display_state, STATE_FX['boot'])
-        is_docking = (self._dock_status in DOCKING_STATES) or (display_state == 'docking') or (state == 'docking')
+        is_docking = (self._dock_status in DOCKING_STATES) or (display_state == 'docking' and self._dock_status not in ('charging', 'full', 'undocked'))
         if is_docking:
             self._pending_text = self._oled_ascii('Docking...')[:192]
             self._pending_led = 'solid,255,255,255'
@@ -507,7 +517,7 @@ class StatusDisplayNode(Node):
             # ONLY after fully set up (ready/nav) does battery animation have priority when docked & charging.
             if display_state in ('boot', 'setup', 'joining', 'mapping', 'error', 'offline'):
                 self._pending_led = led
-            elif self._charge_shown == 'charging':
+            elif self._charge_shown == 'charging' or self._dock_status == 'charging':
                 # Docked & Charging -> Breathing Green (Doc §1)
                 self._pending_led = 'breathe,0,255,0,1500'
             else:

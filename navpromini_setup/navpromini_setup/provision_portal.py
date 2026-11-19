@@ -643,24 +643,79 @@ def start_access_point() -> tuple[str, str, list[tuple[str, int]]]:
 
 
 def connect_site_wifi(ssid: str, password: str) -> None:
-    _nmcli('connection', 'down', CONN_AP)
+    # 1. Clean up any prior temporary or site connection profiles
     _nmcli('connection', 'delete', CONN_SITE)
-    r = _nmcli(
-        'device', 'wifi', 'connect', ssid,
-        'password', password,
+    _nmcli('connection', 'delete', ssid)
+
+    # 2. Pre-create the persistent connection profile with autoconnect enabled
+    add_args = [
+        'connection', 'add',
+        'type', 'wifi',
         'ifname', AP_IFACE,
-        'name', CONN_SITE,
-    )
-    if r.returncode != 0:
-        _nmcli('connection', 'up', CONN_AP)
-        raise RuntimeError(f'Wi‑Fi join failed: {r.stderr or r.stdout}')
-    # Disable Wi-Fi power save for lowest latency and zero jitter (essential for ROS 2 & WebSockets)
-    _nmcli('connection', 'modify', CONN_SITE, '802-11-wireless.powersave', '2')
-    _run(['iw', 'dev', AP_IFACE, 'set', 'power_save', 'off'])
-    for _ in range(30):
+        'con-name', CONN_SITE,
+        'ssid', ssid,
+        'connection.autoconnect', 'yes',
+        'connection.autoconnect-priority', '100',
+    ]
+    if password:
+        add_args.extend([
+            'wifi-sec.key-mgmt', 'wpa-psk',
+            'wifi-sec.psk', password,
+        ])
+    else:
+        add_args.extend([
+            'wifi-sec.key-mgmt', 'none',
+        ])
+    add_res = _nmcli(*add_args)
+    if add_res.returncode != 0:
+        sys.stderr.write(f'[provision] nmcli connection add note: {add_res.stderr or add_res.stdout}\n')
+
+    # 3. Bring down setup AP to release wlan interface for client mode
+    _nmcli('connection', 'down', CONN_AP)
+    time.sleep(1.5)
+
+    # 4. Trigger active Wi-Fi rescan so NetworkManager populates channel BSSIDs
+    _nmcli('device', 'wifi', 'rescan', 'ifname', AP_IFACE)
+    time.sleep(1.0)
+
+    # 5. Bring up site connection with retries
+    connected = False
+    last_err = ''
+    for attempt in range(5):
+        r = _nmcli('connection', 'up', CONN_SITE)
+        if r.returncode == 0:
+            connected = True
+            break
+        last_err = r.stderr or r.stdout
+        time.sleep(2.0)
+        _nmcli('device', 'wifi', 'rescan', 'ifname', AP_IFACE)
         time.sleep(1.0)
-        ip = _run(['hostname', '-I'])
-        if ip.returncode == 0 and ip.stdout.strip():
+
+    # Fallback to direct 'device wifi connect' if profile activation failed
+    if not connected:
+        cmd = ['device', 'wifi', 'connect', ssid, 'ifname', AP_IFACE, 'name', CONN_SITE]
+        if password:
+            cmd.extend(['password', password])
+        r2 = _nmcli(*cmd)
+        if r2.returncode == 0:
+            connected = True
+        else:
+            last_err = r2.stderr or r2.stdout
+
+    if not connected:
+        # Re-enable setup hotspot so user is never stranded
+        _nmcli('connection', 'up', CONN_AP)
+        raise RuntimeError(f'Wi‑Fi join failed: {last_err}')
+
+    # Disable Wi-Fi power save for lowest latency and zero jitter
+    _nmcli('connection', 'modify', CONN_SITE, '802-11-wireless.powersave', '2')
+    _run(['iw', 'dev', AP_IFACE, 'set', 'power_save', 'off'], check=False)
+
+    # 6. Verify valid IP assignment on wlan interface via DHCP
+    for _ in range(25):
+        time.sleep(1.0)
+        ip = _get_wlan_ip(AP_IFACE)
+        if ip and not ip.startswith('10.42.') and not ip.startswith('127.'):
             return
 
 
@@ -902,9 +957,9 @@ def make_handler(state: PortalState):  # noqa: ANN201
             robot_name = form.get('robot_name', '').strip()
             timezone = form.get('timezone', '').strip()
             country_code = form.get('country_code', '').strip().upper()
-            if not all([wifi_ssid, wifi_password, robot_name]):
+            if not wifi_ssid or not robot_name:
                 self._render_form(
-                    '<div class="flash err">Wi‑Fi, password, and robot name are required.</div>'
+                    '<div class="flash err">Wi‑Fi network name and robot name are required.</div>'
                 )
                 return
 
@@ -921,6 +976,11 @@ def make_handler(state: PortalState):  # noqa: ANN201
 
             def worker() -> None:
                 try:
+                    try:
+                        if country_code:
+                            apply_country_code(country_code)
+                    except Exception as exc:
+                        sys.stderr.write(f'[provision] apply_country_code ignored: {exc}\n')
                     try:
                         apply_timezone(timezone)
                     except Exception as exc:

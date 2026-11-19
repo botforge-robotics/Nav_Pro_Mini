@@ -197,6 +197,7 @@ class _MissionRunner:
         # a separate flag.
         self.loop_index = 0
         self.loop_total: int | None = None
+        self.step_total: int = 1
         self.message = ''
         self.started_at: float | None = None
         self.cancel_requested = False
@@ -213,6 +214,8 @@ class _MissionRunner:
             'state': self.state,
             'status': self.state,
             'step_index': self.step_index,
+            'step_total': self.step_total,
+            'step_count': self.step_total,
             'active_node_id': self.active_node_id if is_active else None,
             'active_node_type': self.active_node_type if is_active else None,
             'active_node_label': self.active_node_label if is_active else None,
@@ -551,9 +554,13 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
         if curr_iter < count and curr_iter < max_iter and cond_ok:
             loop_state[node['id']] = curr_iter + 1
             context['variables'][var_name] = curr_iter
+            RUNNER.loop_index = curr_iter
+            RUNNER.loop_total = count
             return True, 'loop_body', f"Loop iteration {curr_iter + 1}/{count}"
         else:
             loop_state[node['id']] = 0
+            RUNNER.loop_index = max(0, count - 1)
+            RUNNER.loop_total = count
             return True, 'completed', f"Loop completed ({count} iterations)"
 
     if ntype == 'patrol_loop':
@@ -825,9 +832,11 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
 
             chosen_val = None
             if subtype in ('choice', 'choices') or ntype == 'ui_choice':
-                chosen = selected if (selected and selected.lower() != 'selected') else action
+                raw_c = resp_data.get('choice') or (selected if (selected and selected.lower() != 'selected') else None) or action
+                chosen = str(raw_c).strip()
                 chosen_val = chosen
-                output_port = str(chosen).strip().lower()
+                output_port = chosen.lower()
+                bridge.get_logger().info(f"UI choice selected: node={node['id']} value={chosen!r} -> output_port={output_port!r}")
                 context['variables']['selected_choice'] = chosen
                 context['variables']['last_choice'] = chosen
                 context['variables']['choice'] = chosen
@@ -1079,15 +1088,23 @@ async def _execute_graph_node(bridge, opts, node: dict, context: dict, mission: 
                 pass
             bridge.get_logger().info(f"[TTS Announcement]: {text}")
             bridge.emit_event('mission.speech', {'text': text, 'node_id': node['id']})
-            wait_done = bool(params.get('wait_completion', True))
-            loop = asyncio.get_running_loop()
-            try:
-                from ..audio import play_speech
-                await loop.run_in_executor(None, play_speech, text, wait_done)
-            except Exception as exc:
-                bridge.get_logger().warn(f"TTS synthesis execution error: {exc}")
+            raw_wait = params.get('wait_completion', True)
+            wait_done = raw_wait is True or str(raw_wait).lower() in ('true', '1', 'yes')
             if wait_done:
+                loop = asyncio.get_running_loop()
+                try:
+                    from ..audio import play_speech
+                    await loop.run_in_executor(None, play_speech, text, True)
+                except Exception as exc:
+                    bridge.get_logger().warn(f"TTS synthesis execution error: {exc}")
                 await asyncio.sleep(0.3)
+            else:
+                try:
+                    from ..audio import play_speech
+                    import threading
+                    threading.Thread(target=play_speech, args=(text, False), daemon=True).start()
+                except Exception as exc:
+                    bridge.get_logger().warn(f"Background TTS dispatch error: {exc}")
         return True, 'done', 'Speech completed'
 
     if ntype in ('ui_notification', 'notification', 'alert'):
@@ -1290,8 +1307,26 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
     if not entrypoint or entrypoint not in nodes_by_id:
         entrypoint = nodes[0]['id']
 
+    actionable_types = {
+        'navigate', 'navigate_waypoint', 'navigate_coordinates', 'patrol_loop',
+        'dock', 'undock', 'wait', 'wait_timer', 'delay',
+        'ui_interaction', 'ui_choice', 'ui_form', 'ui_input',
+        'ui_speech', 'speech', 'ui_notification', 'jog_motion',
+    }
+    actionable_nodes = [n for n in nodes if n.get('type') in actionable_types]
+    actionable_ids = [n['id'] for n in actionable_nodes]
+    loop_nodes = [n for n in nodes if n.get('type') in ('loop', 'loop_counter')]
+
     RUNNER.mission_id = mission['id']
     RUNNER.mission_name = mission.get('name') or mission.get('id')
+    RUNNER.step_total = len(actionable_nodes) if actionable_nodes else max(1, len(nodes))
+    RUNNER.step_index = 0
+    if loop_nodes:
+        RUNNER.loop_total = int(loop_nodes[0].get('params', {}).get('count', 1))
+        RUNNER.loop_index = 0
+    else:
+        RUNNER.loop_total = 1
+        RUNNER.loop_index = 0
     RUNNER.progress_pct = 0
     RUNNER.active_node_label = None
     RUNNER.state = 'running'
@@ -1428,9 +1463,20 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                 RUNNER.active_node_type = node.get('type')
                 RUNNER.active_node_label = node_label
                 RUNNER.context['history'].append(curr_id)
-                total_nodes = len(nodes) if nodes else 1
-                history_len = len(RUNNER.context.get('history', []))
-                RUNNER.progress_pct = min(99, int((history_len / max(1, total_nodes)) * 100))
+
+                if curr_id in actionable_ids:
+                    RUNNER.step_index = actionable_ids.index(curr_id)
+
+                if RUNNER.loop_total and RUNNER.loop_total > 1 and RUNNER.step_total > 0:
+                    total_steps = RUNNER.loop_total * RUNNER.step_total
+                    completed_steps = RUNNER.loop_index * RUNNER.step_total + RUNNER.step_index
+                    RUNNER.progress_pct = min(99, max(1, int((completed_steps / total_steps) * 100)))
+                elif RUNNER.step_total > 1:
+                    RUNNER.progress_pct = min(99, max(1, int(((RUNNER.step_index + 1) / RUNNER.step_total) * 100)))
+                else:
+                    total_nodes = len(nodes) if nodes else 1
+                    history_len = len(RUNNER.context.get('history', []))
+                    RUNNER.progress_pct = min(99, int((history_len / max(1, total_nodes)) * 100))
 
                 batt = bridge.get('battery') or {}
                 RUNNER.context['system']['battery_pct'] = batt.get('percentage', 0.0)
@@ -1510,7 +1556,7 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                         await _run_mission(bridge, opts, target_m, initial_context=new_context)
                         return
 
-                if node.get('type') in ('end', 'mission_end'):
+                if node.get('type') in ('end', 'mission_end', 'dock_and_end'):
                     status = str(node.get('params', {}).get('status', 'success')).lower()
                     if status in ('failed', 'aborted'):
                         RUNNER.state = 'failed'
@@ -1538,6 +1584,11 @@ async def _run_graph_mission(bridge, opts, mission: dict, initial_context: Optio
                         ]
 
                 if not matching_edges:
+                    if not ok and output_port not in ('completed', 'next', 'done', 'arrived'):
+                        RUNNER.state = 'failed'
+                        RUNNER.message = message or f"Step {curr_id} failed ({output_port})"
+                        bridge.emit_event('mission.failed', {'mission_id': mission['id'], 'message': RUNNER.message, 'node_id': curr_id})
+                        return
                     bridge.get_logger().info(f"Mission {mission['id']}: terminal branch reached at {curr_id} (port: {output_port})")
                     break
 
@@ -1605,6 +1656,7 @@ async def _run_mission(bridge, opts, mission: dict, initial_context: Optional[di
     RUNNER.mission_name = mission.get('name') or mission.get('id')
     RUNNER.state = 'running'
     RUNNER.step_index = 0
+    RUNNER.step_total = len(steps) if steps else 1
     RUNNER.loop_index = 0
     RUNNER.loop_total = None if loop_forever else loop_count
     RUNNER.message = ''
@@ -1893,16 +1945,34 @@ class UiResponseHandler(BaseHandler):
     """POST /api/v1/missions/ui_response"""
 
     def post(self) -> None:
-        data = self.body(('interaction_id',))
+        data = self.body()
         self.bridge.get_logger().info(f"[ui_response] received from {self.request.remote_ip}: data={data!r}")
-        interaction_id = str(data.get('interaction_id', '')).strip()
-        if not RUNNER.active_interaction or RUNNER.active_interaction.get('interaction_id') != interaction_id:
-            self.send({'accepted': False, 'message': 'Interaction not active or already closed', 'interaction_id': interaction_id})
+        active_inter = RUNNER.active_interaction
+        if not active_inter:
+            self.send({'accepted': False, 'message': 'No interaction currently active or already closed'})
             return
+
+        interaction_id = str(data.get('interaction_id', '')).strip()
+        valid_ids = {
+            str(active_inter.get('interaction_id', '')).strip(),
+            str(active_inter.get('node_id', '')).strip(),
+            'active',
+            'current',
+            ''
+        }
+        if interaction_id and interaction_id not in valid_ids:
+            self.send({'accepted': False, 'message': f'Interaction ID mismatch (active: {active_inter.get("interaction_id")}, got {interaction_id})', 'interaction_id': interaction_id})
+            return
+
+        try:
+            from ..audio import stop_active_speech
+            stop_active_speech()
+        except Exception:
+            pass
 
         if RUNNER.interaction_future and not RUNNER.interaction_future.done():
             RUNNER.interaction_future.set_result(data)
-            self.send({'accepted': True, 'interaction_id': interaction_id})
+            self.send({'accepted': True, 'interaction_id': active_inter.get('interaction_id')})
         else:
             self.send({'accepted': False, 'message': 'Interaction already completed or timed out', 'interaction_id': interaction_id})
 

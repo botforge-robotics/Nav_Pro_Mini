@@ -143,7 +143,14 @@ class RobotStateHandler(BaseHandler):
 
         lifecycle = system.lifecycle_snapshot()
         health = system.health_sources(bridge)
-        battery = bridge.get('battery') or {}
+        battery_data, bat_age = bridge.get_with_age('battery')
+        battery = battery_data or {}
+        battery_fresh = (battery_data is not None) and (bat_age < 5.0)
+        is_charging = bool(battery.get('charging')) and battery_fresh
+        dock_status_data, dock_age = bridge.get_with_age('dock_status')
+        dock_status_val = dock_status_data or 'undocked'
+        if not is_charging and dock_status_val in ('charging', 'full'):
+            dock_status_val = 'undocked' 
 
         pose, age = bridge.get_with_age('pose_map')
         cov_x = pose.get('cov_x', 0.0) if pose else 0.0
@@ -153,15 +160,26 @@ class RobotStateHandler(BaseHandler):
         # The robot is truly unlocalized only if no pose_map exists or if covariance is dispersed (> 0.45m^2).
         is_high_cov = (cov_x > 0.45 or cov_y > 0.45)
         localized = (pose is not None) and (not is_high_cov)
-        if pose is None:
+        if pose is None and mode_state.mode != 'mapping':
             pose, age = bridge.get_with_age('pose_odom')
 
         map_name = mode_state.map_name if mode_state.mode == 'navigation' else None
+        is_ap_active = system._setup_ap_active()
+        setup_dismissed = False if is_ap_active else (store.get_kv('setup_dismissed') == 'true' if store else False)
+        setup_completed = False if is_ap_active else (store.get_kv('setup_completed') == 'true' if store else False)
+        setup_step = 1 if is_ap_active else int(store.get_kv('setup_step') or '1')
+        try:
+            setup_dismissed_at = float(store.get_kv('setup_dismissed_at') or '0') if not is_ap_active else 0.0
+        except ValueError:
+            setup_dismissed_at = 0.0
 
         self.send({
             'robot': system.robot_identity(),
             'lifecycle': lifecycle['lifecycle'],
             'mode': mode_state.mode,
+            'mode_busy': mode_state.busy,
+            'target_mode': getattr(mode_state, 'target_mode', None),
+            'hotspot_active': is_ap_active,
             'connection': {'wifi': system.wifi_online()},
             # Doc's example keys (motor/encoder/...) don't map to distinct
             # topics this SDK actually observes — reporting the real signal
@@ -170,7 +188,7 @@ class RobotStateHandler(BaseHandler):
             'hardware': {label: ('OK' if s['ok'] else 'FAULT')
                         for label, s in health.items()},
             'battery': {'percentage': battery.get('percentage'),
-                       'charging': bool(battery.get('charging'))},
+                       'charging': is_charging},
             'map': {'id': map_name, 'name': map_name} if map_name else None,
             'is_localized': localized,
             'localization': {
@@ -186,12 +204,32 @@ class RobotStateHandler(BaseHandler):
             # a discrete id — null rather than fabricating one (see
             # ros_bridge.py's module docstring on null vs. an invented value).
             'navigation': {'status': nav_tracker.state, 'goal_id': None},
-            'mission': {'status': mission_runner.state,
-                       'mission_id': mission_runner.mission_id,
-                       'pause_reason': mission_runner.pause_reason},
+            'mission': {
+                'status': mission_runner.state,
+                'state': mission_runner.state,
+                'mission_id': mission_runner.mission_id,
+                'mission_name': mission_runner.mission_name or mission_runner.mission_id,
+                'step_index': mission_runner.step_index,
+                'step_total': mission_runner.step_total,
+                'step_count': mission_runner.step_total,
+                'loop_index': mission_runner.loop_index,
+                'loop_total': mission_runner.loop_total,
+                'active_node_label': mission_runner.active_node_label,
+                'progress_pct': mission_runner.progress_pct,
+                'message': mission_runner.message,
+                'pause_reason': mission_runner.pause_reason,
+            },
             'dock': {'configured': bridge.get('dock_pose') is not None,
-                    'status': bridge.get('dock_status'),
-                    'operation': dock_tracker.state},
+                    'status': dock_status_val,
+                    'operation': dock_tracker.state,
+                    'in_dock_zone': bridge.is_in_dock_zone},
+            'setup': {
+                'dismissed': setup_dismissed,
+                'completed': setup_completed,
+                'step': setup_step,
+                'hotspot_active': is_ap_active,
+                'dismissed_at': setup_dismissed_at,
+            },
             'system': {
                 'cpu_load_pct': _get_cpu_load_pct(),
                 'cpu_temperature_c': bridge.get('cpu_temperature'),

@@ -633,6 +633,128 @@ class ToggleKeyboardHandler(BaseHandler):
             raise ApiError(500, 'keyboard_toggle_failed', str(exc))
 
 
+class TouchscreenKioskHandler(BaseHandler):
+    """Enable, disable, or query the onboard WebKit Touchscreen UI to reclaim CPU/RAM."""
+
+    FLAG_FILE = Path('/home/navpromini/.config/navpro_screen_disabled')
+    AUTOSTART_FILE = Path('/home/navpromini/.config/autostart/NavPro_Robot_Screen.desktop')
+
+    def get(self) -> None:
+        p = subprocess.run(['pgrep', '-f', 'navpromini_robot_ui_runner|WebKitWebProcess'], capture_output=True, text=True)
+        running = p.returncode == 0
+        pids = [int(x) for x in p.stdout.strip().split()] if running else []
+        enabled = not self.FLAG_FILE.is_file()
+
+        self.send({
+            'success': True,
+            'enabled': enabled,
+            'running': running,
+            'pids': pids,
+            'message': 'Touchscreen UI is active (~75-90% CPU load)' if running else 'Touchscreen UI is stopped (saving ~80-90% of 1 CPU core and ~1GB RAM)',
+        })
+
+    def post(self) -> None:
+        body = self.body()
+        action = body.get('action', 'toggle').lower()
+        launcher = Path('/home/navpromini/navpromini_robot_ui/start_robot_screen.sh')
+
+        if action == 'disable':
+            self.FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.FLAG_FILE.touch(exist_ok=True)
+            if self.AUTOSTART_FILE.is_file():
+                try:
+                    txt = self.AUTOSTART_FILE.read_text()
+                    if 'Hidden=' in txt:
+                        self.AUTOSTART_FILE.write_text(txt.replace('Hidden=false', 'Hidden=true'))
+                    else:
+                        self.AUTOSTART_FILE.write_text(txt + '\nHidden=true\n')
+                except Exception:
+                    pass
+            subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'WebKitWebProcess'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], capture_output=True)
+            message = 'Touchscreen UI disabled on boot and stopped. CPU load reduced.'
+        elif action == 'enable':
+            if self.FLAG_FILE.is_file():
+                self.FLAG_FILE.unlink(missing_ok=True)
+            if self.AUTOSTART_FILE.is_file():
+                try:
+                    txt = self.AUTOSTART_FILE.read_text()
+                    self.AUTOSTART_FILE.write_text(txt.replace('Hidden=true', 'Hidden=false'))
+                except Exception:
+                    pass
+            if launcher.is_file():
+                subprocess.Popen([
+                    'sudo', '-u', 'navpromini',
+                    'DISPLAY=:0',
+                    'XAUTHORITY=/home/navpromini/.Xauthority',
+                    '/bin/bash', str(launcher)
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            message = 'Touchscreen UI enabled on boot and started.'
+        elif action == 'stop':
+            subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'WebKitWebProcess'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], capture_output=True)
+            message = 'Touchscreen UI temporarily stopped.'
+        elif action == 'start':
+            if launcher.is_file():
+                subprocess.Popen([
+                    'sudo', '-u', 'navpromini',
+                    'DISPLAY=:0',
+                    'XAUTHORITY=/home/navpromini/.Xauthority',
+                    '/bin/bash', str(launcher)
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            message = 'Touchscreen UI started.'
+        elif action == 'toggle':
+            if self.FLAG_FILE.is_file():
+                self.FLAG_FILE.unlink(missing_ok=True)
+                if self.AUTOSTART_FILE.is_file():
+                    try:
+                        txt = self.AUTOSTART_FILE.read_text()
+                        self.AUTOSTART_FILE.write_text(txt.replace('Hidden=true', 'Hidden=false'))
+                    except Exception:
+                        pass
+                if launcher.is_file():
+                    subprocess.Popen([
+                        'sudo', '-u', 'navpromini',
+                        'DISPLAY=:0',
+                        'XAUTHORITY=/home/navpromini/.Xauthority',
+                        '/bin/bash', str(launcher)
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                message = 'Touchscreen UI enabled and started.'
+            else:
+                self.FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+                self.FLAG_FILE.touch(exist_ok=True)
+                if self.AUTOSTART_FILE.is_file():
+                    try:
+                        txt = self.AUTOSTART_FILE.read_text()
+                        if 'Hidden=' in txt:
+                            self.AUTOSTART_FILE.write_text(txt.replace('Hidden=false', 'Hidden=true'))
+                        else:
+                            self.AUTOSTART_FILE.write_text(txt + '\nHidden=true\n')
+                    except Exception:
+                        pass
+                subprocess.run(['pkill', '-9', '-f', 'navpromini_robot_ui_runner'], capture_output=True)
+                subprocess.run(['pkill', '-9', '-f', 'WebKitWebProcess'], capture_output=True)
+                subprocess.run(['pkill', '-9', '-f', 'NavProMiniRobotUI'], capture_output=True)
+                message = 'Touchscreen UI disabled and stopped.'
+        else:
+            self.fail(400, 'invalid_action', f'Unknown action "{action}". Valid actions: enable, disable, start, stop, toggle')
+            return
+
+        time.sleep(0.5)
+        p = subprocess.run(['pgrep', '-f', 'navpromini_robot_ui_runner|WebKitWebProcess'], capture_output=True, text=True)
+        running = p.returncode == 0
+        enabled = not self.FLAG_FILE.is_file()
+        self.send({
+            'success': True,
+            'action': action,
+            'enabled': enabled,
+            'running': running,
+            'message': message,
+        })
+
+
 class WifiStatusHandler(BaseHandler):
     """GET /api/v1/system/wifi/status - returns Wi-Fi connection info and IP."""
     def get(self) -> None:
@@ -780,8 +902,14 @@ class WifiConnectHandler(BaseHandler):
             cmd.extend(['password', password])
 
         try:
+            self.bridge.emit_event('wifi.connecting', {'ssid': ssid})
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
+                store = self.opts.get('store')
+                if store:
+                    store.set_kv('setup_dismissed', 'false')
+                    store.set_kv('setup_completed', 'false')
+                    store.set_kv('setup_step', '2')
                 self.bridge.emit_event('wifi.connected', {'ssid': ssid})
                 self.send({'success': True, 'ssid': ssid, 'output': r.stdout})
             else:
@@ -1117,6 +1245,10 @@ def _perform_factory_reset(bridge, store, reboot=True, forget_wifi=True, clear_d
         bridge.get_logger().info("[FACTORY RESET]: Wiping store tables (waypoints, missions, schedules)...")
         try:
             store.wipe_all()
+            store.set_kv('setup_dismissed', 'false')
+            store.set_kv('setup_completed', 'false')
+            store.set_kv('setup_step', '1')
+            store.set_kv('setup_dismissed_at', '0')
         except Exception as e:
             bridge.get_logger().error(f"[FACTORY RESET]: Failed wiping store: {e}")
 
@@ -1286,10 +1418,10 @@ def _get_ui_git_info(ui_dir: Path, target_branch: str | None = None) -> dict:
         if r.returncode == 0 and r.stdout.strip():
             info['branch'] = r.stdout.strip()
 
-        tb = target_branch if target_branch == 'main' else 'main'
+        tb = target_branch or info.get('branch') or 'dev'
         info['target_branch'] = tb
         info['remote_branch'] = f'origin/{tb}'
-        info['branches_available'] = ['main']
+        info['branches_available'] = ['dev', 'main']
 
         r = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(ui_dir), 'log', '-1', '--format=%H%n%h%n%s%n%ci'],
                            capture_output=True, text=True, timeout=3)
@@ -1358,7 +1490,7 @@ class AppUpdateCheckHandler(BaseHandler):
             'latest_version': cur_ver,
             'update_available': git_info['commits_behind'] > 0,
             'update_type': 'git' if git_info['has_git'] else 'appimage',
-            'branch': 'main',
+            'branch': git_info.get('target_branch', 'dev'),
             'current_branch': git_info['branch'],
             'current_commit': git_info['current_commit'],
             'current_commit_short': git_info['current_commit_short'],
@@ -1368,8 +1500,8 @@ class AppUpdateCheckHandler(BaseHandler):
             'latest_commit_short': git_info['latest_commit_short'],
             'commits_behind': git_info['commits_behind'],
             'changelog': git_info['changelog'],
-            'branches_available': ['main'],
-            'release_name': f"main ({git_info['latest_commit_short'] or cur_ver})",
+            'branches_available': git_info.get('branches_available', ['dev', 'main']),
+            'release_name': f"{git_info.get('target_branch', 'dev')} ({git_info['latest_commit_short'] or cur_ver})",
             'release_notes': "\n".join(git_info['changelog']) if git_info['changelog'] else '',
             'download_url': None,
             'asset_name': None,
@@ -1641,6 +1773,94 @@ class AppUpdateRollbackHandler(BaseHandler):
             self.send({'status': 'rolled_back', 'message': 'Restored previous AppImage backup and restarted'})
         except Exception as e:
             raise ApiError(500, 'rollback_failed', str(e))
+
+
+# -----------------------------------------------------------------------------
+# Robot Setup Wizard / Onboarding Flow
+# -----------------------------------------------------------------------------
+
+class SetupHandler(BaseHandler):
+    """GET /api/v1/system/setup - read onboarding / setup state.
+       POST /api/v1/system/setup - update onboarding step or state."""
+
+    def get(self) -> None:
+        if _setup_ap_active():
+            self.send({
+                'dismissed': False,
+                'completed': False,
+                'step': 1,
+                'hotspot_active': True,
+                'dismissed_at': 0.0,
+            })
+            return
+
+        store = self.opts.get('store')
+        dismissed = False
+        completed = False
+        step = 1
+        dismissed_at = 0.0
+        if store:
+            dismissed = store.get_kv('setup_dismissed') == 'true'
+            completed = store.get_kv('setup_completed') == 'true'
+            try:
+                step = int(store.get_kv('setup_step') or '1')
+            except ValueError:
+                step = 1
+            try:
+                dismissed_at = float(store.get_kv('setup_dismissed_at') or '0')
+            except ValueError:
+                dismissed_at = 0.0
+
+        self.send({
+            'dismissed': dismissed,
+            'completed': completed,
+            'step': step,
+            'hotspot_active': False,
+            'dismissed_at': dismissed_at,
+        })
+
+    def post(self) -> None:
+        store = self.opts.get('store')
+        data = self.body()
+        dismissed = data.get('dismissed')
+        completed = data.get('completed')
+        step = data.get('step')
+
+        if store:
+            if dismissed is not None:
+                store.set_kv('setup_dismissed', 'true' if dismissed else 'false')
+            if completed is not None:
+                store.set_kv('setup_completed', 'true' if completed else 'false')
+            if step is not None:
+                store.set_kv('setup_step', str(step))
+                if step < 3 and dismissed is None:
+                    store.set_kv('setup_dismissed', 'false')
+                    store.set_kv('setup_completed', 'false')
+
+        payload = {
+            'dismissed': store.get_kv('setup_dismissed') == 'true' if store else bool(dismissed),
+            'completed': store.get_kv('setup_completed') == 'true' if store else bool(completed),
+            'step': int(store.get_kv('setup_step') or '1') if store else (step or 1),
+        }
+        self.bridge.emit_event('setup.updated', payload)
+        if payload['dismissed']:
+            self.bridge.emit_event('setup.dismissed', payload)
+        self.send({'status': 'ok', **payload})
+
+
+class SetupDismissHandler(BaseHandler):
+    """POST /api/v1/system/setup/dismiss - dismiss setup wizard immediately."""
+
+    def post(self) -> None:
+        store = self.opts.get('store')
+        now_ts = time.time()
+        if store:
+            store.set_kv('setup_dismissed', 'true')
+            store.set_kv('setup_completed', 'true')
+            store.set_kv('setup_dismissed_at', str(now_ts))
+        self.bridge.emit_event('setup.dismissed', {'dismissed': True, 'completed': True, 'dismissed_at': now_ts})
+        self.send({'status': 'ok', 'dismissed': True, 'completed': True, 'dismissed_at': now_ts})
+
 
 
 
